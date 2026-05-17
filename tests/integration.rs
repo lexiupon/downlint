@@ -499,6 +499,83 @@ fn wiki_link_explicit_path_resolves_in_extra_folders() {
     assert_eq!(ref_dest.destinations.len(), 1);
     assert_eq!(ref_dest.destinations[0].path, target_path);
 }
+
+/// Verify that wiki links whose target text contains `/` resolve in extra_folders
+/// via title slug matching.
+///
+/// Scenario:
+/// - Source doc references `[[Mateusz Know-How transfer (DevOps/ADP)]]`
+/// - The target text contains `/` which makes `is_explicit_path()` return true
+/// - Target doc lives in an extra folder with a different filename
+/// - Target has title `# Mateusz Know-How transfer (DevOps/ADP)`
+/// - Resolution should succeed via title slug matching
+#[test]
+fn wiki_link_with_slash_in_target_resolves_via_title_slug_in_extra_folders() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+
+    // Create the extra project outside the main root
+    let ext_root = root.parent().unwrap().join("ext_project");
+
+    // Target document in the extra project with `/` in title
+    let target_md = "# Mateusz Know-How transfer (DevOps/ADP)\n\nBio content.\n";
+    let target_path = ext_root.join("notes/kt-session.md");
+    fs::create_dir_all(target_path.parent().unwrap()).unwrap();
+    fs::write(&target_path, target_md).unwrap();
+
+    // Source document in the main project with a wiki link containing `/` in target
+    let source_md = "[[Mateusz Know-How transfer (DevOps/ADP)]]\n";
+    let source_path = root.join("notes/reference.md");
+    fs::create_dir_all(source_path.parent().unwrap()).unwrap();
+    fs::write(&source_path, source_md).unwrap();
+
+    let target_structure = parse_document(target_md, ParseOptions::default());
+    let source_structure = parse_document(source_md, ParseOptions::default());
+
+    let target_rel = target_path.strip_prefix(&ext_root).unwrap().to_path_buf();
+    let source_rel = source_path.strip_prefix(&root).unwrap().to_path_buf();
+
+    let input = ResolveInput {
+        root: root.clone(),
+        documents: vec![ResolveDocument {
+            path: source_path.clone(),
+            rel_path: source_rel,
+            structure: source_structure,
+        }],
+        extra_documents: vec![ResolveDocument {
+            path: target_path.clone(),
+            rel_path: target_rel,
+            structure: target_structure,
+        }],
+        config: Config::default(),
+        extra_folder_roots: vec![ext_root.clone()],
+        single_file: false,
+    };
+
+    let graph = resolve_links(input);
+    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+
+    let broken_links: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .collect();
+
+    assert!(
+        broken_links.is_empty(),
+        "Expected wiki link [[Mateusz Know-How transfer (DevOps/ADP)]] to resolve in extra_folders via title slug, but got broken links: {:?}",
+        broken_links
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    // Verify the resolved reference points to the extra project doc
+    assert_eq!(graph.resolved_references.len(), 1);
+    let ref_dest = &graph.resolved_references[0];
+    assert_eq!(ref_dest.destinations.len(), 1);
+    assert_eq!(ref_dest.destinations[0].path, target_path);
+}
+
 #[test]
 fn inline_link_with_non_ascii_filename_resolves_correctly() {
     let tmp = TempDir::new().unwrap();
