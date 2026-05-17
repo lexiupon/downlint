@@ -383,7 +383,7 @@ fn finalize_doc_or_attachment(
     let doc = ctx.doc;
     let symbol = ctx.symbol;
     let reference = ctx.reference;
-    if destinations.is_empty() && is_attachment_path(target, &ctx.input.config) {
+    if destinations.is_empty() && is_attachment_candidate_path(target) {
         let source_dir = doc.path.parent().unwrap_or(ctx.input.root.as_path());
         let path = resolve_explicit_path(&ctx.input.root, source_dir, target);
         if path.exists() {
@@ -512,17 +512,15 @@ fn find_doc_matches(
     destinations
 }
 
-fn is_attachment_path(target: &str, config: &Config) -> bool {
-    target
-        .rsplit_once('.')
-        .map(|(_, ext)| {
-            config
-                .core
-                .attachment_file_extensions
-                .iter()
-                .any(|candidate| candidate.eq_ignore_ascii_case(ext))
-        })
-        .unwrap_or(false)
+fn is_attachment_candidate_path(target: &str) -> bool {
+    target.starts_with('/')
+        || target.starts_with("./")
+        || target.starts_with("../")
+        || target.contains('/')
+        || target.contains('\\')
+        || target
+            .rsplit_once('.')
+            .is_some_and(|(base, ext)| !base.is_empty() && !ext.is_empty())
 }
 
 fn is_explicit_path(target: &str) -> bool {

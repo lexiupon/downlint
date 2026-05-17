@@ -1,4 +1,4 @@
-# RFC: Drop Attachment Extension Whitelist, Resolve Explicit Paths Directly
+# RFC: Drop Attachment Extension Whitelist, Resolve Explicit File-Like Targets Directly
 
 ## Status
 
@@ -6,119 +6,145 @@ Draft
 
 ## Motivation
 
-Downlint currently requires file extensions to be whitelisted via `attachment_file_extensions` (default: `png`, `jpg`, `jpeg`, `gif`, `svg`, `pdf`, `webp`) before it will check whether a linked file exists on disk. Any extension not in the list (e.g. `.xlsx`, `.docx`, `.csv`, `.zip`) is silently skipped, producing false-positive "broken link" warnings (DNL002) even when the file physically exists.
+Downlint currently requires local attachment extensions to be whitelisted before it will check
+whether the referenced file exists on disk. This produces false-positive `DNL002` broken-link
+warnings for perfectly valid explicit file references such as spreadsheets, documents, archives,
+and other non-markdown assets.
 
-**Reproduction**: In `~/kb-sinch`, links like:
+In `~/kb-sinch`, links like:
 
 ```markdown
 [pricing](/assets/finance-xls-2023/product-pricing/product-pricing-structure-team-input.xlsx)
 [okrs](/assets/company-okrs/company-draft-okrs-2026.docx)
 ```
 
-are reported as broken despite the files existing, because `.xlsx` and `.docx` are not in the default whitelist.
+are reported as broken even though the files exist, because `.xlsx` and `.docx` are not part of
+the built-in attachment extension allowlist.
 
-Users must manually add a `.downlint.toml` with `attachment_file_extensions_add` to work around this.
+This is a bad default for two reasons:
+
+1. Explicit file-like link targets already communicate user intent.
+   - `./report.xlsx`, `../assets/logo.svg`, `/docs/brief.pdf`, and `data.csv` are not fuzzy
+     title-style references. They are concrete filesystem targets.
+2. Users should not need config churn just to link common asset types.
+   - Requiring `core.attachment_file_extensions_add` to silence false positives turns routine
+     linking into an allowlist maintenance problem.
 
 ## Problem
 
-The whitelist approach has several issues:
+The current whitelist approach has three core problems:
 
-1. **False positives by default** — Any non-image/non-pdf attachment is flagged as broken out of the box.
-2. **Maintenance burden** — Users must anticipate and declare every file type they link to.
-3. **No real benefit** — The whitelist was intended to distinguish "attachment files" from "links to other markdown documents that might be resolved by slug/title matching." But explicit paths (starting with `/`, `./`, `../`) already signal the user's intent clearly.
+1. **False positives by default** — Existing explicit file references are flagged as broken unless
+   their extension happens to be in the allowlist.
+2. **Unbounded maintenance** — New file types always require config updates.
+3. **Weak disambiguation value** — The allowlist is doing path-intent detection poorly. The shape
+   of the target is the stronger signal.
 
 ## Proposal
 
-For **explicit paths** (links starting with `/`, `./`, `../`, or containing `/` or `\`), always check whether the resolved filesystem path exists, regardless of extension. If the file exists, resolve the link. If it doesn't, report it as broken.
+For **explicit file-like local targets**, Downlint should always check the resolved filesystem path
+after document resolution fails, regardless of extension.
 
-The `attachment_file_extensions` whitelist would be removed entirely.
+An explicit file-like target is either:
 
-### Behavior change
+- A slash-based path: starts with `/`, `./`, `../`, or contains `/` or `\`
+- A same-directory basename with an extension, such as `data.xlsx`
+
+Resolution order stays the same:
+
+1. Try document resolution first.
+2. If no document matched and the target is explicit file-like, resolve the filesystem path.
+3. If the path exists, resolve it as `Attachment`.
+4. If the path does not exist, report it as broken.
+
+The attachment extension whitelist is removed entirely.
+
+### Behavior Change
 
 | Scenario | Before | After |
 |---|---|---|
-| `[](./data.xlsx)` — file exists | Broken (unless whitelisted) | Resolved |
-| `[](./data.xlsx)` — file missing | Broken (unless whitelisted) | Broken |
-| `[](./notes/todo.md)` — file exists | Resolved (as document) | Resolved (as document) |
-| `[](./notes/todo.md)` — file missing | Broken (as document) | Broken (as document) |
-| `[](./guide/intro)` — no extension | Resolved by slug/stem match | Resolved by slug/stem match (unchanged) |
-| `[](https://example.com)` | Skipped (has scheme) | Skipped (has scheme, unchanged) |
+| `[](data.xlsx)` — file exists | Broken unless extension is whitelisted | Resolved as attachment |
+| `[](./data.xlsx)` — file exists | Broken unless extension is whitelisted | Resolved as attachment |
+| `[](./data.xlsx)` — file missing | Broken unless extension is whitelisted | Broken |
+| `[](./notes/todo.md)` — document exists | Resolved as document | Resolved as document |
+| `[](./notes/todo.md#next)` — heading exists | Resolved to heading | Resolved to heading |
+| `[](intro)` | Existing inline-link behavior | Unchanged |
+| `[](https://example.com)` | Skipped | Skipped |
 
-The key insight: **explicit paths already disambiguate**. If the user writes `[](./foo.xlsx)`, they are explicitly pointing to a file, not asking for fuzzy document matching. We should just check if that file exists.
+### What Stays the Same
 
-### What stays the same
-
-- **Extensionless / implicit links** (e.g. `[see intro](intro)`) still use slug/stem/title fuzzy matching against known documents. No filesystem check is added here — this is where the old whitelist served a purpose (avoiding unnecessary disk checks for non-existent planned documents).
-- **Scheme-based links** (e.g. `https://`, `mailto:`) are still skipped.
-- **Anchor resolution** within documents is unchanged.
+- Document resolution still runs before attachment fallback.
+- Targets without path separators and without an extension, such as `intro`, do not trigger
+  attachment filesystem fallback.
+- Scheme-based links such as `https:` and `mailto:` are still skipped.
+- Anchor resolution still only applies when the resolved destination is a document.
 
 ## Implementation
 
 ### Changes to `src/resolution/mod.rs`
 
-In `finalize_doc_or_attachment`, replace the `is_attachment_path()` guard with a check for explicit paths:
+Replace the whitelist-based attachment gate in `finalize_doc_or_attachment()` with a dedicated
+helper such as:
 
 ```rust
-fn finalize_doc_or_attachment(
-    ctx: &mut ResolveRefContext<'_>,
-    target: &str,
-    anchor: Option<&str>,
-    mut destinations: Vec<ResolvedDestination>,
-) {
-    if destinations.is_empty() && is_explicit_path(target) {
-        let source_dir = doc.path.parent().unwrap_or(ctx.input.root.as_path());
-        let path = resolve_explicit_path(&ctx.input.root, source_dir, target);
-        if path.exists() {
-            destinations.push(ResolvedDestination {
-                path,
-                kind: DestinationKind::Attachment,
-                name: target.to_string(),
-                range: None,
-            });
-        }
-    }
-    // ... rest unchanged
-}
-```
-
-The existing `is_explicit_path()` function already covers this:
-
-```rust
-fn is_explicit_path(target: &str) -> bool {
+fn is_attachment_candidate_path(target: &str) -> bool {
     target.starts_with('/')
         || target.starts_with("./")
         || target.starts_with("../")
         || target.contains('/')
         || target.contains('\\')
-        || target.contains('.')
+        || target
+            .rsplit_once('.')
+            .is_some_and(|(base, ext)| !base.is_empty() && !ext.is_empty())
 }
 ```
 
+Use that helper only for attachment fallback. Do not reuse the broader `is_explicit_path()`
+document-matching heuristic, because that helper treats any `.` anywhere in the target as
+path-like.
+
 ### Changes to `src/config/mod.rs`
 
-- Remove `attachment_file_extensions` from `CoreConfig`.
-- Remove `attachment_file_extensions_add` from `ProjectCoreConfig`.
-- Remove the merge/extend logic for `attachment_file_extensions`.
-- Update any config tests that reference the field.
+- Remove `attachment_file_extensions` from `CoreConfig`
+- Remove `attachment_file_extensions_add` from `PartialCoreConfig`
+- Remove the merge/finalization logic for attachment extensions
+- Replace the old config accumulation test with a regression that proves the removed key now fails
+  strict parsing
 
 ### Changes to `src/resolution/path.rs`
 
-No changes needed — `resolve_explicit_path` already handles absolute and relative paths correctly.
+No changes are required. `resolve_explicit_path()` already resolves root-absolute and relative
+paths correctly.
+
+## Breaking Change
+
+This change is intentionally breaking for config files.
+
+Downlint uses `#[serde(deny_unknown_fields)]` for config parsing. Once
+`core.attachment_file_extensions_add` is removed from the schema, existing `.downlint.toml` files
+that still contain that key will fail to parse at startup.
+
+There is no compatibility shim in this proposal. Users must remove the key.
 
 ## Migration
 
-- The `attachment_file_extensions` and `attachment_file_extensions_add` config options become no-ops (or are removed outright).
-- Existing `.downlint.toml` files with these options can keep them; they would simply be ignored.
-- A deprecation warning could be emitted if either key is present in user config.
+1. Delete `core.attachment_file_extensions_add` from `.downlint.toml`.
+2. Rerun Downlint.
+3. Explicit file-like links now resolve without any attachment extension config.
 
 ## Risks
 
-1. **Performance**: Checking the filesystem for every unresolved explicit path could be slower than the whitelist approach. Mitigation: this only runs for links that failed document matching, which is typically a small number.
-2. **False negatives**: A link like `[](./foo)` (no extension) that happens to match a filesystem file but was intended as a document slug match. Mitigation: extensionless links go through `find_doc_matches` first; the filesystem check only runs if no document matched.
-3. **Breaking change**: Users relying on the whitelist to *suppress* filesystem checks for certain extensions. Mitigation: this is unlikely, and the new behavior is more intuitive.
+1. **More filesystem checks** — Unresolved explicit file-like targets now perform an existence
+   check. This is limited to targets that already failed document resolution.
+2. **Broader attachment fallback surface** — A basename like `report.v2` now qualifies as a
+   file-like target. This is acceptable because document resolution still runs first.
+3. **Config breakage** — Old configs using the removed key will error until updated. This is
+   acceptable because strict config parsing already makes removed keys a breaking change.
 
-## Alternatives considered
+## Alternatives Considered
 
-1. **Expand the default whitelist** — Add common extensions like `xlsx`, `docx`, `csv`, `zip`, etc. This is a band-aid; new extensions will always appear.
-2. **Invert the whitelist to a denylist** — Check all extensions except explicitly excluded ones. This requires maintaining a denylist and is less intuitive.
-3. **Keep the whitelist but add a fallback** — Check the filesystem for any unresolved explicit path even if the extension isn't whitelisted. This is essentially the same as the proposed change but keeps the whitelist as a no-op.
+1. **Expand the default whitelist** — Still requires ongoing maintenance and never covers all real
+   file types.
+2. **Keep the whitelist and add a fallback** — Adds indirection without preserving meaningful
+   behavior.
+3. **Slash-only fallback** — Misses common same-directory links such as `data.xlsx`.

@@ -23,7 +23,6 @@ pub struct CoreConfig {
     pub text_sync: TextSyncKind,
     pub title_from_heading: bool,
     pub extra_folders: Vec<String>,
-    pub attachment_file_extensions: Vec<String>,
 }
 
 impl Default for CoreConfig {
@@ -34,15 +33,6 @@ impl Default for CoreConfig {
             text_sync: TextSyncKind::Full,
             title_from_heading: true,
             extra_folders: Vec::new(),
-            attachment_file_extensions: vec![
-                "png".into(),
-                "jpg".into(),
-                "jpeg".into(),
-                "gif".into(),
-                "svg".into(),
-                "pdf".into(),
-                "webp".into(),
-            ],
         }
     }
 }
@@ -168,7 +158,6 @@ pub struct PartialCoreConfig {
     pub text_sync: Option<TextSyncKind>,
     pub title_from_heading: Option<bool>,
     pub extra_folders: Option<Vec<String>>,
-    pub attachment_file_extensions_add: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -254,13 +243,6 @@ pub fn finalize_config(partial: PartialConfig) -> Result<Config, ConfigError> {
         ));
     }
 
-    let mut attachment_file_extensions = defaults.core.attachment_file_extensions.clone();
-    if let Some(extra) = core.attachment_file_extensions_add.clone() {
-        attachment_file_extensions.extend(extra);
-    }
-    attachment_file_extensions.sort();
-    attachment_file_extensions.dedup();
-
     Ok(Config {
         core: CoreConfig {
             file_extensions,
@@ -275,7 +257,6 @@ pub fn finalize_config(partial: PartialConfig) -> Result<Config, ConfigError> {
                 .title_from_heading
                 .unwrap_or(defaults.core.title_from_heading),
             extra_folders: core.extra_folders.unwrap_or_default(),
-            attachment_file_extensions,
         },
         code_action: CodeActionConfig {
             toc: TocConfig {
@@ -337,10 +318,6 @@ fn merge_core(high: PartialCoreConfig, low: PartialCoreConfig) -> PartialCoreCon
         text_sync: high.text_sync.or(low.text_sync),
         title_from_heading: high.title_from_heading.or(low.title_from_heading),
         extra_folders: high.extra_folders.or(low.extra_folders),
-        attachment_file_extensions_add: merge_vec(
-            high.attachment_file_extensions_add,
-            low.attachment_file_extensions_add,
-        ),
     }
 }
 
@@ -385,19 +362,6 @@ fn merge_completion(
     }
 }
 
-fn merge_vec(high: Option<Vec<String>>, low: Option<Vec<String>>) -> Option<Vec<String>> {
-    match (high, low) {
-        (Some(high), Some(low)) => {
-            let mut values = low;
-            values.extend(high);
-            Some(values)
-        }
-        (Some(high), None) => Some(high),
-        (None, Some(low)) => Some(low),
-        (None, None) => None,
-    }
-}
-
 fn load_optional(path: PathBuf) -> Result<Option<PartialConfig>, ConfigError> {
     if path.exists() {
         parse_partial_config(&path).map(Some)
@@ -409,36 +373,25 @@ fn load_optional(path: PathBuf) -> Result<Option<PartialConfig>, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
-    fn merge_accumulates_attachment_extensions() {
-        let high = PartialConfig {
-            core: Some(PartialCoreConfig {
-                attachment_file_extensions_add: Some(vec!["drawio".into()]),
-                ..PartialCoreConfig::default()
-            }),
-            ..PartialConfig::default()
-        };
-        let low = PartialConfig {
-            core: Some(PartialCoreConfig {
-                attachment_file_extensions_add: Some(vec!["mermaid".into()]),
-                ..PartialCoreConfig::default()
-            }),
-            ..PartialConfig::default()
-        };
+    fn parse_rejects_removed_attachment_extensions_key() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(
+            &path,
+            "[core]\nattachment_file_extensions_add = [\"drawio\"]\n",
+        )
+        .unwrap();
 
-        let config = finalize_config(merge_partial(high, low)).unwrap();
-        assert!(
-            config
-                .core
-                .attachment_file_extensions
-                .contains(&"drawio".to_string())
-        );
-        assert!(
-            config
-                .core
-                .attachment_file_extensions
-                .contains(&"mermaid".to_string())
-        );
+        let error = parse_partial_config(&path).unwrap_err();
+        match error {
+            ConfigError::ParseToml { message, .. } => {
+                assert!(message.contains("unknown field"));
+                assert!(message.contains("attachment_file_extensions_add"));
+            }
+            other => panic!("expected parse error, got {other:?}"),
+        }
     }
 }
