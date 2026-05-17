@@ -297,7 +297,7 @@ single diagnostic update (200ms debounce). Cancel support is not yet implemented
 - Registered after the `initialized` notification via `client/registerCapability` when the
   client supports dynamic registration.
 - Glob patterns: `**/*.{md,markdown}` for markdown files by default, expanded by configured
-  markdown extensions, plus configured attachment extensions and `.downlint.toml`.
+  markdown extensions, plus `.downlint.toml`.
 - Uses `RelativePattern` form rooted at each workspace/extra folder (not plain absolute strings)
   for correct cross-folder matching.
 - Events: Create, Change, Delete.
@@ -880,8 +880,8 @@ Examples for source document `docs/guide/intro.md` in workspace `/repo`:
 - URI with a scheme (`https:`, `http:`, `mailto:`, etc.) → external, no diagnostic
 - No extension → internal document/title/path candidate
 - Configured markdown extension (`.md`, `.markdown`, etc.) → internal document
-- Configured attachment extension (`.pdf`, `.jpg`, etc.) → attachment
-- Unknown local-looking extension (`.json`, `.csv`, etc. not configured) → unresolved local resource; diagnostic policy in §6
+- Slash-based local path or basename with an extension → explicit file-like local target; try
+  document resolution first, then filesystem attachment resolution
 
 **InternName** (user-provided link target):
 
@@ -926,14 +926,15 @@ Examples for source document `docs/guide/intro.md` in workspace `/repo`:
 2. If empty → try extra_folders (for CrossRef only)
    → Filter docs by InternName
    → Match doc slug and/or section slug
-3. If still empty → try attachment resolution
-   → Look up by InternName in folder's attachment registry
-   → Return Dest::Attachment
+3. If still empty and target is explicit file-like → try attachment resolution
+   → Resolve the filesystem path from the source document directory or workspace root
+   → If the file exists, return Dest::Attachment
 ```
 
-**Unknown Extension Handling**: When a local-looking link target has an extension that is
-neither a markdown extension nor a configured attachment extension, resolution returns no match
-and diagnostics are produced by link kind:
+**Explicit File-Like Target Handling**: When a local-looking link target is slash-based or a
+same-directory basename with an extension, Downlint first tries document resolution. If no
+document matches, it checks the resolved filesystem path. Existing files resolve as attachments;
+missing files produce diagnostics by link kind:
 
 - Wiki-link (`[[...]]` or `![[...]]`) → **Error** broken link
 - Markdown inline link/image (`[...](...)` / `![...](...)`) → **Warning** broken or unknown local resource
@@ -1077,8 +1078,8 @@ a simple O(n) greedy scan.
 - WikiLinks (`[[...]]`) and embed wiki-links (`![[...]]`) → Error
 - MarkdownLinks and images (`[...](...)`, `![...](...)`) to local-looking unresolved targets → Warning
 - MarkdownLinks/images to external URIs with schemes (`https:`, `http:`, `mailto:`, etc.) → suppressed
-- MarkdownLinks/images to configured attachment extensions resolve as attachments; missing attachment → Warning
-- MarkdownLinks/images to unknown local file extensions → Warning unless an explicit suppression rule applies
+- MarkdownLinks/images to explicit file-like local targets resolve as attachments when the file
+  exists and no document matched first; missing file-like targets → Warning
 - Inline shortcut links (`[text]`) with no matching definition → **always suppressed** from diagnostics
   - Shortcut links are ambiguous and very noisy in prose
 
@@ -1243,7 +1244,7 @@ implemented — in-flight requests complete normally.
 
 - Cursor over a broken link element
 - Link resolves to non-existent document
-- Not an attachment extension
+- Link target is not an explicit file-like attachment candidate
 - Not in extra folder
 
 **Action**: Creates new markdown file with inferred filename from link target
@@ -1400,8 +1401,8 @@ title_from_heading = true
 # Cross-folder resolution (relative to this file's directory)
 extra_folders = ["../shared-notes", "assets/wiki"]
 
-# Attachment extensions to add (appended to defaults)
-attachment_file_extensions_add = ["drawio", "mermaid"]
+# Explicit file-like attachments such as `./diagram.drawio` or `report.xlsx`
+# do not require any per-extension config.
 
 # NOT exposed as a config option (dev-only build-time feature)
 # paranoid = true  # cfg(debug_assertions): validates incremental results against from-scratch
@@ -1461,7 +1462,6 @@ struct PartialCoreConfig {
     text_sync: Option<TextSyncKind>,
     title_from_heading: Option<bool>,
     extra_folders: Option<Vec<String>>,
-    attachment_file_extensions_add: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1505,20 +1505,6 @@ fn merge_option<T>(hi: Option<T>, low: Option<T>) -> Option<T> { hi.or(low) }
 **Nested Merge Rule**: Nested tables merge recursively. For example, project config can set
 `toc.include` without resetting user config's `toc.enable`.
 
-**Special Accumulation Rule**: `attachment_file_extensions_add` **accumulates**
-(both values are merged, with higher-precedence appended last):
-
-```rust
-fn merge_extensions_add(hi: Option<Vec<String>>, low: Option<Vec<String>>) -> Option<Vec<String>> {
-    match (hi, low) {
-        (Some(h), Some(l)) => Some([l, h].concat()),  // low first, then hi
-        (Some(h), None) => Some(h),
-        (None, Some(l)) => Some(l),
-        (None, None) => None,
-    }
-}
-```
-
 **Finalization**: After merging partial configs, construct non-optional runtime structs:
 
 ```rust
@@ -1529,7 +1515,6 @@ struct CoreConfig {
     text_sync: TextSyncKind,
     title_from_heading: bool,
     extra_folders: Vec<String>,
-    attachment_file_extensions: Vec<String>,
 }
 struct HeadingIdsConfig { enable: bool }
 ```
@@ -1542,6 +1527,9 @@ a clear error at startup — no silent fallbacks.
 **How it works**: Config structs use `#[serde(deny_unknown_fields)]` to reject unknown keys at
 parse time. This is a `serde` derive attribute that causes `Deserialize::deserialize()` to return
 an error when an unrecognized field is encountered.
+
+This means removing a key from the schema is a breaking change. For example,
+`core.attachment_file_extensions_add` now fails parsing instead of being ignored.
 
 ```rust
 #[derive(Deserialize)]
@@ -2039,7 +2027,7 @@ extra-folder paths, and `/root-absolute.md` links. Ordinary relative Markdown li
 **`--watch` behavior**:
 
 - Prints an initial diagnostic run, then prints subsequent runs after debounced file changes.
-- Watches markdown files, config files, and configured attachment extensions.
+- Watches markdown files and config files.
 - Ctrl+C exits cleanly with code `0`; watcher setup failures exit `2`.
 
 **`--stdin` behavior**:
@@ -2386,7 +2374,7 @@ code lenses, and practical CLI workflows. Everything else can be added iterative
 9. **Dot-relative paths** — `[[./doc]]` and `[x](./doc.md)` are explicit relative paths resolved from the source document directory; the `./` prefix is normalized away after anchoring.
 10. **Double-encoded wiki-links** — `[[%5B%5Bdoc%5D%5D]]` produces a URL containing literal `[[` text, not a nested wiki-link. The decoded URL is treated as a document name
 11. **Anchor links** — `[text](#section)` resolves to a heading/tag/link definition in the same document. `[text](other.md#section)` resolves `other.md` relative to the source document directory, then resolves `section` inside that target document.
-12. **Unknown local extensions** — `[ref](data.json)` is treated as an attachment if `json` is in the configured attachment list; otherwise it is a **Warning** severity unresolved local resource unless an explicit suppression rule applies. External URIs with schemes remain suppressed.
+12. **Explicit file-like local targets** — `[ref](data.json)` is treated as an attachment candidate regardless of extension. If the resolved filesystem path exists and no document matched first, it resolves as an attachment; otherwise it is a **Warning** severity unresolved local resource unless an explicit suppression rule applies. External URIs with schemes remain suppressed.
 13. **Unicode normalization** — `é` (U+00E9, precomposed) and `e\u0301` (U+0065 + combining accent) should be treated as equivalent for matching where normalization is required. Use the `unicode-normalization` crate for NFC/NFKC; `unicode-segmentation` is for grapheme boundaries, not normalization.
 
 #### Wiki-Links & Embeds
