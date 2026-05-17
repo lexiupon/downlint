@@ -23,6 +23,7 @@ pub struct CoreConfig {
     pub text_sync: TextSyncKind,
     pub title_from_heading: bool,
     pub extra_folders: Vec<String>,
+    pub ignore: Vec<String>,
 }
 
 impl Default for CoreConfig {
@@ -33,6 +34,7 @@ impl Default for CoreConfig {
             text_sync: TextSyncKind::Full,
             title_from_heading: true,
             extra_folders: Vec::new(),
+            ignore: Vec::new(),
         }
     }
 }
@@ -158,6 +160,7 @@ pub struct PartialCoreConfig {
     pub text_sync: Option<TextSyncKind>,
     pub title_from_heading: Option<bool>,
     pub extra_folders: Option<Vec<String>>,
+    pub ignore: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -257,6 +260,7 @@ pub fn finalize_config(partial: PartialConfig) -> Result<Config, ConfigError> {
                 .title_from_heading
                 .unwrap_or(defaults.core.title_from_heading),
             extra_folders: core.extra_folders.unwrap_or_default(),
+            ignore: core.ignore.unwrap_or_default(),
         },
         code_action: CodeActionConfig {
             toc: TocConfig {
@@ -318,6 +322,7 @@ fn merge_core(high: PartialCoreConfig, low: PartialCoreConfig) -> PartialCoreCon
         text_sync: high.text_sync.or(low.text_sync),
         title_from_heading: high.title_from_heading.or(low.title_from_heading),
         extra_folders: high.extra_folders.or(low.extra_folders),
+        ignore: high.ignore.or(low.ignore),
     }
 }
 
@@ -393,5 +398,67 @@ mod tests {
             }
             other => panic!("expected parse error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_accepts_ignore_patterns() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(
+            &path,
+            "[core]\nignore = [\"drafts/**\", \"*.tmp.md\"]\n",
+        )
+        .unwrap();
+
+        let partial = parse_partial_config(&path).unwrap();
+        let config = finalize_config(partial).unwrap();
+        assert_eq!(config.core.ignore, vec!["drafts/**".to_string(), "*.tmp.md".to_string()]);
+    }
+
+    #[test]
+    fn ignore_defaults_to_empty() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(&path, "[core]\n")
+            .unwrap();
+
+        let partial = parse_partial_config(&path).unwrap();
+        let config = finalize_config(partial).unwrap();
+        assert!(config.core.ignore.is_empty());
+    }
+
+    #[test]
+    fn ignore_project_overrides_user() {
+        let high = PartialCoreConfig {
+            ignore: Some(vec!["project-ignore/**".to_string()]),
+            ..Default::default()
+        };
+        let low = PartialCoreConfig {
+            ignore: Some(vec!["user-ignore/**".to_string()]),
+            ..Default::default()
+        };
+        let merged = merge_core(high, low);
+        assert_eq!(
+            merged.ignore.unwrap(),
+            vec!["project-ignore/**".to_string()]
+        );
+    }
+
+    #[test]
+    fn ignore_negation_pattern_parses() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(
+            &path,
+            "[core]\nignore = [\"drafts/**\", \"!drafts/published/**\"]\n",
+        )
+        .unwrap();
+
+        let partial = parse_partial_config(&path).unwrap();
+        let config = finalize_config(partial).unwrap();
+        assert_eq!(
+            config.core.ignore,
+            vec!["drafts/**".to_string(), "!drafts/published/**".to_string()]
+        );
     }
 }

@@ -1401,6 +1401,13 @@ title_from_heading = true
 # Cross-folder resolution (relative to this file's directory)
 extra_folders = ["../shared-notes", "assets/wiki"]
 
+# File exclusion patterns (glob syntax, additive to .gitignore)
+ignore = [
+    "drafts/**",
+    "archive/**",
+    "*.tmp.md",
+]
+
 # Explicit file-like attachments such as `./diagram.drawio` or `report.xlsx`
 # do not require any per-extension config.
 
@@ -1462,6 +1469,7 @@ struct PartialCoreConfig {
     text_sync: Option<TextSyncKind>,
     title_from_heading: Option<bool>,
     extra_folders: Option<Vec<String>>,
+    ignore: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1873,6 +1881,62 @@ vendor/
 docs/note.md → included
 vendor/docs/guide.md → excluded
 ```
+
+### 10.9 Custom Ignore Patterns
+
+In addition to `.gitignore`, Downlint supports custom ignore patterns via `core.ignore` in
+`.downlint.toml`. This decouples linting exclusion from version control policy.
+
+**Config**:
+
+```toml
+[core]
+ignore = [
+    "drafts/**",
+    "archive/**",
+    "*.tmp.md",
+]
+```
+
+**Rules**:
+
+- Patterns follow glob syntax (`*`, `**`, `?`, `[abc]`)
+- Patterns are relative to the workspace root
+- Patterns are **additive** to `.gitignore` — both sources are respected
+- Negation with `!` is supported (e.g., `!drafts/published/**` re-includes a subdirectory)
+- Patterns apply to both CLI check and LSP workspace indexing
+- An empty list (default) has no effect
+
+**Resolution**:
+
+```
+1. Walk workspace with ignore crate (respects .gitignore)
+2. Apply custom ignore patterns from .downlint.toml
+3. Negation patterns re-include files excluded by earlier patterns
+4. Filter by configured file_extensions
+5. Yield documents for parsing/diagnostics
+```
+
+**Example**:
+
+```toml
+[core]
+ignore = [
+    "drafts/**",
+    "!drafts/published/**",
+]
+```
+
+Result:
+- `drafts/proposal.md` → excluded
+- `drafts/published/final.md` → included (negation overrides)
+
+**Motivation**:
+
+- **Non-git projects** — Markdown-only workspaces may not have `.gitignore`
+- **Separation of concerns** — `.gitignore` governs version control; `core.ignore` governs linting
+- **Per-project overrides** — Parent `.gitignore` may be too broad or narrow for linting
+- **CI/CD pipelines** — Exclude generated docs from linting without affecting git
 
 ---
 

@@ -32,6 +32,7 @@ pub struct ResolveInput {
     pub root: PathBuf,
     pub documents: Vec<ResolveDocument>,
     pub extra_documents: Vec<ResolveDocument>,
+    pub extra_folder_roots: Vec<PathBuf>,
     pub config: Config,
     pub single_file: bool,
 }
@@ -62,6 +63,7 @@ impl ResolveInput {
             root: workspace.folder.root.clone(),
             documents,
             extra_documents,
+            extra_folder_roots: workspace.folder.extra_folders.clone(),
             config: workspace.config.clone(),
             single_file: matches!(workspace.mode, WorkspaceMode::SingleFile),
         }
@@ -304,7 +306,7 @@ fn resolve_wiki_ref(
 
     let explicit = is_explicit_path(target);
     let primary_matches =
-        find_doc_matches(primary_docs, &doc.path, &ctx.input.root, target, explicit);
+        find_doc_matches(primary_docs, &doc.path, &ctx.input.root, target, explicit, &[]);
     if primary_matches.len() > 1 {
         ctx.graph.ambiguous_references.push(AmbiguousReference {
             source_path: doc.path.clone(),
@@ -318,8 +320,8 @@ fn resolve_wiki_ref(
         return;
     }
 
-    let destinations = if primary_matches.is_empty() && !explicit {
-        find_doc_matches(extra_docs, &doc.path, &ctx.input.root, target, false)
+    let destinations = if primary_matches.is_empty() {
+        find_doc_matches(extra_docs, &doc.path, &ctx.input.root, target, explicit, &ctx.input.extra_folder_roots)
     } else {
         primary_matches
     };
@@ -370,7 +372,7 @@ fn resolve_inline_ref(
         return;
     }
 
-    let destinations = find_doc_matches(primary_docs, &doc.path, &ctx.input.root, target, true);
+    let destinations = find_doc_matches(primary_docs, &doc.path, &ctx.input.root, target, true, &[]);
     finalize_doc_or_attachment(ctx, target, anchor, destinations);
 }
 
@@ -477,6 +479,7 @@ fn find_doc_matches(
     root: &Path,
     target: &str,
     explicit_only: bool,
+    extra_roots: &[PathBuf],
 ) -> Vec<ResolvedDestination> {
     let source_dir = source_path.parent().unwrap_or(root);
     let source_dir = source_dir.to_path_buf();
@@ -489,7 +492,14 @@ fn find_doc_matches(
     for doc in docs {
         let rel_no_ext = path_without_extension(&doc.rel_path);
         let matches = if explicit_only || is_explicit_path(target) {
-            doc.path == explicit_path || rel_no_ext == explicit_no_ext
+            doc.path == explicit_path
+                || rel_no_ext == explicit_no_ext
+                || extra_roots.iter().any(|extra_root| {
+                    let resolved = resolve_explicit_path(extra_root, extra_root, target);
+                    let resolved_rel = resolved.strip_prefix(extra_root).unwrap_or(&resolved);
+                    let resolved_no_ext = path_without_extension(resolved_rel);
+                    doc.path == resolved || rel_no_ext == resolved_no_ext
+                })
         } else {
             doc.file_stem.eq_ignore_ascii_case(target)
                 || doc.title_slug == target_slug

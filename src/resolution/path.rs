@@ -29,11 +29,33 @@ pub fn path_without_extension(path: &Path) -> String {
     value
 }
 
+fn percent_decode(input: &str) -> String {
+    let mut result = Vec::new();
+    let mut chars = input.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '%' {
+            let hex: String = chars.by_ref().take(2).collect();
+            if hex.len() == 2 {
+                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                    result.push(byte as char);
+                    continue;
+                }
+            }
+            result.push(ch);
+            result.extend(hex.chars());
+        } else {
+            result.push(ch);
+        }
+    }
+    result.into_iter().collect()
+}
+
 pub fn resolve_explicit_path(root: &Path, source_dir: &Path, target: &str) -> PathBuf {
-    if target.starts_with('/') {
-        root.join(target.trim_start_matches('/'))
+    let decoded = percent_decode(target);
+    if decoded.starts_with('/') {
+        root.join(decoded.trim_start_matches('/'))
     } else {
-        source_dir.join(target)
+        source_dir.join(decoded)
     }
 }
 

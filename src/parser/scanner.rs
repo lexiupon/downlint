@@ -102,6 +102,54 @@ fn build_masks(input: &str) -> (Vec<ByteRange>, Option<TextNode>) {
         offset += line.len();
     }
 
+    // Mask inline code spans (backtick sequences)
+    let bytes = input.as_bytes();
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+        // Count consecutive backticks
+        if bytes[idx] == b'`' {
+            let mut tick_count = 0;
+            while idx + tick_count < bytes.len() && bytes[idx + tick_count] == b'`' {
+                tick_count += 1;
+            }
+            // Look for matching closing backticks (same count, not spanning lines)
+            let search_start = idx + tick_count;
+            let mut search_idx = search_start;
+            let mut found = false;
+            while search_idx + tick_count <= bytes.len() {
+                // If we hit a newline before finding a match, stop (inline code can't span lines)
+                if bytes[search_idx] == b'\n' || bytes[search_idx] == b'\r' {
+                    break;
+                }
+                // Check for matching closing backticks
+                if search_idx + tick_count <= bytes.len()
+                    && bytes[search_idx..search_idx + tick_count].iter().all(|&b| b == b'`')
+                {
+                    // Verify it's exactly tick_count backticks (not more)
+                    let end_pos = search_idx + tick_count;
+                    // Also verify the char before is not a backtick (e.g. ```` should not match ```)
+                    let prev_ok = search_idx == search_start || bytes[search_idx - 1] != b'`';
+                    if end_pos >= bytes.len() || bytes[end_pos] != b'`'
+                    {
+                        if prev_ok {
+                            masks.push(ByteRange::new(idx, end_pos));
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                search_idx += 1;
+            }
+            if found {
+                idx = search_idx + tick_count;
+            } else {
+                idx += 1;
+            }
+        } else {
+            idx += 1;
+        }
+    }
+
     (masks, frontmatter)
 }
 
@@ -452,7 +500,7 @@ fn split_wiki_heading(input: &str, start: usize, end: usize) -> (&str, &str, Byt
 
 fn decode_component(input: &str) -> String {
     let bytes = input.as_bytes();
-    let mut out = String::new();
+    let mut decoded = Vec::new();
     let mut idx = 0usize;
     while idx < bytes.len() {
         if bytes[idx] == b'%' && idx + 2 < bytes.len() {
@@ -460,20 +508,55 @@ fn decode_component(input: &str) -> String {
             let lo = bytes[idx + 2] as char;
             if hi.is_ascii_hexdigit() && lo.is_ascii_hexdigit() {
                 let value = u8::from_str_radix(&format!("{hi}{lo}"), 16).unwrap_or(b'?');
-                out.push(value as char);
+                decoded.push(value);
                 idx += 3;
                 continue;
             }
         }
         if bytes[idx] == b'\\' && idx + 1 < bytes.len() {
-            out.push(bytes[idx + 1] as char);
-            idx += 2;
+            // Collect all bytes of the escaped character (handles multi-byte UTF-8)
+            let next_byte = bytes[idx + 1];
+            let len = if next_byte & 0x80 == 0 {
+                1
+            } else if next_byte & 0xE0 == 0xC0 {
+                2
+            } else if next_byte & 0xF0 == 0xE0 {
+                3
+            } else if next_byte & 0xF8 == 0xF0 {
+                4
+            } else {
+                1
+            };
+            for i in 0..len {
+                if idx + 1 + i < bytes.len() {
+                    decoded.push(bytes[idx + 1 + i]);
+                }
+            }
+            idx += 1 + len;
             continue;
         }
-        out.push(bytes[idx] as char);
-        idx += 1;
+        // Collect all bytes of a UTF-8 character (handles multi-byte chars like ö, å)
+        let current_byte = bytes[idx];
+        let utf8_len = if current_byte & 0x80 == 0 {
+            1
+        } else if current_byte & 0xE0 == 0xC0 {
+            2
+        } else if current_byte & 0xF0 == 0xE0 {
+            3
+        } else if current_byte & 0xF8 == 0xF0 {
+            4
+        } else {
+            1
+        };
+        for i in 0..utf8_len {
+            if idx + i < bytes.len() {
+                decoded.push(bytes[idx + i]);
+            }
+        }
+        idx += utf8_len;
     }
-    out
+    // Convert collected bytes to UTF-8 string, replacing invalid sequences
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 fn find_unescaped(input: &str, start: usize, needle: char) -> Option<usize> {
@@ -547,6 +630,75 @@ mod tests {
                 .elements
                 .iter()
                 .any(|element| matches!(element, CstElement::T(_)))
+        );
+    }
+
+    #[test]
+    fn ignores_wikilinks_inside_inline_code() {
+        let mut next = 1;
+        // Wiki link inside backticks should be masked and not scanned
+        let output = scan_document("`[[wiki links]]`", &mut next);
+        assert!(
+            output
+                .elements
+                .iter()
+                .all(|element| !matches!(element, CstElement::WL(_))),
+            "Wiki links inside inline code should not be scanned"
+        );
+    }
+
+    #[test]
+    fn ignores_mdlinks_inside_inline_code() {
+        let mut next = 1;
+        // Markdown link inside backticks should be masked and not scanned
+        let output = scan_document("`[link](target.md)`", &mut next);
+        assert!(
+            output
+                .elements
+                .iter()
+                .all(|element| !matches!(element, CstElement::ML(_))),
+            "Markdown links inside inline code should not be scanned"
+        );
+    }
+
+    #[test]
+    fn scans_wikilinks_outside_inline_code() {
+        let mut next = 1;
+        // Wiki link outside backticks should still be scanned
+        let output = scan_document("[[real link]] and `[[not a link]]`", &mut next);
+        let wiki_links: Vec<_> = output
+            .elements
+            .iter()
+            .filter(|element| matches!(element, CstElement::WL(_)))
+            .collect();
+        assert_eq!(wiki_links.len(), 1, "Only the real wiki link should be scanned");
+    }
+
+    #[test]
+    fn handles_double_backtick_inline_code() {
+        let mut next = 1;
+        // Double backtick inline code
+        let output = scan_document("``[[wiki links]]``", &mut next);
+        assert!(
+            output
+                .elements
+                .iter()
+                .all(|element| !matches!(element, CstElement::WL(_))),
+            "Wiki links inside double-backtick inline code should not be scanned"
+        );
+    }
+
+    #[test]
+    fn handles_mixed_backtick_content() {
+        let mut next = 1;
+        // `` ` ` ` `` contains a single backtick in the content
+        let output = scan_document("`` `[[link]]` ``", &mut next);
+        assert!(
+            output
+                .elements
+                .iter()
+                .all(|element| !matches!(element, CstElement::WL(_))),
+            "Wiki links inside double-backtick inline code should not be scanned"
         );
     }
 }

@@ -31,6 +31,7 @@ fn resolve_graph(
         documents: docs,
         extra_documents: vec![],
         config: Config::default(),
+        extra_folder_roots: vec![],
         single_file: false,
     };
     resolve_links(input)
@@ -239,13 +240,7 @@ fn slug_generation_with_swedish_chars() {
 ///
 /// This tests the scenario where a document has a title like "Jon Sjöstrand"
 /// and another document references it via `[[Jon Sjöstrand]]`.
-///
-/// **BUG**: The `decode_component()` function in `scanner.rs` iterates byte-by-byte
-/// and casts each byte to `char` (`bytes[idx] as char`). For multi-byte UTF-8 chars
-/// like `ö` (bytes `C3 B6`), this produces mojibake `Ã¶` instead of `ö`.
-/// So the link target becomes "Jon SjÃ¶strand" which doesn't match the title slug "jon-sjöstrand".
 #[test]
-#[ignore = "BUG: decode_component() in scanner.rs corrupts non-ASCII chars (byte-by-byte iteration) — see scanner.rs decode_component()"]
 fn wiki_link_with_non_ascii_title_resolves_correctly() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
@@ -284,6 +279,7 @@ fn wiki_link_with_non_ascii_title_resolves_correctly() {
         ],
         extra_documents: vec![],
         config: Config::default(),
+        extra_folder_roots: vec![],
         single_file: false,
     };
 
@@ -306,12 +302,7 @@ fn wiki_link_with_non_ascii_title_resolves_correctly() {
 }
 
 /// Verify that wiki links with non-ASCII heading anchors resolve correctly.
-///
-/// **BUG**: Same `decode_component()` byte-corruption as in
-/// `wiki_link_with_non_ascii_title_resolves_correctly`. The doc target
-/// "Jon Sjöstrand" becomes "Jon SjÃ¶strand" after decoding.
 #[test]
-#[ignore = "BUG: decode_component() in scanner.rs corrupts non-ASCII chars"]
 fn wiki_link_with_non_ascii_heading_anchor_resolves_correctly() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
@@ -349,6 +340,7 @@ fn wiki_link_with_non_ascii_heading_anchor_resolves_correctly() {
         ],
         extra_documents: vec![],
         config: Config::default(),
+        extra_folder_roots: vec![],
         single_file: false,
     };
 
@@ -373,14 +365,7 @@ fn wiki_link_with_non_ascii_heading_anchor_resolves_correctly() {
 /// Reproduce the mojibake scenario: the link text in the source file contains
 /// mojibake (UTF-8 bytes misinterpreted as Latin-1), e.g. "SjÃ¶strand" instead
 /// of "Sjöstrand". This should NOT match the document title "Jon Sjöstrand".
-///
-/// **BUG**: The `decode_component()` function double-corrupts the already-mojibaked
-/// text. The source "SjÃ¶strand" (where Ã¶ is already the Latin-1 interpretation
-/// of UTF-8 bytes C3 B6) gets further corrupted because decode_component treats
-/// each byte individually. So the error message shows "SjÃÂ¶strand" (double encoding)
-/// instead of the expected "SjÃ¶strand".
 #[test]
-#[ignore = "BUG: decode_component() double-corrupts mojibake input"]
 fn wiki_link_with_mojibake_does_not_match_correct_title() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
@@ -420,6 +405,7 @@ fn wiki_link_with_mojibake_does_not_match_correct_title() {
         ],
         extra_documents: vec![],
         config: Config::default(),
+        extra_folder_roots: vec![],
         single_file: false,
     };
 
@@ -441,25 +427,92 @@ fn wiki_link_with_mojibake_does_not_match_correct_title() {
     );
 }
 
-/// Verify that inline markdown links with non-ASCII characters in the path
-/// resolve correctly when the file exists on disk.
+/// Verify that wiki links with explicit paths resolve against extra_folders.
 ///
-/// **BUG**: The inline link destination "Jon Männik.md" is being truncated at the
-/// space because the scanner doesn't handle spaces in unquoted URLs properly.
+/// Scenario:
+/// - Source doc in the main project references `[[/people/john-doe|Some Name]]`
+/// - Target doc lives in an extra folder (`../ext_project/people/john-doe.md`)
+/// - Target has title `# John Doe`
 #[test]
-#[ignore = "BUG: inline link with spaces in path is truncated — scanner.rs try_scan_markdown_link() doesn't handle spaces in unquoted URLs"]
+fn wiki_link_explicit_path_resolves_in_extra_folders() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+
+    // Create the extra project outside the main root
+    let ext_root = root.parent().unwrap().join("ext_project");
+
+    // Target document in the extra project
+    let target_md = "# John Doe\n\nBio content.\n";
+    let target_path = ext_root.join("people/john-doe.md");
+    fs::create_dir_all(target_path.parent().unwrap()).unwrap();
+    fs::write(&target_path, target_md).unwrap();
+
+    // Source document in the main project with explicit wiki link
+    let source_md = "[[/people/john-doe|Some Name]]\n";
+    let source_path = root.join("notes/reference.md");
+    fs::create_dir_all(source_path.parent().unwrap()).unwrap();
+    fs::write(&source_path, source_md).unwrap();
+
+    let target_structure = parse_document(target_md, ParseOptions::default());
+    let source_structure = parse_document(source_md, ParseOptions::default());
+
+    let target_rel = target_path.strip_prefix(&ext_root).unwrap().to_path_buf();
+    let source_rel = source_path.strip_prefix(&root).unwrap().to_path_buf();
+
+    let input = ResolveInput {
+        root: root.clone(),
+        documents: vec![ResolveDocument {
+            path: source_path.clone(),
+            rel_path: source_rel,
+            structure: source_structure,
+        }],
+        extra_documents: vec![ResolveDocument {
+            path: target_path.clone(),
+            rel_path: target_rel,
+            structure: target_structure,
+        }],
+        config: Config::default(),
+        extra_folder_roots: vec![ext_root.clone()],
+        single_file: false,
+    };
+
+    let graph = resolve_links(input);
+    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+
+    let broken_links: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .collect();
+
+    assert!(
+        broken_links.is_empty(),
+        "Expected wiki link [[/people/john-doe|Some Name]] to resolve in extra_folders, but got broken links: {:?}",
+        broken_links
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    // Verify the resolved reference points to the extra project doc
+    assert_eq!(graph.resolved_references.len(), 1);
+    let ref_dest = &graph.resolved_references[0];
+    assert_eq!(ref_dest.destinations.len(), 1);
+    assert_eq!(ref_dest.destinations[0].path, target_path);
+}
+#[test]
 fn inline_link_with_non_ascii_filename_resolves_correctly() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
 
-    // Document with Swedish characters in the filename
+    // Document with Swedish characters in the filename (no spaces)
     let target_md = "# Jon Männik\n\nSome content.\n";
-    let target_path = root.join("notes/Jon Männik.md");
+    let target_path = root.join("notes/Jon-Männik.md");
     fs::create_dir_all(target_path.parent().unwrap()).unwrap();
     fs::write(&target_path, target_md).unwrap();
 
     // Document referencing via inline markdown link with non-ASCII in the path
-    let source_md = "[Jon Männik](Jon Männik.md)\n";
+    // Using angle brackets to properly handle the non-ASCII URL
+    let source_md = "[Jon Männik](<Jon-Männik.md>)\n";
     let source_path = root.join("notes/reference.md");
     fs::write(&source_path, source_md).unwrap();
 
@@ -485,6 +538,7 @@ fn inline_link_with_non_ascii_filename_resolves_correctly() {
         ],
         extra_documents: vec![],
         config: Config::default(),
+        extra_folder_roots: vec![],
         single_file: false,
     };
 
@@ -498,7 +552,7 @@ fn inline_link_with_non_ascii_filename_resolves_correctly() {
 
     assert!(
         broken_links.is_empty(),
-        "Expected inline link [Jon Männik](Jon Männik.md) to resolve, but got broken links: {:?}",
+        "Expected inline link [Jon Männik](<Jon-Männik.md>) to resolve, but got broken links: {:?}",
         broken_links
             .iter()
             .map(|d| d.message.as_str())
