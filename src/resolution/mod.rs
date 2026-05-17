@@ -631,14 +631,20 @@ fn find_doc_matches(
     for doc in docs {
         let rel_no_ext = path_without_extension(&doc.rel_path);
         let matches = if explicit_only || is_explicit_path(target) {
-            doc.path == explicit_path
+            // For explicit paths, primarily check path-based matches.
+            // When searching extra docs (extra_roots non-empty), also fall back
+            // to title slug matching since the target may not be a valid path.
+            let path_matches = doc.path == explicit_path
                 || rel_no_ext == explicit_no_ext
                 || extra_roots.iter().any(|extra_root| {
                     let resolved = resolve_explicit_path(extra_root, extra_root, target);
                     let resolved_rel = resolved.strip_prefix(extra_root).unwrap_or(&resolved);
                     let resolved_no_ext = path_without_extension(resolved_rel);
                     doc.path == resolved || rel_no_ext == resolved_no_ext
-                })
+                });
+            // Extra fallback: title slug matching when searching extra docs
+            let slug_matches = !extra_roots.is_empty() && doc.title_slug == target_slug;
+            path_matches || slug_matches
         } else {
             doc.file_stem.eq_ignore_ascii_case(target)
                 || doc.title_slug == target_slug
