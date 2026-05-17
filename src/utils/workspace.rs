@@ -247,7 +247,15 @@ fn resolve_extra_folders(root: &Path, config: &Config) -> Vec<PathBuf> {
         .core
         .extra_folders
         .iter()
-        .map(|value| canonicalize_if_exists(root.join(value)))
+        .map(|value| {
+            // Expand ~ to home directory
+            let expanded = if let Some(stripped) = value.strip_prefix("~/") {
+            std::env::var("HOME").ok().and_then(|h| PathBuf::try_from(h).ok()).unwrap_or_else(|| PathBuf::from("/")).join(stripped)
+            } else {
+                root.join(value)
+            };
+            canonicalize_if_exists(expanded)
+        })
         .collect()
 }
 

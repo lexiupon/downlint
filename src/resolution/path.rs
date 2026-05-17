@@ -16,6 +16,14 @@ pub fn split_anchor(input: &str) -> (&str, Option<&str>) {
     }
 }
 
+
+/// Returns true if the target path (before any anchor) ends with /,
+/// indicating the link intends to reference a directory.
+pub fn is_folder_link_target(target: &str) -> bool {
+    let (path_part, _anchor) = split_anchor(target);
+    path_part.ends_with('/')
+}
+
 pub fn path_without_extension(path: &Path) -> String {
     let mut value = path.to_string_lossy().replace('\\', "/");
     if let Some(stripped) = value.strip_suffix(&format!(

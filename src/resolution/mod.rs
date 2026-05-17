@@ -8,7 +8,7 @@ use crate::resolution::conn::{
     AmbiguousReference, DestinationKind, ResolvedDestination, ResolvedDocument, ResolvedReference,
     UnresolvedReference,
 };
-use crate::resolution::path::{has_scheme, path_without_extension, resolve_explicit_path};
+use crate::resolution::path::{has_scheme, is_folder_link_target, path_without_extension, resolve_explicit_path};
 use crate::utils::{Workspace, WorkspaceMode};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -263,6 +263,71 @@ struct ResolveRefContext<'a> {
     graph: &'a mut ConnectionGraph,
 }
 
+
+/// Resolve a folder link (target ending with /) against the workspace and extra folders.
+fn resolve_folder_link(
+    source_path: &Path,
+    target: &str,
+    root: &Path,
+    extra_roots: &[PathBuf],
+) -> Option<ResolvedDestination> {
+    // Strip anchor and trailing / to get the actual directory path
+    let (path_part, _anchor) = crate::resolution::path::split_anchor(target);
+    let target_dir = path_part.trim_end_matches('/');
+    
+    let source_dir = source_path.parent().unwrap_or(root);
+
+    // For absolute paths (starting with /), resolve from root
+    let resolved = resolve_explicit_path(root, source_dir, target_dir);
+    if resolved.is_dir() {
+        return Some(ResolvedDestination {
+            path: resolved,
+            kind: DestinationKind::Directory,
+            name: target_dir.to_string(),
+            range: None,
+        });
+    }
+
+    // Check in extra folder roots for absolute paths, matching by prefix
+    if target_dir.starts_with('/') {
+        // Strip leading / to get path components
+        let rel = target_dir.trim_start_matches('/');
+        for extra_root in extra_roots {
+            // Try direct join first
+            let candidate = extra_root.join(rel);
+            if candidate.is_dir() {
+                return Some(ResolvedDestination {
+                    path: candidate,
+                    kind: DestinationKind::Directory,
+                    name: target_dir.to_string(),
+                    range: None,
+                });
+            }
+            // Try matching the first path component against the extra folder name
+            // e.g. /avon/cases/ -> extra_root ~/projects/avon -> ~/projects/avon/cases/
+            if let Some(first) = rel.split('/').next() {
+                if let Some(name) = extra_root.file_name().and_then(|n| n.to_str()) {
+                    if first == name {
+                        // Strip the first component and join
+                        let rest = rel.splitn(2, '/').nth(1).unwrap_or("");
+                        let candidate = extra_root.join(rest);
+                        if candidate.is_dir() {
+                            return Some(ResolvedDestination {
+                                path: candidate,
+                                kind: DestinationKind::Directory,
+                                name: target_dir.to_string(),
+                                range: None,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
 fn resolve_wiki_ref(
     ctx: &mut ResolveRefContext<'_>,
     target: &str,
@@ -303,6 +368,43 @@ fn resolve_wiki_ref(
         }
         return;
     }
+
+    // Detect and resolve folder links (target ending with /)
+    if is_folder_link_target(target) {
+        if heading.is_some() {
+            // Folder links with headings are invalid
+            ctx.graph.unresolved_references.push(UnresolvedReference {
+                source_path: doc.path.clone(),
+                occurrence_id: symbol.id,
+                full_range: symbol.full_range,
+                name_range: symbol.name_range,
+                reference: reference.clone(),
+                target: target.to_string(),
+            });
+            return;
+        }
+        if let Some(destination) = resolve_folder_link(&doc.path, target, &ctx.input.root, &ctx.input.extra_folder_roots) {
+            ctx.graph.resolved_references.push(ResolvedReference {
+                source_path: doc.path.clone(),
+                occurrence_id: symbol.id,
+                full_range: symbol.full_range,
+                name_range: symbol.name_range,
+                reference: reference.clone(),
+                destinations: vec![destination],
+            });
+        } else {
+            ctx.graph.unresolved_references.push(UnresolvedReference {
+                source_path: doc.path.clone(),
+                occurrence_id: symbol.id,
+                full_range: symbol.full_range,
+                name_range: symbol.name_range,
+                reference: reference.clone(),
+                target: target.to_string(),
+            });
+        }
+        return;
+    }
+
 
     let explicit = is_explicit_path(target);
     let primary_matches =
@@ -371,6 +473,43 @@ fn resolve_inline_ref(
         }
         return;
     }
+
+    // Detect and resolve folder links (target ending with /)
+    if is_folder_link_target(target) {
+        if anchor.is_some() {
+            // Folder links with anchors are invalid
+            ctx.graph.unresolved_references.push(UnresolvedReference {
+                source_path: doc.path.clone(),
+                occurrence_id: symbol.id,
+                full_range: symbol.full_range,
+                name_range: symbol.name_range,
+                reference: reference.clone(),
+                target: target.to_string(),
+            });
+            return;
+        }
+        if let Some(destination) = resolve_folder_link(&doc.path, target, &ctx.input.root, &ctx.input.extra_folder_roots) {
+            ctx.graph.resolved_references.push(ResolvedReference {
+                source_path: doc.path.clone(),
+                occurrence_id: symbol.id,
+                full_range: symbol.full_range,
+                name_range: symbol.name_range,
+                reference: reference.clone(),
+                destinations: vec![destination],
+            });
+        } else {
+            ctx.graph.unresolved_references.push(UnresolvedReference {
+                source_path: doc.path.clone(),
+                occurrence_id: symbol.id,
+                full_range: symbol.full_range,
+                name_range: symbol.name_range,
+                reference: reference.clone(),
+                target: target.to_string(),
+            });
+        }
+        return;
+    }
+
 
     let destinations = find_doc_matches(primary_docs, &doc.path, &ctx.input.root, target, true, &[]);
     finalize_doc_or_attachment(ctx, target, anchor, destinations);

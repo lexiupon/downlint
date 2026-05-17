@@ -11,6 +11,7 @@ pub enum DestinationKind {
     LinkDefinition,
     Tag,
     Attachment,
+    Directory,
 }
 
 #[derive(Clone, Debug)]
