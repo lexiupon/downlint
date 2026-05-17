@@ -559,3 +559,183 @@ fn inline_link_with_non_ascii_filename_resolves_correctly() {
             .collect::<Vec<_>>()
     );
 }
+
+// ============================================================================
+// Folder link resolution tests
+// ============================================================================
+
+#[test]
+fn folder_link_to_existing_directory_resolves() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    fs::create_dir_all(root.join("cases/20250911-audit")).unwrap();
+    fs::write(root.join("cases/20250911-audit/README.md"), "# Audit").unwrap();
+
+    let doc = write_document(
+        root,
+        "docs/index.md",
+        "[Case Audit](../cases/20250911-audit/)",
+    );
+
+    let graph = resolve_graph(root, vec![doc]);
+    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+
+    assert!(
+        diagnostics.iter().all(|d| d.code != DiagnosticCode::DNL002),
+        "folder link to existing directory should not produce broken link diagnostic"
+    );
+    assert_eq!(graph.resolved_references.len(), 1);
+    assert!(matches!(
+        graph.resolved_references[0].destinations[0].kind,
+        ResolveDestinationKind::Directory
+    ));
+}
+
+#[test]
+fn folder_link_to_missing_directory_is_broken() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    let doc = write_document(
+        root,
+        "docs/index.md",
+        "[Missing Case](../cases/20250999-missing/)",
+    );
+
+    let graph = resolve_graph(root, vec![doc]);
+    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+
+    let broken: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .collect();
+    assert_eq!(broken.len(), 1, "folder link to missing directory should be broken");
+}
+
+#[test]
+fn folder_link_to_file_not_directory_is_broken() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    fs::write(root.join("cases"), "some content").unwrap();
+
+    let doc = write_document(
+        root,
+        "docs/index.md",
+        "[Cases](../cases/)",
+    );
+
+    let graph = resolve_graph(root, vec![doc]);
+    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+
+    let broken: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .collect();
+    assert_eq!(broken.len(), 1, "folder link to a file should be broken");
+}
+
+#[test]
+fn wiki_link_to_folder_resolves() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    fs::create_dir_all(root.join("cases/audit")).unwrap();
+
+    let doc = write_document(
+        root,
+        "docs/index.md",
+        "[[/cases/audit/]]",
+    );
+
+    let graph = resolve_graph(root, vec![doc]);
+    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+
+    assert!(
+        diagnostics.iter().all(|d| d.code != DiagnosticCode::DNL002),
+        "wiki link to existing folder should resolve"
+    );
+}
+
+#[test]
+fn folder_link_with_anchor_is_unresolved() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    fs::create_dir_all(root.join("cases/audit")).unwrap();
+
+    let doc = write_document(
+        root,
+        "docs/index.md",
+        "[Case Audit](../cases/audit/#summary)",
+    );
+
+    let graph = resolve_graph(root, vec![doc]);
+    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+
+    let broken: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .collect();
+    assert_eq!(broken.len(), 1, "folder link with anchor should be unresolved");
+}
+
+#[test]
+fn folder_link_in_extra_folder_resolves() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().to_path_buf();
+    let extra_root = temp.path().join("extra");
+
+    fs::create_dir_all(extra_root.join("shared/templates")).unwrap();
+
+    let doc = write_document(
+        &root,
+        "docs/index.md",
+        "[Templates](/shared/templates/)",
+    );
+
+    let input = ResolveInput {
+        root: root.clone(),
+        documents: vec![doc],
+        extra_documents: vec![],
+        config: Config::default(),
+        extra_folder_roots: vec![extra_root.clone()],
+        single_file: false,
+    };
+
+    let graph = resolve_links(input);
+    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+
+    assert!(
+        diagnostics.iter().all(|d| d.code != DiagnosticCode::DNL002),
+        "folder link to directory in extra folder should resolve"
+    );
+}
+
+#[test]
+fn non_folder_link_to_directory_name_unchanged() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    fs::create_dir_all(root.join("cases")).unwrap();
+
+    // Link without trailing slash - should NOT be treated as a folder link
+    let doc = write_document(
+        root,
+        "docs/index.md",
+        "[Cases](../cases)",
+    );
+
+    let graph = resolve_graph(root, vec![doc]);
+    let dir_resolved: Vec<_> = graph
+        .resolved_references
+        .iter()
+        .flat_map(|r| r.destinations.iter())
+        .filter(|d| matches!(d.kind, ResolveDestinationKind::Directory))
+        .collect();
+    assert!(
+        dir_resolved.is_empty(),
+        "link without trailing slash should NOT resolve as a directory"
+    );
+}
