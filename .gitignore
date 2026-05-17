@@ -1,0 +1,9 @@
+# Rust build output
+target/
+
+# Editor
+*.swp
+*~
+.project
+.settings
+.classpath
