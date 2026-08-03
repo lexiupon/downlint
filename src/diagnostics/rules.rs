@@ -10,12 +10,42 @@ pub fn broken_link(reference: &UnresolvedReference) -> Option<Diagnostic> {
     if matches!(reference.reference, Ref::Shortcut { .. }) {
         return None;
     }
+    let mut message = format!("Broken link: '{}' could not be resolved", reference.target);
+    if matches!(reference.reference, Ref::Wiki { .. }) {
+        if let Some(payload) = reference.hint_payload.as_ref() {
+            if !payload.is_empty() {
+                let total = payload.len();
+                let cap = 5usize;
+                let shown = total.min(cap);
+                let names: Vec<String> = payload
+                    .iter()
+                    .take(shown)
+                    .map(|path| {
+                        path.file_name()
+                            .and_then(|name| name.to_str())
+                            .map(|name| name.to_string())
+                            .unwrap_or_else(|| path.display().to_string())
+                    })
+                    .collect();
+                let more = if total > cap {
+                    format!(" (+{} more)", total - cap)
+                } else {
+                    String::new()
+                };
+                message.push_str(&format!(
+                    "\nHint: enable 'wiki.obsidian_prefix' to match partial filenames (candidates: {}{})",
+                    names.join(", "),
+                    more,
+                ));
+            }
+        }
+    }
     Some(Diagnostic {
         path: reference.source_path.clone(),
         range: reference.name_range.unwrap_or(reference.full_range),
         severity: severity_for_ref(&reference.reference),
         code: DiagnosticCode::DNL002,
-        message: format!("Broken link: '{}' could not be resolved", reference.target),
+        message,
         related: Vec::new(),
     })
 }
