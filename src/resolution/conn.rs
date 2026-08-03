@@ -40,6 +40,10 @@ pub struct UnresolvedReference {
     pub name_range: Option<ByteRange>,
     pub reference: Ref,
     pub target: String,
+    /// Optional list of file paths whose stems begin with `target`. Populated by the
+    /// resolution layer when an opt-in prefix index is available; rendered as a
+    /// discoverability hint in the DNL002 diagnostic.
+    pub hint_payload: Option<Vec<PathBuf>>,
 }
 
 #[derive(Clone, Debug)]
