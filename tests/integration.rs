@@ -1345,3 +1345,257 @@ fn obsidian_prefix_does_not_resolve_folder_link() {
         "folder-link must not emit DNL002"
     );
 }
+
+// ============================================================================
+// In-page anchor link tests
+//
+// Markdown `[text](#anchor)` and `[[#anchor]]` links are in-page anchor
+// references, not file references. The diagnostic for an unresolved anchor
+// must use a distinct code (`DNL005 BrokenAnchor`) and message, not the
+// generic `DNL002 Broken link` message that is reserved for missing files.
+// Tolerant matching (collapsing consecutive `-`) lets near-miss anchors still
+// resolve.
+// ============================================================================
+
+#[test]
+fn inline_anchor_to_existing_heading_resolves() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    let doc = write_document(
+        root,
+        "notes/page.md",
+        "\
+## Overview
+
+[link to overview](#overview)
+",
+    );
+    let graph = resolve_graph(root, vec![doc]);
+    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+
+    assert!(
+        graph.resolved_references.iter().any(|r| matches!(
+            r.reference,
+            Ref::Inline { ref target, ref anchor, .. } if target.is_empty() && anchor.as_deref() == Some("overview")
+        )),
+        "expected the inline anchor link to resolve, got refs: {:?}",
+        graph.resolved_references
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .all(|d| d.code != DiagnosticCode::DNL002 && d.code != DiagnosticCode::DNL005),
+        "expected no broken-link or broken-anchor diagnostics, got: {:?}",
+        diagnostics.iter().map(|d| (&d.code, d.message.as_str())).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn inline_anchor_to_missing_heading_emits_dnl005_not_dnl002() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    let doc = write_document(
+        root,
+        "notes/page.md",
+        "\
+## Overview
+
+[link](#appendix-a2)
+",
+    );
+    let graph = resolve_graph(root, vec![doc]);
+    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+
+    assert_eq!(graph.resolved_references.len(), 0);
+    assert_eq!(graph.unresolved_references.len(), 1);
+
+    let dnl002: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .collect();
+    let dnl005: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::DNL005)
+        .collect();
+
+    assert!(
+        dnl002.is_empty(),
+        "inline anchor miss must NOT emit DNL002 (broken file link), got: {:?}",
+        dnl002.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+    );
+    assert_eq!(dnl005.len(), 1, "expected exactly one DNL005 diagnostic");
+    assert!(
+        dnl005[0].message.starts_with("Broken anchor:"),
+        "expected message to start with 'Broken anchor:', got: {:?}",
+        dnl005[0].message
+    );
+    assert!(
+        dnl005[0].message.contains("appendix-a2"),
+        "expected message to contain the anchor, got: {:?}",
+        dnl005[0].message
+    );
+}
+
+#[test]
+fn wiki_anchor_to_missing_heading_emits_dnl005_not_dnl002() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    let doc = write_document(
+        root,
+        "notes/page.md",
+        "\
+## Overview
+
+[[#appendix-a2]]
+",
+    );
+    let graph = resolve_graph(root, vec![doc]);
+    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+
+    let dnl002: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .collect();
+    let dnl005: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::DNL005)
+        .collect();
+
+    assert!(
+        dnl002.is_empty(),
+        "wiki anchor miss must NOT emit DNL002, got: {:?}",
+        dnl002.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+    );
+    assert_eq!(dnl005.len(), 1);
+    assert!(dnl005[0].message.starts_with("Broken anchor:"));
+}
+
+/// Regression test: the original bug from `~/projects2/wang-lei`. The link
+/// `[Appendix A2](#a2-cuga-bimetallic-for-c₂-at-high-rates-nat-commun-1551466-2024--closest-analog-to-our-cu-zn)`
+/// references a heading that exists. The heading slug (after downlint's
+/// normalization) is the same as the link anchor after collapsing consecutive
+/// dashes (`2024--closest` → `2024-closest`). Tolerant matching must rescue
+/// this case.
+#[test]
+fn inline_anchor_tolerates_consecutive_dashes_in_em_dash_heading() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    let doc = write_document(
+        root,
+        "notes/20260719-wang-natcomm-2024-2025-lessons-and-opportunities.md",
+        "\
+some text [Appendix A2](#a2-cuga-bimetallic-for-c₂-at-high-rates-nat-commun-1551466-2024--closest-analog-to-our-cu-zn) below
+
+## A2. CuGa bimetallic for C₂⁺ at high rates (*Nat. Commun.* 15:51466, 2024) — closest analog to our Cu-Zn
+",
+    );
+    let graph = resolve_graph(root, vec![doc]);
+    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+
+    assert!(
+        graph.resolved_references.iter().any(|r| matches!(
+            r.reference,
+            Ref::Inline { ref target, ref anchor, .. } if target.is_empty() && anchor.as_deref() == Some("a2-cuga-bimetallic-for-c₂-at-high-rates-nat-commun-1551466-2024--closest-analog-to-our-cu-zn")
+        )),
+        "expected tolerant matching to resolve the em-dash heading anchor"
+    );
+    // The link resolves via tolerant matching. With strict matching only, this
+    // would still emit a DNL005. With tolerant matching, we resolve cleanly.
+    // We don't assert anything about the resolved destination kind here — the
+    // existing convention is to accept either Document or Heading; the key is
+    // that the link is no longer reported as broken.
+    assert!(
+        graph.unresolved_references.is_empty(),
+        "tolerant matching should have resolved the anchor; unresolved: {:?}",
+        graph.unresolved_references
+    );
+    let dnl002: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .collect();
+    let dnl005: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::DNL005)
+        .collect();
+    assert!(dnl002.is_empty(), "must not emit DNL002 for a resolved anchor");
+    assert!(dnl005.is_empty(), "must not emit DNL005 for a resolved anchor");
+}
+
+#[test]
+fn inline_anchor_tolerant_miss_still_emits_dnl005() {
+    // Tolerant matching only rescues near-misses where folding dashes matches
+    // a real heading. A genuinely unknown anchor must still be flagged.
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    let doc = write_document(
+        root,
+        "notes/page.md",
+        "\
+## Overview
+
+[link](#nope-this-heading-does-not-exist)
+",
+    );
+    let graph = resolve_graph(root, vec![doc]);
+    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+
+    assert_eq!(graph.unresolved_references.len(), 1);
+    let dnl005: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::DNL005)
+        .collect();
+    assert_eq!(dnl005.len(), 1, "a truly unknown anchor must still emit DNL005");
+    assert!(
+        dnl005[0]
+            .message
+            .contains("nope-this-heading-does-not-exist"),
+        "DNL005 message should contain the anchor text"
+    );
+}
+
+#[test]
+fn inline_anchor_cross_document_miss_emits_dnl005() {
+    // Cross-doc anchor: file resolves, but the heading within it doesn't.
+    // Must use DNL005 (anchor), not DNL002 (file).
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    let target = write_document(
+        root,
+        "notes/other.md",
+        "\
+## Overview
+
+some content
+",
+    );
+    let source = write_document(
+        root,
+        "notes/source.md",
+        "[link](./other.md#appendix-a2)\n",
+    );
+    let graph = resolve_graph(root, vec![target, source]);
+    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+
+    let dnl002: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .collect();
+    let dnl005: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::DNL005)
+        .collect();
+
+    assert!(
+        dnl002.is_empty(),
+        "cross-doc anchor miss must NOT emit DNL002, got: {:?}",
+        dnl002.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+    );
+    assert_eq!(dnl005.len(), 1);
+    assert!(dnl005[0].message.starts_with("Broken anchor:"));
+}
