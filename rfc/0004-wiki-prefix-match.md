@@ -8,11 +8,11 @@ Draft
 
 Knowledge-base authors commonly organise related documents by date or topic suffix, e.g.
 `20260801-topic-a-sub-x.md`, `20260801-topic-a-sub-y.md`. From inside an index note, the
-natural shorthand for that group is `[[202608-topic-a]]` — a leading prefix shared by
+natural shorthand for that group is `[[20260801-topic-a]]` — a leading prefix shared by
 several files.
 
 Downlint v1 treats wiki-link targets as exact document stems (with case-insensitive title
-fallback). Under that model `[[202608-topic-a]]` is reported as a `DNL002` broken link even
+fallback). Under that model `[[20260801-topic-a]]` is reported as a `DNL002` broken link even
 though it clearly points at a small set of sibling documents. To reference either file
 the author is forced to either:
 
@@ -79,15 +79,15 @@ Given files `20260801-topic-a-sub-x.md` and `20260801-topic-a-sub-y.md`:
 
 | Link | File(s) matching | `obsidian_prefix = false` | `obsidian_prefix = true` |
 |---|---|---|---|
-| `[[202608-topic-a]]` | Both files | `DNL002` broken + hint listing candidates | `DNL001` ambiguous + related |
-| `[[202608-topic-a]]` | Only `…-sub-x.md` | `DNL002` broken + hint listing 1 candidate | Resolves to `…-sub-x.md` |
-| `[[202608-topic-a]]` | No matching file | `DNL002` broken, no hint | `DNL002` broken, no hint |
+| `[[20260801-topic-a]]` | Both files | `DNL002` broken + hint listing candidates | `DNL001` ambiguous + related |
+| `[[20260801-topic-a]]` | Only `…-sub-x.md` | `DNL002` broken + hint listing 1 candidate | Resolves to `…-sub-x.md` |
+| `[[20260801-topic-a]]` | No matching file | `DNL002` broken, no hint | `DNL002` broken, no hint |
 | `[[20260801-topic-a-sub-x]]` | `…-sub-x.md` | Resolves (exact match) | Resolves (exact match) |
-| `[[202608-topic-a\|Title]]` | Both files | `DNL002` broken + hint | `DNL001` ambiguous (alias preserved) |
-| `![[202608-topic-a]]` | Only `…-sub-x.md` | `DNL002` broken + hint | Resolves (embed, `is_embed = true`) |
-| `[[202608-topic-a#head]]` | Only `…-sub-x.md` has `#head` | `DNL002` broken + hint | Resolves to file, then anchor lookup |
-| `[[202608-topic-a#head]]` | Both files have `#head` | `DNL002` broken + hint | `DNL001` ambiguous (prefix resolution fails before heading lookup) |
-| `[[folder/202608-topic-a]]` | `folder/20260801-topic-a-sub-x.md` | Existing path-prefix resolution wins | Existing path-prefix resolution wins |
+| `[[20260801-topic-a\|Title]]` | Both files | `DNL002` broken + hint | `DNL001` ambiguous (alias preserved) |
+| `![[20260801-topic-a]]` | Only `…-sub-x.md` | `DNL002` broken + hint | Resolves (embed, `is_embed = true`) |
+| `[[20260801-topic-a#head]]` | Only `…-sub-x.md` has `#head` | `DNL002` broken + hint | Resolves to file, then anchor lookup |
+| `[[20260801-topic-a#head]]` | Both files have `#head` | `DNL002` broken + hint | `DNL001` ambiguous (prefix resolution fails before heading lookup) |
+| `[[folder/20260801-topic-a]]` | `folder/20260801-topic-a-sub-x.md` | Existing path-prefix resolution wins | Existing path-prefix resolution wins |
 | `[[folder/]]` | Folder exists | Folder-link resolution wins | Folder-link resolution wins |
 | `[[\|Title]]` | Title match found | Existing title-only behavior | Existing title-only behavior |
 
@@ -106,8 +106,8 @@ Given files `20260801-topic-a-sub-x.md` and `20260801-topic-a-sub-y.md`:
   is unchanged and runs before prefix matching.
 - **Title-only** (`[[\|Title]]`): unchanged.
 - **External scheme** (`[[https://...]]`): suppressed, unchanged.
-- **Embed with prefix** (`![[202608-topic-a]]`): treated as embed; otherwise identical to
-  `[[202608-topic-a]]`.
+- **Embed with prefix** (`![[20260801-topic-a]]`): treated as embed; otherwise identical to
+  `[[20260801-topic-a]]`.
 
 ## Discoverability Hint
 
@@ -117,7 +117,7 @@ at the option and listing the candidates. The hint applies regardless of the
 `obsidian_prefix` value — see Hint Rules below for the precise conditions.
 
 ```
-Broken link: '202608-topic-a' could not be resolved
+Broken link: '20260801-topic-a' could not be resolved
 Hint: enable 'wiki.obsidian_prefix' to match partial filenames
   (candidates: 20260801-topic-a-sub-x.md, 20260801-topic-a-sub-y.md)
 ```
@@ -345,7 +345,7 @@ This change is **fully backward compatible**:
 
 ## Open Questions
 
-1. **Path-prefixed prefix matching** — Should `[[folder/202608-topic-a]]` (a folder
+1. **Path-prefixed prefix matching** — Should `[[folder/20260801-topic-a]]` (a folder
    prefix + a stem prefix) match `folder/20260801-topic-a-sub-x.md`? Proposal says no —
    path-prefix wins because the user typed an explicit folder. Alternative: apply prefix
    matching to the trailing segment after the last `/`. Resolution: keep the simpler

@@ -2,7 +2,8 @@ use downlint::config::Config;
 use downlint::diagnostics::{DiagnosticCode, DiagnosticConfig, check_diagnostics};
 use downlint::parser::{ParseOptions, Ref, parse_document};
 use downlint::resolution::{
-    ResolveDestinationKind, ResolveDocument, ResolveInput, Slug, resolve_links,
+    ResolveDestinationKind, ResolveDocument, ResolveInput, Slug, prefix::PrefixIndex,
+    resolve_links,
 };
 use std::fs;
 use tempfile::TempDir;
@@ -21,18 +22,36 @@ fn write_document(root: &std::path::Path, rel: &str, content: &str) -> ResolveDo
     }
 }
 
+/// Build a prefix index from the stems of the given documents.
+fn prefix_index_for(docs: &[ResolveDocument]) -> PrefixIndex {
+    let entries = docs.iter().map(|d| (d.stem(), d.path.clone()));
+    PrefixIndex::from_entries(entries)
+}
+
 /// Helper to build a ResolveInput from a root and list of documents.
 fn resolve_graph(
     root: &std::path::Path,
     docs: Vec<ResolveDocument>,
 ) -> downlint::resolution::ConnectionGraph {
+    resolve_graph_with_config(root, docs, Config::default())
+}
+
+/// Like `resolve_graph` but lets callers customize the config (e.g. flip
+/// `wiki.obsidian_prefix`).
+fn resolve_graph_with_config(
+    root: &std::path::Path,
+    docs: Vec<ResolveDocument>,
+    config: Config,
+) -> downlint::resolution::ConnectionGraph {
+    let prefix_index = prefix_index_for(&docs);
     let input = ResolveInput {
         root: root.to_path_buf(),
         documents: docs,
         extra_documents: vec![],
-        config: Config::default(),
+        config,
         extra_folder_roots: vec![],
         single_file: false,
+        prefix_index,
     };
     resolve_links(input)
 }
@@ -281,6 +300,7 @@ fn wiki_link_with_non_ascii_title_resolves_correctly() {
         config: Config::default(),
         extra_folder_roots: vec![],
         single_file: false,
+        prefix_index: Default::default(),
     };
 
     let graph = resolve_links(input);
@@ -342,6 +362,7 @@ fn wiki_link_with_non_ascii_heading_anchor_resolves_correctly() {
         config: Config::default(),
         extra_folder_roots: vec![],
         single_file: false,
+        prefix_index: Default::default(),
     };
 
     let graph = resolve_links(input);
@@ -407,6 +428,7 @@ fn wiki_link_with_mojibake_does_not_match_correct_title() {
         config: Config::default(),
         extra_folder_roots: vec![],
         single_file: false,
+        prefix_index: Default::default(),
     };
 
     let graph = resolve_links(input);
@@ -474,6 +496,7 @@ fn wiki_link_explicit_path_resolves_in_extra_folders() {
         config: Config::default(),
         extra_folder_roots: vec![ext_root.clone()],
         single_file: false,
+        prefix_index: Default::default(),
     };
 
     let graph = resolve_links(input);
@@ -550,6 +573,7 @@ fn wiki_link_with_slash_in_target_resolves_via_title_slug_in_extra_folders() {
         config: Config::default(),
         extra_folder_roots: vec![ext_root.clone()],
         single_file: false,
+        prefix_index: Default::default(),
     };
 
     let graph = resolve_links(input);
@@ -617,6 +641,7 @@ fn inline_link_with_non_ascii_filename_resolves_correctly() {
         config: Config::default(),
         extra_folder_roots: vec![],
         single_file: false,
+        prefix_index: Default::default(),
     };
 
     let graph = resolve_links(input);
@@ -779,6 +804,7 @@ fn folder_link_in_extra_folder_resolves() {
         config: Config::default(),
         extra_folder_roots: vec![extra_root.clone()],
         single_file: false,
+        prefix_index: Default::default(),
     };
 
     let graph = resolve_links(input);
@@ -815,4 +841,327 @@ fn non_folder_link_to_directory_name_unchanged() {
         dir_resolved.is_empty(),
         "link without trailing slash should NOT resolve as a directory"
     );
+}
+
+// -------------------------------------------------------------------------
+// wiki obsidian_prefix tests
+// -------------------------------------------------------------------------
+
+fn config_with_obsidian_prefix(enabled: bool) -> Config {
+    let mut cfg = Config::default();
+    cfg.wiki.obsidian_prefix = enabled;
+    cfg
+}
+
+#[test]
+fn obsidian_prefix_unique_resolves() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let target = write_document(
+        root,
+        "notes/20260801-topic-a-sub-x.md",
+        "# 20260801 topic a sub x\n",
+    );
+    let index = write_document(root, "notes/index.md", "[[20260801-topic-a]]\n");
+    let graph = resolve_graph_with_config(
+        root,
+        vec![target, index],
+        config_with_obsidian_prefix(true),
+    );
+    assert_eq!(graph.resolved_references.len(), 1);
+    assert!(
+        graph
+            .resolved_references[0]
+            .destinations
+            .iter()
+            .any(|d| d.path.ends_with("20260801-topic-a-sub-x.md")),
+        "expected resolution to the prefix-matched file"
+    );
+    assert!(graph.ambiguous_references.is_empty());
+}
+
+#[test]
+fn obsidian_prefix_ambiguous_dnl001() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let target_x = write_document(
+        root,
+        "notes/20260801-topic-a-sub-x.md",
+        "# x\n",
+    );
+    let target_y = write_document(
+        root,
+        "notes/20260801-topic-a-sub-y.md",
+        "# y\n",
+    );
+    let index = write_document(root, "notes/index.md", "[[20260801-topic-a]]\n");
+    let graph = resolve_graph_with_config(
+        root,
+        vec![target_x, target_y, index],
+        config_with_obsidian_prefix(true),
+    );
+    assert_eq!(graph.ambiguous_references.len(), 1);
+    assert_eq!(graph.ambiguous_references[0].target, "20260801-topic-a");
+    assert!(graph.resolved_references.is_empty());
+}
+
+#[test]
+fn obsidian_prefix_off_no_hint_no_match() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let other = write_document(root, "notes/abc.md", "# abc\n");
+    let index = write_document(root, "notes/index.md", "[[xyz]]\n");
+    let graph = resolve_graph_with_config(
+        root,
+        vec![other, index],
+        config_with_obsidian_prefix(false),
+    );
+    assert_eq!(graph.unresolved_references.len(), 1);
+    let payload = graph.unresolved_references[0].hint_payload.as_ref();
+    assert!(
+        payload.is_none() || payload.unwrap().is_empty(),
+        "no partial matches → no hint payload"
+    );
+}
+
+#[test]
+fn obsidian_prefix_off_with_hint() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let target = write_document(
+        root,
+        "notes/20260801-topic-a-sub-x.md",
+        "# x\n",
+    );
+
+    let index = write_document(root, "notes/index.md", "[[20260801-topic-a]]\n");
+    let graph = resolve_graph_with_config(
+        root,
+        vec![target, index],
+        config_with_obsidian_prefix(false),
+    );
+    assert_eq!(graph.unresolved_references.len(), 1);
+    let payload = graph.unresolved_references[0]
+        .hint_payload
+        .as_ref()
+        .expect("hint payload expected");
+    assert_eq!(payload.len(), 1);
+
+    // Check the diagnostic message contains the hint line.
+    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let dnl002: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .collect();
+    assert_eq!(dnl002.len(), 1);
+    assert!(
+        dnl002[0].message.contains("Hint: enable 'wiki.obsidian_prefix'"),
+        "expected hint in DNL002 message, got: {}",
+        dnl002[0].message
+    );
+    assert!(
+        dnl002[0].message.contains("20260801-topic-a-sub-x.md"),
+        "expected candidate filename in hint, got: {}",
+        dnl002[0].message
+    );
+}
+
+#[test]
+fn obsidian_prefix_hint_caps_at_five() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let mut docs: Vec<ResolveDocument> = Vec::new();
+    for i in 0..6 {
+        docs.push(write_document(
+            root,
+            &format!("notes/20260801-topic-{i:02}.md"),
+            "# file\n",
+        ));
+    }
+    let index = write_document(root, "notes/index.md", "[[20260801-topic]]\n");
+    docs.push(index);
+    let graph = resolve_graph_with_config(
+        root,
+        docs,
+        config_with_obsidian_prefix(false),
+    );
+    let payload = graph.unresolved_references[0]
+        .hint_payload
+        .as_ref()
+        .expect("hint payload");
+    assert_eq!(payload.len(), 6);
+
+    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let dnl002 = diagnostics
+        .iter()
+        .find(|d| d.code == DiagnosticCode::DNL002)
+        .unwrap();
+    assert!(dnl002.message.contains("(+1 more)"));
+}
+
+#[test]
+fn obsidian_prefix_alias_form_resolves() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let target = write_document(
+        root,
+        "notes/20260801-topic-a-sub-x.md",
+        "# x\n",
+    );
+
+    let index = write_document(
+        root,
+        "notes/index.md",
+        "[[20260801-topic-a|Title]]\n",
+    );
+    let graph = resolve_graph_with_config(
+        root,
+        vec![target, index],
+        config_with_obsidian_prefix(true),
+    );
+    assert_eq!(graph.resolved_references.len(), 1);
+}
+
+#[test]
+fn obsidian_prefix_embed_form_resolves() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let target = write_document(
+        root,
+        "notes/20260801-topic-a-sub-x.md",
+        "# x\n",
+    );
+
+    let index = write_document(
+        root,
+        "notes/index.md",
+        "![[20260801-topic-a]]\n",
+    );
+    let graph = resolve_graph_with_config(
+        root,
+        vec![target, index],
+        config_with_obsidian_prefix(true),
+    );
+    assert_eq!(graph.resolved_references.len(), 1);
+}
+
+#[test]
+fn obsidian_prefix_heading_anchor() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let target = write_document(
+        root,
+        "notes/20260801-topic-a-sub-x.md",
+        "## Section\nbody\n",
+    );
+
+    let index = write_document(
+        root,
+        "notes/index.md",
+        "[[20260801-topic-a#Section]]\n",
+    );
+    let graph = resolve_graph_with_config(
+        root,
+        vec![target, index],
+        config_with_obsidian_prefix(true),
+    );
+    assert_eq!(graph.resolved_references.len(), 1);
+    assert!(
+        matches!(
+            graph.resolved_references[0].destinations[0].kind,
+            ResolveDestinationKind::Heading
+        ),
+        "expected heading destination"
+    );
+}
+
+#[test]
+fn obsidian_prefix_explicit_path_wins() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    // No file named 20260801-topic-a exists, only the full stem.
+    let target = write_document(
+        root,
+        "notes/20260801-topic-a-sub-x.md",
+        "# x\n",
+    );
+    // `[[20260801-topic-a]]` contains a `.` because of the structure? No, it's
+    // fine. But `is_explicit_path` triggers on `.` — our target has no `.`
+    // so it's not "explicit". Use a target that IS explicit: `notes/20260801`.
+    let index = write_document(
+        root,
+        "notes/index.md",
+        "[[notes/20260801]]\n",
+    );
+    let graph = resolve_graph_with_config(
+        root,
+        vec![target, index],
+        config_with_obsidian_prefix(true),
+    );
+    // `notes/20260801` is an explicit path that doesn't exist → falls through to
+    // attachment fallback (none) → unresolved. Prefix matching does NOT apply.
+    assert_eq!(graph.unresolved_references.len(), 1);
+}
+
+#[test]
+fn obsidian_prefix_case_insensitive() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let target = write_document(
+        root,
+        "notes/20260801-TOPIC-A-sub-x.md",
+        "# x\n",
+    );
+
+    let index = write_document(root, "notes/index.md", "[[20260801-topic-a]]\n");
+    let graph = resolve_graph_with_config(
+        root,
+        vec![target, index],
+        config_with_obsidian_prefix(true),
+    );
+    assert_eq!(graph.resolved_references.len(), 1);
+}
+
+#[test]
+fn obsidian_prefix_does_not_match_suffix_only() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let target = write_document(root, "notes/xyz-topic.md", "# x\n");
+
+    let index = write_document(root, "notes/index.md", "[[topic]]\n");
+    let graph = resolve_graph_with_config(
+        root,
+        vec![target, index],
+        config_with_obsidian_prefix(true),
+    );
+    assert!(
+        graph.resolved_references.is_empty(),
+        "suffix-only match must NOT resolve"
+    );
+    assert_eq!(graph.unresolved_references.len(), 1);
+}
+
+#[test]
+fn obsidian_prefix_single_file_mode() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let target = write_document(
+        root,
+        "notes/20260801-topic-a-sub-x.md",
+        "# x\n",
+    );
+
+    let index = write_document(root, "notes/index.md", "[[20260801-topic-a]]\n");
+    let prefix_index = prefix_index_for(&[target.clone(), index.clone()]);
+    let input = ResolveInput {
+        root: root.to_path_buf(),
+        documents: vec![target, index],
+        extra_documents: vec![],
+        config: config_with_obsidian_prefix(true),
+        extra_folder_roots: vec![],
+        single_file: true,
+        prefix_index,
+    };
+    let graph = resolve_links(input);
+    assert_eq!(graph.resolved_references.len(), 1);
 }
