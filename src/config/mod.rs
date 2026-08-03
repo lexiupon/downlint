@@ -14,6 +14,20 @@ pub struct Config {
     pub core: CoreConfig,
     pub code_action: CodeActionConfig,
     pub completion: CompletionConfig,
+    pub wiki: WikiConfig,
+}
+
+#[derive(Clone, Debug)]
+pub struct WikiConfig {
+    pub obsidian_prefix: bool,
+}
+
+impl Default for WikiConfig {
+    fn default() -> Self {
+        Self {
+            obsidian_prefix: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -150,6 +164,13 @@ pub struct PartialConfig {
     pub core: Option<PartialCoreConfig>,
     pub code_action: Option<PartialCodeActionConfig>,
     pub completion: Option<PartialCompletionConfig>,
+    pub wiki: Option<PartialWikiConfig>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PartialWikiConfig {
+    pub obsidian_prefix: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -225,6 +246,7 @@ pub fn finalize_config(partial: PartialConfig) -> Result<Config, ConfigError> {
     let core = partial.core.unwrap_or_default();
     let code_action = partial.code_action.unwrap_or_default();
     let completion = partial.completion.unwrap_or_default();
+    let wiki = partial.wiki.unwrap_or_default();
 
     let file_extensions = core
         .file_extensions
@@ -290,6 +312,11 @@ pub fn finalize_config(partial: PartialConfig) -> Result<Config, ConfigError> {
                     .unwrap_or(defaults.completion.wiki.style),
             },
         },
+        wiki: WikiConfig {
+            obsidian_prefix: wiki
+                .obsidian_prefix
+                .unwrap_or(defaults.wiki.obsidian_prefix),
+        },
     })
 }
 
@@ -306,6 +333,10 @@ pub fn merge_partial(high: PartialConfig, low: PartialConfig) -> PartialConfig {
         completion: Some(merge_completion(
             high.completion.unwrap_or_default(),
             low.completion.unwrap_or_default(),
+        )),
+        wiki: Some(merge_wiki(
+            high.wiki.unwrap_or_default(),
+            low.wiki.unwrap_or_default(),
         )),
     }
 }
@@ -364,6 +395,12 @@ fn merge_completion(
                 .and_then(|value| value.style)
                 .or(low.wiki.and_then(|value| value.style)),
         }),
+    }
+}
+
+fn merge_wiki(high: PartialWikiConfig, low: PartialWikiConfig) -> PartialWikiConfig {
+    PartialWikiConfig {
+        obsidian_prefix: high.obsidian_prefix.or(low.obsidian_prefix),
     }
 }
 
@@ -460,5 +497,51 @@ mod tests {
             config.core.ignore,
             vec!["drafts/**".to_string(), "!drafts/published/**".to_string()]
         );
+    }
+
+    #[test]
+    fn parse_accepts_wiki_obsidian_prefix() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(&path, "[wiki]\nobsidian_prefix = true\n").unwrap();
+
+        let partial = parse_partial_config(&path).unwrap();
+        let config = finalize_config(partial).unwrap();
+        assert!(config.wiki.obsidian_prefix);
+    }
+
+    #[test]
+    fn wiki_obsidian_prefix_defaults_to_false() {
+        let partial = PartialConfig::default();
+        let config = finalize_config(partial).unwrap();
+        assert!(!config.wiki.obsidian_prefix);
+    }
+
+    #[test]
+    fn wiki_obsidian_prefix_project_overrides_user() {
+        let high = PartialWikiConfig {
+            obsidian_prefix: Some(true),
+        };
+        let low = PartialWikiConfig {
+            obsidian_prefix: Some(false),
+        };
+        let merged = merge_wiki(high, low);
+        assert_eq!(merged.obsidian_prefix, Some(true));
+    }
+
+    #[test]
+    fn parse_rejects_unknown_wiki_key() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(&path, "[wiki]\nbogus = true\n").unwrap();
+
+        let error = parse_partial_config(&path).unwrap_err();
+        match error {
+            ConfigError::ParseToml { message, .. } => {
+                assert!(message.contains("unknown field"));
+                assert!(message.contains("bogus"));
+            }
+            other => panic!("expected parse error, got {other:?}"),
+        }
     }
 }
