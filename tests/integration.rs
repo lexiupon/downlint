@@ -1043,6 +1043,12 @@ fn obsidian_prefix_embed_form_resolves() {
         config_with_obsidian_prefix(true),
     );
     assert_eq!(graph.resolved_references.len(), 1);
+    // Per RFC 0004 behavior matrix: `![[20260801-topic-a]]` resolves with
+    // `is_embed = true` preserved on the resolved reference.
+    match &graph.resolved_references[0].reference {
+        Ref::Wiki { is_embed, .. } => assert!(*is_embed, "embed form must preserve is_embed"),
+        other => panic!("expected Ref::Wiki, got {:?}", other),
+    }
 }
 
 #[test]
@@ -1164,4 +1170,41 @@ fn obsidian_prefix_single_file_mode() {
     };
     let graph = resolve_links(input);
     assert_eq!(graph.resolved_references.len(), 1);
+}
+
+#[test]
+fn obsidian_prefix_does_not_resolve_folder_link() {
+    // Regression for RFC 0004 behavior matrix: a folder-link (`[[folder/]]`) must
+    // resolve via the existing folder-link branch, never via the prefix index. The
+    // prefix branch is reached only after the folder-link early-return; the trailing
+    // slash is never a valid file stem prefix.
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    fs::create_dir_all(root.join("cases/audit")).unwrap();
+
+    // Plant a file whose stem would match a hypothetical prefix of the folder name
+    // so that the prefix branch would try to resolve if it were reached.
+    let target = write_document(root, "cases-audit.md", "# decoy\n");
+    let index = write_document(root, "docs/index.md", "[[/cases/audit/]]");
+
+    let graph = resolve_graph_with_config(
+        root,
+        vec![target, index],
+        config_with_obsidian_prefix(true),
+    );
+    assert_eq!(
+        graph.resolved_references.len(),
+        1,
+        "folder-link must resolve to the folder, not to a prefix-matched file"
+    );
+    assert!(
+        graph.unresolved_references.is_empty(),
+        "folder-link must not be reported as unresolved"
+    );
+    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    assert!(
+        diagnostics.iter().all(|d| d.code != DiagnosticCode::DNL002),
+        "folder-link must not emit DNL002"
+    );
 }
