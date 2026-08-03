@@ -59,9 +59,9 @@ matches, prefix matching runs:
 
 1. Treat the target string as a prefix.
 2. Find every file in `ResolveInput.documents` and `ResolveInput.extra_documents`
-   whose **stem** (filename without extension, as produced by the existing
-   `path_without_extension()` helper in `src/resolution/path.rs`) starts with the target
-   (case-insensitively, per `eq_ignore_ascii_case`).
+   whose **stem** (filename without extension, as produced by the new
+   `ResolveDocument::stem()` helper — `Path::file_stem()` of the document path) starts
+   with the target (case-insensitively, per `to_ascii_lowercase`).
 3. If **zero** files match → unresolved, emit `DNL002`.
 4. If **one** file matches → resolve to that document (existing single-destination
    success path).
@@ -199,8 +199,9 @@ Defaults: `obsidian_prefix = false`.
 
 1. Build `prefix_index: HashMap<String, Vec<PathBuf>>` once per `ResolveInput`
    construction, keyed by every leading prefix of every stem in `ResolveInput.documents`
-   and `ResolveInput.extra_documents`. Stems are produced by the existing
-   `path_without_extension()` helper for consistency with `find_doc_matches`. The flag
+   and `ResolveInput.extra_documents`. Stems are produced by the new
+   `ResolveDocument::stem()` helper (`Path::file_stem()` of the document path), distinct
+   from `path_without_extension()` which keeps directory components. The flag
    `WikiConfig.obsidian_prefix` is read via `input.config.wiki.obsidian_prefix` — no
    new plumbing required, since `ResolveInput` already carries the full `Config`.
 
@@ -310,11 +311,12 @@ This change is **fully backward compatible**:
 2. **Performance** — Building `prefix_index` is `O(sum of stem lengths)`. For a 10k-file
    vault with average stem length 30, that's ~300k entries in the worst case. Acceptable
    in-memory. Lookup is `O(1)` HashMap.
-3. **Cross-platform stem handling** — Stems are produced by the existing
-   `path_without_extension()` helper in `src/resolution/path.rs`, which already
-   normalizes backslashes to forward slashes. The prefix index uses the same helper so
-   that cross-platform path separators do not affect matching. No new normalization
-   required.
+3. **Cross-platform stem handling** — Stems are produced by `Path::file_stem()` on the
+   document's path, which operates on the filename only and is independent of path
+   separators. The prefix index uses the same helper so that cross-platform path
+   separators do not affect matching. No additional normalization is required (and
+   deliberately not introduced — `path_without_extension()` would have indexed
+   directory-included strings, which is wrong for prefix matching).
 4. **Hint message length** — The capped list (5 candidates) keeps diagnostics short.
    Editors that render multi-line messages should handle this; if a particular client
    truncates, the `related` field carries the same information in a structured form.
