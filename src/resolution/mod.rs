@@ -1,5 +1,6 @@
 pub mod conn;
 pub mod path;
+pub mod prefix;
 pub mod slug;
 
 use crate::config::Config;
@@ -9,6 +10,7 @@ use crate::resolution::conn::{
     UnresolvedReference,
 };
 use crate::resolution::path::{has_scheme, is_folder_link_target, path_without_extension, resolve_explicit_path};
+use crate::resolution::prefix::PrefixIndex;
 use crate::utils::{Workspace, WorkspaceMode};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -27,6 +29,18 @@ pub struct ResolveDocument {
     pub structure: Structure,
 }
 
+impl ResolveDocument {
+    /// File stem: filename without its extension. Returns the empty string for paths
+    /// without a usable stem component. Used by the prefix index.
+    pub fn stem(&self) -> String {
+        self.path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_string())
+            .unwrap_or_default()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ResolveInput {
     pub root: PathBuf,
@@ -35,6 +49,9 @@ pub struct ResolveInput {
     pub extra_folder_roots: Vec<PathBuf>,
     pub config: Config,
     pub single_file: bool,
+    /// Case-insensitive prefix index over the stems of `documents` and `extra_documents`.
+    /// Built eagerly in `from_workspace` (and constructed manually by tests).
+    pub prefix_index: PrefixIndex,
 }
 
 impl ResolveInput {
@@ -59,6 +76,17 @@ impl ResolveInput {
         let extra_documents =
             load_extra_documents(&workspace.folder.extra_folders, &workspace.config);
 
+        let prefix_index = PrefixIndex::from_entries(
+            documents
+                .iter()
+                .map(|doc| (doc.stem(), doc.path.clone()))
+                .chain(
+                    extra_documents
+                        .iter()
+                        .map(|doc| (doc.stem(), doc.path.clone())),
+                ),
+        );
+
         Self {
             root: workspace.folder.root.clone(),
             documents,
@@ -66,6 +94,7 @@ impl ResolveInput {
             extra_folder_roots: workspace.folder.extra_folders.clone(),
             config: workspace.config.clone(),
             single_file: matches!(workspace.mode, WorkspaceMode::SingleFile),
+            prefix_index,
         }
     }
 }
@@ -247,6 +276,7 @@ fn resolve_document(
                         name_range: symbol.name_range,
                         reference: reference.clone(),
                         target: label.0.clone(),
+                        hint_payload: None,
                     });
                 }
             }
@@ -364,6 +394,7 @@ fn resolve_wiki_ref(
                 name_range: symbol.name_range,
                 reference: reference.clone(),
                 target: anchor.to_string(),
+                hint_payload: hint_payload_for(ctx, anchor),
             });
         }
         return;
@@ -380,6 +411,7 @@ fn resolve_wiki_ref(
                 name_range: symbol.name_range,
                 reference: reference.clone(),
                 target: target.to_string(),
+                hint_payload: None,
             });
             return;
         }
@@ -400,6 +432,7 @@ fn resolve_wiki_ref(
                 name_range: symbol.name_range,
                 reference: reference.clone(),
                 target: target.to_string(),
+                hint_payload: None,
             });
         }
         return;
@@ -427,6 +460,53 @@ fn resolve_wiki_ref(
     } else {
         primary_matches
     };
+
+    // Opt-in Obsidian-style prefix matching runs only after the existing exact,
+    // title-slug, and relative-path matches have returned zero candidates, and only
+    // when the flag is on. We never prefix-match an explicit path or a folder-link
+    // target (both early-returned above) and we never prefix-match an empty target.
+    if destinations.is_empty()
+        && ctx.input.config.wiki.obsidian_prefix
+        && !explicit
+        && !target.is_empty()
+    {
+        let prefix_candidates = ctx.input.prefix_index.matches(target);
+        if prefix_candidates.len() == 1 {
+            // Single prefix match: let finalize_doc_or_attachment handle the
+            // heading/anchor lookup by feeding the candidate through as a normal
+            // Document destination.
+            let path = prefix_candidates[0].clone();
+            let dest = ResolvedDestination {
+                path,
+                kind: DestinationKind::Document,
+                name: String::new(),
+                range: None,
+            };
+            finalize_doc_or_attachment(ctx, target, heading, vec![dest]);
+            return;
+        }
+        if prefix_candidates.len() > 1 {
+            let mut ambig_dests = Vec::with_capacity(prefix_candidates.len());
+            for path in prefix_candidates {
+                ambig_dests.push(ResolvedDestination {
+                    path: path.clone(),
+                    kind: DestinationKind::Document,
+                    name: String::new(),
+                    range: None,
+                });
+            }
+            ctx.graph.ambiguous_references.push(AmbiguousReference {
+                source_path: doc.path.clone(),
+                occurrence_id: symbol.id,
+                full_range: symbol.full_range,
+                name_range: symbol.name_range,
+                reference: reference.clone(),
+                target: target.to_string(),
+                destinations: ambig_dests,
+            });
+            return;
+        }
+    }
 
     finalize_doc_or_attachment(ctx, target, heading, destinations);
 }
@@ -469,6 +549,7 @@ fn resolve_inline_ref(
                 name_range: symbol.name_range,
                 reference: reference.clone(),
                 target: anchor.to_string(),
+                hint_payload: None,
             });
         }
         return;
@@ -485,6 +566,7 @@ fn resolve_inline_ref(
                 name_range: symbol.name_range,
                 reference: reference.clone(),
                 target: target.to_string(),
+                hint_payload: None,
             });
             return;
         }
@@ -505,6 +587,7 @@ fn resolve_inline_ref(
                 name_range: symbol.name_range,
                 reference: reference.clone(),
                 target: target.to_string(),
+                hint_payload: None,
             });
         }
         return;
@@ -584,6 +667,7 @@ fn finalize_doc_or_attachment(
             name_range: symbol.name_range,
             reference: reference.clone(),
             target: format!("{target}#{anchor}"),
+            hint_payload: hint_payload_for(ctx, target),
         });
         return;
     }
@@ -599,6 +683,7 @@ fn finalize_doc_or_attachment(
             name_range: symbol.name_range,
             reference: reference.clone(),
             target: target.to_string(),
+            hint_payload: hint_payload_for(ctx, target),
         });
     } else {
         ctx.graph.resolved_references.push(ResolvedReference {
@@ -717,4 +802,16 @@ fn load_extra_documents(folders: &[PathBuf], config: &Config) -> Vec<ResolveDocu
         }
     }
     documents
+}
+
+/// Compute the hint payload (prefix-candidate file paths) for an unresolved wiki-link
+/// target. Returns `Some(candidates)` if the workspace contains any file whose stem
+/// starts with `target`; `None` otherwise.
+fn hint_payload_for(ctx: &ResolveRefContext<'_>, target: &str) -> Option<Vec<PathBuf>> {
+    let candidates = ctx.input.prefix_index.matches(target);
+    if candidates.is_empty() {
+        None
+    } else {
+        Some(candidates.to_vec())
+    }
 }
