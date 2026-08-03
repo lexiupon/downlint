@@ -40,6 +40,11 @@ pub struct UnresolvedReference {
     pub name_range: Option<ByteRange>,
     pub reference: Ref,
     pub target: String,
+    /// True when this unresolved reference was an in-page anchor (`[text](#foo)`,
+    /// `[[#foo]]`, or `[text](file.md#foo)`) that failed to resolve to a heading.
+    /// The diagnostic rule uses this to emit DNL005 (Broken anchor) instead of
+    /// DNL002 (Broken link) so the user gets an accurate diagnosis.
+    pub is_anchor: bool,
     /// Optional list of file paths whose stems begin with `target`. Populated by the
     /// resolution layer when an opt-in prefix index is available; rendered as a
     /// discoverability hint in the DNL002 diagnostic.

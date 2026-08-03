@@ -10,6 +10,29 @@ pub fn broken_link(reference: &UnresolvedReference) -> Option<Diagnostic> {
     if matches!(reference.reference, Ref::Shortcut { .. }) {
         return None;
     }
+    // In-page anchor miss → distinct diagnostic so the user knows the link was
+    // an anchor, not a missing file reference.
+    if reference.is_anchor {
+        // For cross-document anchors, `target` is "path#anchor"; for in-page
+        // anchors it's just "anchor". Show whichever is more useful.
+        let display = if reference.target.contains('#') {
+            // Cross-document: keep the `path#anchor` form so the user can
+            // locate the offending file at a glance.
+            reference.target.clone()
+        } else if reference.target.starts_with('#') {
+            reference.target.clone()
+        } else {
+            format!("#{}", reference.target)
+        };
+        return Some(Diagnostic {
+            path: reference.source_path.clone(),
+            range: reference.name_range.unwrap_or(reference.full_range),
+            severity: DiagnosticSeverity::Warning,
+            code: DiagnosticCode::DNL005,
+            message: format!("Broken anchor: '{display}' could not be resolved"),
+            related: Vec::new(),
+        });
+    }
     let mut message = format!("Broken link: '{}' could not be resolved", reference.target);
     if matches!(reference.reference, Ref::Wiki { .. }) {
         if let Some(payload) = reference.hint_payload.as_ref() {

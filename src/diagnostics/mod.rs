@@ -20,6 +20,11 @@ pub enum DiagnosticCode {
     DNL001,
     DNL002,
     DNL003,
+    /// Broken anchor: an in-page anchor (e.g. `[label](#foo)`) or wiki anchor
+    /// (`[[#foo]]`) referenced a heading that does not exist in the target
+    /// document. Distinct from `DNL002` (broken file link) because the link
+    /// target was unambiguously an anchor, not a file reference.
+    DNL005,
 }
 
 #[derive(Clone, Debug, Serialize)]

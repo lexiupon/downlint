@@ -276,6 +276,7 @@ fn resolve_document(
                         name_range: symbol.name_range,
                         reference: reference.clone(),
                         target: label.0.clone(),
+                        is_anchor: false,
                         hint_payload: None,
                     });
                 }
@@ -372,11 +373,21 @@ fn resolve_wiki_ref(
         && let Some(anchor) = heading
     {
         let slug = Slug::from_heading_text(anchor);
-        let destinations = doc
+        // Strict slug lookup first.
+        let strict = doc
             .headings
             .get(&slug)
             .cloned()
             .or_else(|| doc.tags.get(&anchor.to_ascii_lowercase()).cloned());
+        // Tolerant fallback: see `resolve_inline_ref` for the rationale.
+        let destinations = strict.or_else(|| {
+            let folded = slug.folded();
+            if folded == slug {
+                None
+            } else {
+                doc.headings.get(&folded).cloned()
+            }
+        });
         if let Some(destinations) = destinations {
             ctx.graph.resolved_references.push(ResolvedReference {
                 source_path: doc.path.clone(),
@@ -394,6 +405,7 @@ fn resolve_wiki_ref(
                 name_range: symbol.name_range,
                 reference: reference.clone(),
                 target: anchor.to_string(),
+                is_anchor: true,
                 hint_payload: hint_payload_for(ctx, anchor),
             });
         }
@@ -411,6 +423,7 @@ fn resolve_wiki_ref(
                 name_range: symbol.name_range,
                 reference: reference.clone(),
                 target: target.to_string(),
+                is_anchor: false,
                 hint_payload: None,
             });
             return;
@@ -432,6 +445,7 @@ fn resolve_wiki_ref(
                 name_range: symbol.name_range,
                 reference: reference.clone(),
                 target: target.to_string(),
+                is_anchor: false,
                 hint_payload: None,
             });
         }
@@ -527,11 +541,24 @@ fn resolve_inline_ref(
         && let Some(anchor) = anchor
     {
         let slug = Slug::from_heading_text(anchor);
-        let destinations = doc
+        // Strict slug lookup first.
+        let strict = doc
             .headings
             .get(&slug)
             .cloned()
             .or_else(|| doc.tags.get(&anchor.to_ascii_lowercase()).cloned());
+        // Tolerant fallback: if the strict lookup misses, retry against the
+        // same map using a folded slug (consecutive `-` collapsed). This lets
+        // a hand-written anchor with `--` (e.g. copy-pasted from an em-dash
+        // heading) still resolve when the canonical heading slug uses `-`.
+        let destinations = strict.or_else(|| {
+            let folded = slug.folded();
+            if folded == slug {
+                None
+            } else {
+                doc.headings.get(&folded).cloned()
+            }
+        });
         if let Some(destinations) = destinations {
             ctx.graph.resolved_references.push(ResolvedReference {
                 source_path: doc.path.clone(),
@@ -549,6 +576,7 @@ fn resolve_inline_ref(
                 name_range: symbol.name_range,
                 reference: reference.clone(),
                 target: anchor.to_string(),
+                is_anchor: true,
                 hint_payload: None,
             });
         }
@@ -566,6 +594,7 @@ fn resolve_inline_ref(
                 name_range: symbol.name_range,
                 reference: reference.clone(),
                 target: target.to_string(),
+                is_anchor: false,
                 hint_payload: None,
             });
             return;
@@ -587,6 +616,7 @@ fn resolve_inline_ref(
                 name_range: symbol.name_range,
                 reference: reference.clone(),
                 target: target.to_string(),
+                is_anchor: false,
                 hint_payload: None,
             });
         }
@@ -644,11 +674,21 @@ fn finalize_doc_or_attachment(
             .cloned()
     {
         let slug = Slug::from_heading_text(anchor);
-        let heading_matches = target_doc
+        // Strict slug lookup first.
+        let strict = target_doc
             .headings
             .get(&slug)
             .cloned()
             .or_else(|| target_doc.tags.get(&anchor.to_ascii_lowercase()).cloned());
+        // Tolerant fallback: see `resolve_inline_ref` for the rationale.
+        let heading_matches = strict.or_else(|| {
+            let folded = slug.folded();
+            if folded == slug {
+                None
+            } else {
+                target_doc.headings.get(&folded).cloned()
+            }
+        });
         if let Some(heading_matches) = heading_matches {
             ctx.graph.resolved_references.push(ResolvedReference {
                 source_path: doc.path.clone(),
@@ -667,6 +707,7 @@ fn finalize_doc_or_attachment(
             name_range: symbol.name_range,
             reference: reference.clone(),
             target: format!("{target}#{anchor}"),
+            is_anchor: true,
             hint_payload: hint_payload_for(ctx, target),
         });
         return;
@@ -683,6 +724,7 @@ fn finalize_doc_or_attachment(
             name_range: symbol.name_range,
             reference: reference.clone(),
             target: target.to_string(),
+            is_anchor: false,
             hint_payload: hint_payload_for(ctx, target),
         });
     } else {
