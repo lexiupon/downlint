@@ -999,6 +999,143 @@ fn obsidian_prefix_hint_caps_at_five() {
     assert!(dnl002.message.contains("(+1 more)"));
 }
 
+/// Regression test: wiki-link targets that contain an internal `.` (e.g. version
+/// numbers like `v2.5b`) used to be classified as explicit paths and skip the
+/// `wiki.obsidian_prefix` fallback, leaving real links unresolved even though the
+/// target file exists. With the fix, the `.` is only treated as an extension
+/// separator when it is the last `.` and both the base and the extension are
+/// non-empty, so `[[20260723-v2.5b-trust-region]]` now prefix-matches the file
+/// `notes/20260723-v2.5b-trust-region.md`.
+#[test]
+fn obsidian_prefix_target_with_internal_dot_resolves() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    let target = write_document(
+        root,
+        "notes/20260723-v2.5b-trust-region.md",
+        "# 20260723 v2.5b trust region\n",
+    );
+
+    // The link target matches the file stem exactly, but the stem contains an
+    // internal `.` (in `v2.5b`) that previously caused the resolver to treat the
+    // target as explicit and skip prefix matching.
+    let index = write_document(
+        root,
+        "notes/INDEX.md",
+        "\
+| 20260723 | result | trust region restart | [[20260723-v2.5b-trust-region]] |
+",
+    );
+
+    let graph = resolve_graph_with_config(
+        root,
+        vec![target, index],
+        config_with_obsidian_prefix(true),
+    );
+
+    assert_eq!(
+        graph.resolved_references.len(),
+        1,
+        "expected exactly one resolved reference, got unresolved={}, ambiguous={}",
+        graph.unresolved_references.len(),
+        graph.ambiguous_references.len(),
+    );
+    assert!(
+        graph
+            .resolved_references[0]
+            .destinations
+            .iter()
+            .any(|d| d.path.ends_with("20260723-v2.5b-trust-region.md")),
+        "expected the resolved destination to be 20260723-v2.5b-trust-region.md, got: {:?}",
+        graph.resolved_references[0].destinations
+    );
+    assert!(
+        graph.unresolved_references.is_empty(),
+        "expected no unresolved references, got: {:?}",
+        graph.unresolved_references
+    );
+    assert!(graph.ambiguous_references.is_empty());
+}
+
+/// Even a partial prefix that contains the internal `.` (e.g. `20260723-v2.5b`,
+/// which is a leading prefix of `20260723-v2.5b-trust-region`) should now resolve
+/// because the `.` in `5b-trust-region` is not a valid extension separator.
+#[test]
+fn obsidian_prefix_target_with_internal_dot_prefix_resolves() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    let target = write_document(
+        root,
+        "notes/20260723-v2.5b-trust-region.md",
+        "# x\n",
+    );
+
+    // `20260723-v2.5b-` is a leading prefix of the file stem and contains an
+    // internal `.`. The trailing fragment `trust-region` contains a `-`, so
+    // the `.` is not treated as an extension separator and the prefix matcher
+    // is allowed to run.
+    let index = write_document(
+        root,
+        "notes/INDEX.md",
+        "[[20260723-v2.5b-]]\n",
+    );
+
+    let graph = resolve_graph_with_config(
+        root,
+        vec![target, index],
+        config_with_obsidian_prefix(true),
+    );
+
+    assert_eq!(graph.resolved_references.len(), 1);
+    assert!(
+        graph.resolved_references[0]
+            .destinations
+            .iter()
+            .any(|d| d.path.ends_with("20260723-v2.5b-trust-region.md")),
+        "expected the resolved destination to be 20260723-v2.5b-trust-region.md, got: {:?}",
+        graph.resolved_references[0].destinations
+    );
+    assert!(graph.unresolved_references.is_empty());
+    assert!(graph.ambiguous_references.is_empty());
+}
+
+/// Sanity check: real `.md` extensions must still be classified as explicit
+/// (so the `obsidian_prefix` fallback is skipped and the explicit path matcher
+/// runs). This guards against an over-broad fix.
+#[test]
+fn explicit_md_target_still_treated_as_explicit() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    let target = write_document(
+        root,
+        "notes/20260801-topic-a.md",
+        "# a\n",
+    );
+
+    let index = write_document(
+        root,
+        "notes/INDEX.md",
+        "[[20260801-topic-a.md]]\n",
+    );
+
+    let graph = resolve_graph_with_config(
+        root,
+        vec![target, index],
+        config_with_obsidian_prefix(true),
+    );
+
+    assert_eq!(
+        graph.resolved_references.len(),
+        1,
+        "expected the explicit .md target to resolve via the path matcher"
+    );
+    assert!(graph.unresolved_references.is_empty());
+    assert!(graph.ambiguous_references.is_empty());
+}
+
 #[test]
 fn obsidian_prefix_alias_form_resolves() {
     let temp = TempDir::new().unwrap();

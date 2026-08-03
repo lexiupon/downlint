@@ -769,7 +769,21 @@ fn is_explicit_path(target: &str) -> bool {
         || target.starts_with("../")
         || target.contains('/')
         || target.contains('\\')
-        || target.contains('.')
+        || target
+            .rsplit_once('.')
+            .is_some_and(|(base, ext)| {
+                // Both halves must be non-empty, the extension must be purely
+                // alphanumeric, and neither the trailing char of the base nor the
+                // leading char of the extension may be a separator like `-` or
+                // `_`. The last rule prevents treating the `.` in version-like
+                // fragments such as `v2.5b` or `20260723-v2.5b-trust-region` as
+                // an extension separator.
+                !base.is_empty()
+                    && !ext.is_empty()
+                    && ext.chars().all(|c| c.is_ascii_alphanumeric())
+                    && !base.ends_with(|c: char| c == '-' || c == '_')
+                    && !ext.starts_with(|c: char| c == '-' || c == '_')
+            })
 }
 
 fn load_extra_documents(folders: &[PathBuf], config: &Config) -> Vec<ResolveDocument> {
@@ -813,5 +827,61 @@ fn hint_payload_for(ctx: &ResolveRefContext<'_>, target: &str) -> Option<Vec<Pat
         None
     } else {
         Some(candidates.to_vec())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_explicit_path;
+
+    /// A target ending in a normal extension (e.g. `file.md`) is an explicit path.
+    #[test]
+    fn explicit_path_md_extension() {
+        assert!(is_explicit_path("file.md"));
+        assert!(is_explicit_path("./file.md"));
+        assert!(is_explicit_path("../sibling/file.md"));
+    }
+
+    /// A bare stem with no `.` is not explicit (it relies on title/stem/prefix match).
+    #[test]
+    fn explicit_path_no_dot_is_not_explicit() {
+        assert!(!is_explicit_path("guide"));
+        assert!(!is_explicit_path("20260723-v2-neb-step1-result"));
+    }
+
+    /// Stems with `.` followed by a non-alphanumeric suffix (e.g. version numbers
+    /// like `v2.5b-trust-region` where the trailing fragment contains `-`) are
+    /// NOT treated as explicit paths. The `.` is only considered an extension
+    /// separator when the trailing fragment is purely alphanumeric, so the
+    /// prefix matcher can rescue targets like `20260723-v2.5b-trust-region`.
+    #[test]
+    fn explicit_path_internal_dot_is_not_explicit() {
+        // Trailing fragment contains `-`, so the `.` is not an extension separator.
+        assert!(!is_explicit_path("20260723-v2.5b-trust-region"));
+        assert!(!is_explicit_path("note.v2.5b-draft"));
+        assert!(!is_explicit_path("foo.bar-baz"));
+        // Extension contains an underscore, so the `.` is not an extension separator.
+        assert!(!is_explicit_path("foo.bar_baz"));
+    }
+
+    /// Targets that contain `/` or `\` are always explicit regardless of `.`.
+    #[test]
+    fn explicit_path_separators_are_explicit() {
+        assert!(is_explicit_path("sub/file"));
+        assert!(is_explicit_path("sub/file.md"));
+        assert!(is_explicit_path("a\\b"));
+        assert!(is_explicit_path("/abs/path"));
+    }
+
+    /// Edge cases for the extension-separator rule: a trailing dot or a leading dot
+    /// do not produce a valid extension, so the target is not explicit.
+    #[test]
+    fn explicit_path_edge_cases() {
+        // Trailing dot: extension is empty.
+        assert!(!is_explicit_path("foo."));
+        // Leading dot: base is empty.
+        assert!(!is_explicit_path(".gitignore"));
+        // Only the dot.
+        assert!(!is_explicit_path("."));
     }
 }
