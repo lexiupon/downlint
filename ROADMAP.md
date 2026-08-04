@@ -5,6 +5,29 @@ See [spec.md](./spec.md) for the current v1 implementation spec.
 
 ---
 
+## Recently Shipped
+
+### `[uri]` — External Asset URI Mapping (RFC 0006)
+
+Maps URI-style wiki-link targets (`onedrive://work/...`, `s3://reports/...`) to
+local filesystem roots so cloud-stored assets can be validated like any other link.
+
+- **Order-based prefix matching**: more-specific prefixes win.
+- **Trailing-slash normalization**: `onedrive://work` and `onedrive://work/` both match.
+- **Cross-platform home expansion**: `~` uses `dirs::home_dir()` (Windows-safe).
+- **Env-var expansion in `root`**: `$VAR` and `${VAR}` are expanded at startup.
+- **Per-file sync (`{path}` placeholder)**: never syncs an entire mount.
+- **Batched + cached sync**: results shared across CLI runs and LSP keystrokes.
+- **Explicit `--allow-uri-sync` gate**: subprocess execution requires opt-in.
+- **`--no-uri-hints` opt-out**: disables the "no URI mapping found" hint.
+- **Diagnostics**: `DNL006` (no-mapping hint) and `DNL007` (sync skipped notice),
+  both info-level.
+
+See [rfc/0006-external-asset-uri-mapping.md](./rfc/0006-external-asset-uri-mapping.md)
+for the rationale and Phase 2/3 follow-ups.
+
+---
+
 ## Version 1 (Current)
 
 v1 focuses on core features: diagnostics, completion, rename, and basic code actions.
