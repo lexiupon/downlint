@@ -107,23 +107,23 @@ pub struct SyncRunner<'a> {
     /// Reserved for Phase 2 (fanning out multiple `{path}` placeholders per
     /// single subprocess invocation). Currently the runner invokes `sync_cmd`
     /// once per file, which is a strict subset of the eventual behavior.
+    /// Field is kept (with `#[allow(dead_code)]`) so callers can already
+    /// plumb the value through.
     #[allow(dead_code)]
     batch_size: usize,
     cache: UriSyncCache,
 }
 
 impl<'a> SyncRunner<'a> {
+    /// Construct a runner with a fresh private cache. Equivalent to
+    /// `with_cache(..., UriSyncCache::new())`. Prefer `with_cache` when the
+    /// caller already has a shared cache (e.g. LSP `ServerState`).
     pub fn new(
         resolver: &'a UriResolver,
         allow_sync: bool,
         batch_size: usize,
     ) -> Self {
-        Self {
-            resolver,
-            allow_sync,
-            batch_size: batch_size.max(1),
-            cache: UriSyncCache::new(),
-        }
+        Self::with_cache(resolver, allow_sync, batch_size, UriSyncCache::new())
     }
 
     /// Use a pre-existing cache (e.g. one stored in LSP `ServerState`).
@@ -139,12 +139,6 @@ impl<'a> SyncRunner<'a> {
             batch_size: batch_size.max(1),
             cache,
         }
-    }
-
-    /// Returns a clone of the inner cache for external use (e.g. storing in
-    /// `ServerState`).
-    pub fn cache(&self) -> UriSyncCache {
-        self.cache.clone()
     }
 
     /// Run sync for one resolved path, consulting and populating the cache.
@@ -243,17 +237,9 @@ fn substitute_path(arg: &str, path: &PathBuf) -> String {
     }
 }
 
-/// Number of subprocess invocations performed across the most recent call to
-/// `run_for` from a known set of paths. Not currently exposed outside the
-/// module but kept here as a placeholder for future metric collection.
-#[allow(dead_code)]
-pub fn invocations(_batch_size: usize, _paths: usize) -> usize {
-    _paths
-}
-
-/// Internal: blocking wait with timeout. Implemented via `wait_timeout` from
-/// `std::os::unix::process::ExitStatusExt` -- BUT to keep this portable to
-/// Windows, we use a simple spawn-and-wait loop with a watchdog thread.
+/// Internal: blocking wait with timeout. Uses a poll loop with a short sleep
+/// rather than `wait_timeout` (Unix-only) so the runner stays portable to
+/// Windows; precision is ~20ms.
 #[derive(Debug)]
 enum WaitError {
     TimedOut,
@@ -288,9 +274,8 @@ fn wait_with_timeout(
 mod tests {
     use super::*;
     use crate::config::uri::{PartialUriConfig, PartialUriMapping};
-    use crate::config::{Config, UriConfig, finalize_uri};
+    use crate::config::finalize_uri;
     use crate::resolution::uri::UriResolver;
-    use std::collections::HashMap;
     use tempfile::TempDir;
 
     /// Build a config with one optional mapping whose `sync_cmd` is `["true"]`
@@ -501,12 +486,4 @@ mod tests {
         let runner = SyncRunner::new(&resolver, false, 0);
         assert_eq!(runner.batch_size, 1);
     }
-
-    // Smoke test: every SyncDecision value's PartialEq impl is exercised above.
-    #[allow(dead_code)]
-    fn _decision_is_partial_eq(_x: &HashMap<String, SyncDecision>) {}
-    #[allow(dead_code)]
-    fn _status_is_partial_eq(_x: &HashMap<String, PathStatus>) {}
-    #[allow(dead_code)]
-    fn _config_compat(_c: &Config, _u: &UriConfig) {}
 }

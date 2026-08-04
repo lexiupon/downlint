@@ -227,13 +227,11 @@ fn initialize_state(state: &mut ServerState, params: Option<&Value>) -> Option<P
         discover_workspace(WorkspaceInput::Path(root.clone()), Some(root.as_path())).ok()?;
     let mut input = ResolveInput::from_workspace(&workspace);
     // Plumb the cache + opts through so refresh_graph reuses the same cache
-    // across LSP events.
+    // across LSP events. The cache is `Arc<Mutex<...>>`, so the runner's
+    // mutations are visible to `state.uri_sync_cache` without further action.
     input.uri_sync_cache = state.uri_sync_cache.clone();
     input.uri_opts = state.uri_opts.clone();
     let graph = resolve_links(input);
-    // After resolve_links, the input may have populated the cache with sync
-    // results; mirror those back to state so the next refresh sees them.
-    state.uri_sync_cache = state.uri_sync_cache.clone(); // identity, populated through runner
     state.workspace = Some(workspace);
     state.graph = Some(graph);
     state.initialized = true;

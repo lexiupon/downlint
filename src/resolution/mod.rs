@@ -462,11 +462,6 @@ fn resolve_uri_target(
                 result.status,
                 crate::resolution::uri_sync::PathStatus::Present
             );
-            let hard_failure = matches!(
-                result.status,
-                crate::resolution::uri_sync::PathStatus::SyncFailed
-                    | crate::resolution::uri_sync::PathStatus::SyncTimedOut
-            );
 
             if present {
                 ctx.graph.resolved_references.push(ResolvedReference {
@@ -483,10 +478,12 @@ fn resolve_uri_target(
                     }],
                 });
             } else {
-                // Missing or sync failure surfaces as a broken link. The
-                // diagnostics layer reads `hint_payload.is_empty()`-style
-                // signals separately; here we just record the unresolved ref.
-                let _ = hard_failure; // currently advisory; future diagnostics
+                // Sync ran and the file is still missing, or sync itself
+                // failed/timed out. In all three cases the link is reported
+                // as broken per the RFC. A future Phase 2 will differentiate
+                // `sync_required = false` (warning + missing) from
+                // `sync_required = true` (broken); for now we surface a
+                // uniform broken-link diagnostic.
                 ctx.graph.unresolved_references.push(UnresolvedReference {
                     source_path: doc.path.clone(),
                     occurrence_id: symbol.id,

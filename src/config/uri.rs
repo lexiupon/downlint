@@ -1,6 +1,5 @@
 use serde::Deserialize;
 use std::fmt;
-use std::path::PathBuf;
 
 /// Resolved (non-Partial) URI mapping configuration. Holds the parsed entries from
 /// `[[uri.mappings]]` plus the resolved config directory used to expand relative
@@ -107,13 +106,6 @@ pub fn merge_uri(high: PartialUriConfig, low: PartialUriConfig) -> PartialUriCon
 /// offending mapping index. The intent is to make config errors easy to find.
 fn validation_at(index: usize, message: &str) -> UriConfigError {
     UriConfigError::Validation(format!("uri.mappings[{index}]: {message}"))
-}
-
-/// Convenience: produce a default `PartialUriConfig::default()`. Mirrors the
-/// style of the rest of the config module.
-#[allow(dead_code)]
-pub(crate) fn empty_config_dir() -> Option<PathBuf> {
-    None
 }
 
 #[cfg(test)]

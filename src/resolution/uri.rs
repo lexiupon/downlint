@@ -211,7 +211,7 @@ impl std::fmt::Display for ExpansionError {
 /// `config_dir`. Surfaces env-var failures explicitly.
 pub fn expand_root(raw: &str, config_dir: &Path) -> Result<PathBuf, ExpansionError> {
     let after_env = expand_env_vars(raw)?;
-    let after_home = expand_home(&after_env);
+    let after_home = expand_home(&after_env)?;
     let expanded = if after_home.as_os_str().is_empty() {
         after_home
     } else if after_home.is_absolute() {
@@ -270,20 +270,20 @@ fn expand_env_vars(input: &str) -> Result<PathBuf, ExpansionError> {
     Ok(PathBuf::from(result))
 }
 
-fn expand_home(input: &Path) -> PathBuf {
+fn expand_home(input: &Path) -> Result<PathBuf, ExpansionError> {
     let as_str = input.to_string_lossy();
     if as_str == "~" {
-        return dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
+        return dirs::home_dir().ok_or(ExpansionError::NoHomeDirectory);
     }
     if let Some(stripped) = as_str.strip_prefix("~/") {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
-        return home.join(stripped);
+        let home = dirs::home_dir().ok_or(ExpansionError::NoHomeDirectory)?;
+        return Ok(home.join(stripped));
     }
     if let Some(stripped) = as_str.strip_prefix("~\\") {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
-        return home.join(stripped);
+        let home = dirs::home_dir().ok_or(ExpansionError::NoHomeDirectory)?;
+        return Ok(home.join(stripped));
     }
-    input.to_path_buf()
+    Ok(input.to_path_buf())
 }
 
 fn ensure_trailing_slash(prefix: &str) -> String {
