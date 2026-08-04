@@ -24,7 +24,33 @@ local filesystem roots so cloud-stored assets can be validated like any other li
   both info-level.
 
 See [rfc/0006-external-asset-uri-mapping.md](./rfc/0006-external-asset-uri-mapping.md)
-for the rationale and Phase 2/3 follow-ups.
+for the rationale and [rfc/0007-uri-mapping-phase-2.md](./rfc/0007-uri-mapping-phase-2.md)
+for Phase 2 follow-ups.
+
+### `[uri]` Phase 2 — Sync Hardening (RFC 0007)
+
+Five follow-ups from the Phase 1 review and the original RFC's Phase 2/3
+sections, all shipped together:
+
+- **`verify_cmd` per mapping**: post-sync placeholder detection via a
+  user-configured command (e.g. `["file", "{path}"]`). Authoritative
+  override when heuristics disagree.
+- **Auto-detection heuristics**: built-in checks for OneDrive resource
+  forks, iCloud `.icloud` siblings, and 0-byte cloud files. Toggled via
+  `[uri].auto_verify = "on" | "off" | "onedrive-only" | "icloud-only"`.
+- **`DNL008 SyncFailureWarning`**: info-level diagnostic that distinguishes
+  `sync_required = false` (soft) from `sync_required = true` (hard)
+  sync failures. Emitted alongside `DNL002` only when the user opted into
+  lenient sync.
+- **Batch fan-out**: `batch_size` now actually batches. Two tiers:
+  positional `{path}` (default) and `{paths}` newline-stdin (opt-in for
+  `rclone` / `aws s3 sync`). 128 KiB argv cap with one-time `DNL009`
+  fallback diagnostic.
+- **`downlint sync` subcommand**: cache-warming runner. Always requires
+  `--allow-uri-sync`; prints per-mapping summary; exits 1 on any failure.
+- **LSP sync flags**: `downlint server --allow-uri-sync` (and
+  `--no-uri-hints`, `--uri-sync-batch-size`) now thread through to
+  `ServerState` so the LSP can honor the user's sync intent.
 
 ---
 
