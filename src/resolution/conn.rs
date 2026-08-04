@@ -49,6 +49,12 @@ pub struct UnresolvedReference {
     /// resolution layer when an opt-in prefix index is available; rendered as a
     /// discoverability hint in the DNL002 diagnostic.
     pub hint_payload: Option<Vec<PathBuf>>,
+    /// True when the link target has a URI scheme but no `[uri.mappings]`
+    /// entry matched it. The diagnostics layer renders a one-time hint
+    /// pointing the user at `.downlint.toml`'s `[uri]` section. Suppressed
+    /// entirely when `[uri]` is not configured (so we never change behavior
+    /// for users who haven't opted in) and when `UriOptions::no_hints` is true.
+    pub uri_no_mapping_hint: bool,
 }
 
 #[derive(Clone, Debug)]

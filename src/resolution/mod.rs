@@ -2,6 +2,8 @@ pub mod conn;
 pub mod path;
 pub mod prefix;
 pub mod slug;
+pub mod uri;
+pub mod uri_sync;
 
 use crate::config::Config;
 use crate::parser::{Def, LinkLabel, Ref, Structure, SymKind};
@@ -11,6 +13,8 @@ use crate::resolution::conn::{
 };
 use crate::resolution::path::{has_scheme, is_folder_link_target, path_without_extension, resolve_explicit_path};
 use crate::resolution::prefix::PrefixIndex;
+use crate::resolution::uri::{UriOutcome, UriResolver};
+use crate::resolution::uri_sync::SyncRunner;
 use crate::utils::{Workspace, WorkspaceMode};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -41,6 +45,30 @@ impl ResolveDocument {
     }
 }
 
+/// Per-run options for URI mapping behavior. The CLI layer sets these from
+/// `--allow-uri-sync`, `--no-uri-hints`, and `--uri-sync-batch-size`. Defaults
+/// are conservative: no sync, hints on, batch size 50.
+#[derive(Clone, Debug)]
+pub struct UriOptions {
+    pub allow_sync: bool,
+    pub no_hints: bool,
+    pub batch_size: usize,
+}
+
+impl Default for UriOptions {
+    fn default() -> Self {
+        Self {
+            allow_sync: false,
+            no_hints: false,
+            batch_size: 50,
+        }
+    }
+}
+
+// re-export for callers that want to wire sync state without taking a
+// dependency on `crate::resolution::uri_sync` directly.
+pub use uri_sync::UriSyncCache;
+
 #[derive(Clone, Debug)]
 pub struct ResolveInput {
     pub root: PathBuf,
@@ -52,6 +80,21 @@ pub struct ResolveInput {
     /// Case-insensitive prefix index over the stems of `documents` and `extra_documents`.
     /// Built eagerly in `from_workspace` (and constructed manually by tests).
     pub prefix_index: PrefixIndex,
+    /// Resolver built from `[uri.mappings]` in `.downlint.toml`. Empty when no
+    /// URI section is configured. Used by `resolve_wiki_ref` and
+    /// `resolve_inline_ref` to validate `scheme://...` targets.
+    pub uri_resolver: UriResolver,
+    /// Per-run toggles (sync gating, hint suppression, batch size). Modified
+    /// after construction by the CLI layer; resolution reads them lazily.
+    pub uri_opts: UriOptions,
+    /// Shared cache for sync results. The CLI constructs a fresh cache each
+    /// run; the LSP layer (task #8) reuses one cache across document-change
+    /// events to avoid re-forking sync subprocesses on every keystroke.
+    pub uri_sync_cache: UriSyncCache,
+    /// Set when URI mapping expansion failed at startup (e.g. missing env
+    /// var). Resolution still proceeds with an empty resolver; the CLI
+    /// surfaces the error before diagnostics are emitted.
+    pub uri_error: Option<String>,
 }
 
 impl ResolveInput {
@@ -87,6 +130,28 @@ impl ResolveInput {
                 ),
         );
 
+        let uri_resolver = match UriResolver::new(&workspace.config.uri, &workspace.folder.root)
+        {
+            Ok(resolver) => resolver,
+            Err(error) => {
+                // Per RFC: env-var expansion failures fail fast at startup.
+                // The CLI layer catches this and surfaces it as a config error.
+                return ResolveInput {
+                    root: workspace.folder.root.clone(),
+                    documents,
+                    extra_documents,
+                    extra_folder_roots: workspace.folder.extra_folders.clone(),
+                    config: workspace.config.clone(),
+                    single_file: matches!(workspace.mode, WorkspaceMode::SingleFile),
+                    prefix_index,
+                    uri_resolver: UriResolver::empty(),
+                    uri_opts: UriOptions::default(),
+                    uri_sync_cache: UriSyncCache::new(),
+                    uri_error: Some(error.to_string()),
+                };
+            }
+        };
+
         Self {
             root: workspace.folder.root.clone(),
             documents,
@@ -95,6 +160,10 @@ impl ResolveInput {
             config: workspace.config.clone(),
             single_file: matches!(workspace.mode, WorkspaceMode::SingleFile),
             prefix_index,
+            uri_resolver,
+            uri_opts: UriOptions::default(),
+            uri_sync_cache: UriSyncCache::new(),
+            uri_error: None,
         }
     }
 }
@@ -278,6 +347,7 @@ fn resolve_document(
                         target: label.0.clone(),
                         is_anchor: false,
                         hint_payload: None,
+                        uri_no_mapping_hint: false,
                     });
                 }
             }
@@ -292,6 +362,145 @@ struct ResolveRefContext<'a> {
     reference: &'a Ref,
     input: &'a ResolveInput,
     graph: &'a mut ConnectionGraph,
+}
+
+
+/// Resolve a URI-scheme target (`scheme://...`) using the configured
+/// `[uri.mappings]`. Behavior depends on the `UriOutcome` returned by the
+/// resolver:
+///
+/// - `NotApplicable` — no URI scheme in target; caller should fall through.
+///   In practice we never get here because the entry points check
+///   `has_scheme()` first.
+/// - `NoMapping` — emit a broken-link diagnostic; mark it so the diagnostics
+///   layer renders a one-time hint pointing to `[uri.mappings]`. Suppressed
+///   when `[uri]` is unconfigured or `--no-uri-hints` is set.
+/// - `Resolved` — run sync (if configured + allowed), then either resolve
+///   (file present) or emit a broken-link diagnostic. Sync failure with
+///   `sync_required = true` also produces a broken diagnostic; otherwise it
+///   produces a warning-level status and validation continues.
+///
+/// `anchor` is the heading/anchor portion of the link (e.g. `#section`).
+/// URI-scheme links with non-empty anchors are reported as broken —
+/// anchors on external assets are not supported.
+fn resolve_uri_target(
+    ctx: &mut ResolveRefContext<'_>,
+    target: &str,
+    anchor: Option<&str>,
+) {
+    let doc = ctx.doc;
+    let symbol = ctx.symbol;
+    let reference = ctx.reference;
+    let resolver = &ctx.input.uri_resolver;
+
+    let outcome = resolver.resolve(target);
+    match outcome {
+        UriOutcome::NotApplicable => {
+            // Caller already gated on `has_scheme(target)`; defensive only.
+            ctx.graph.unresolved_references.push(UnresolvedReference {
+                source_path: doc.path.clone(),
+                occurrence_id: symbol.id,
+                full_range: symbol.full_range,
+                name_range: symbol.name_range,
+                reference: reference.clone(),
+                target: target.to_string(),
+                is_anchor: false,
+                hint_payload: None,
+                uri_no_mapping_hint: false,
+            });
+        }
+        UriOutcome::NoMapping { target: raw } => {
+            // Only suggest configuring [uri.mappings] when the user has
+            // actually opted in. An empty resolver means no mappings are
+            // configured; hinting there would add noise with no fix path.
+            let hint = !resolver.is_empty() && !ctx.input.uri_opts.no_hints;
+            ctx.graph.unresolved_references.push(UnresolvedReference {
+                source_path: doc.path.clone(),
+                occurrence_id: symbol.id,
+                full_range: symbol.full_range,
+                name_range: symbol.name_range,
+                reference: reference.clone(),
+                target: raw,
+                is_anchor: anchor.is_some(),
+                hint_payload: None,
+                uri_no_mapping_hint: hint,
+            });
+        }
+        UriOutcome::Resolved {
+            mapping_index,
+            target: raw,
+            relative: _,
+            resolved_path,
+        } => {
+            // Anchors on external assets are not supported — they would
+            // require opening the resolved file and parsing headings, which
+            // is out of scope for Phase 1.
+            if anchor.is_some() {
+                ctx.graph.unresolved_references.push(UnresolvedReference {
+                    source_path: doc.path.clone(),
+                    occurrence_id: symbol.id,
+                    full_range: symbol.full_range,
+                    name_range: symbol.name_range,
+                    reference: reference.clone(),
+                    target: raw,
+                    is_anchor: true,
+                    hint_payload: None,
+                    uri_no_mapping_hint: false,
+                });
+                return;
+            }
+
+            let runner = SyncRunner::with_cache(
+                resolver,
+                ctx.input.uri_opts.allow_sync,
+                ctx.input.uri_opts.batch_size,
+                ctx.input.uri_sync_cache.clone(),
+            );
+            let result = runner.run_for(mapping_index, resolved_path.clone());
+
+            let present = matches!(
+                result.status,
+                crate::resolution::uri_sync::PathStatus::Present
+            );
+            let hard_failure = matches!(
+                result.status,
+                crate::resolution::uri_sync::PathStatus::SyncFailed
+                    | crate::resolution::uri_sync::PathStatus::SyncTimedOut
+            );
+
+            if present {
+                ctx.graph.resolved_references.push(ResolvedReference {
+                    source_path: doc.path.clone(),
+                    occurrence_id: symbol.id,
+                    full_range: symbol.full_range,
+                    name_range: symbol.name_range,
+                    reference: reference.clone(),
+                    destinations: vec![ResolvedDestination {
+                        path: resolved_path,
+                        kind: DestinationKind::Attachment,
+                        name: raw,
+                        range: None,
+                    }],
+                });
+            } else {
+                // Missing or sync failure surfaces as a broken link. The
+                // diagnostics layer reads `hint_payload.is_empty()`-style
+                // signals separately; here we just record the unresolved ref.
+                let _ = hard_failure; // currently advisory; future diagnostics
+                ctx.graph.unresolved_references.push(UnresolvedReference {
+                    source_path: doc.path.clone(),
+                    occurrence_id: symbol.id,
+                    full_range: symbol.full_range,
+                    name_range: symbol.name_range,
+                    reference: reference.clone(),
+                    target: raw,
+                    is_anchor: false,
+                    hint_payload: None,
+                    uri_no_mapping_hint: false,
+                });
+            }
+        }
+    }
 }
 
 
@@ -369,6 +578,10 @@ fn resolve_wiki_ref(
     let doc = ctx.doc;
     let symbol = ctx.symbol;
     let reference = ctx.reference;
+    if has_scheme(target) {
+        resolve_uri_target(ctx, target, heading);
+        return;
+    }
     if target.is_empty()
         && let Some(anchor) = heading
     {
@@ -407,6 +620,7 @@ fn resolve_wiki_ref(
                 target: anchor.to_string(),
                 is_anchor: true,
                 hint_payload: hint_payload_for(ctx, anchor),
+                uri_no_mapping_hint: false,
             });
         }
         return;
@@ -425,6 +639,7 @@ fn resolve_wiki_ref(
                 target: target.to_string(),
                 is_anchor: false,
                 hint_payload: None,
+                uri_no_mapping_hint: false,
             });
             return;
         }
@@ -447,6 +662,7 @@ fn resolve_wiki_ref(
                 target: target.to_string(),
                 is_anchor: false,
                 hint_payload: None,
+                uri_no_mapping_hint: false,
             });
         }
         return;
@@ -535,6 +751,7 @@ fn resolve_inline_ref(
     let symbol = ctx.symbol;
     let reference = ctx.reference;
     if has_scheme(target) {
+        resolve_uri_target(ctx, target, anchor);
         return;
     }
     if target.is_empty()
@@ -578,6 +795,7 @@ fn resolve_inline_ref(
                 target: anchor.to_string(),
                 is_anchor: true,
                 hint_payload: None,
+                uri_no_mapping_hint: false,
             });
         }
         return;
@@ -596,6 +814,7 @@ fn resolve_inline_ref(
                 target: target.to_string(),
                 is_anchor: false,
                 hint_payload: None,
+                uri_no_mapping_hint: false,
             });
             return;
         }
@@ -618,6 +837,7 @@ fn resolve_inline_ref(
                 target: target.to_string(),
                 is_anchor: false,
                 hint_payload: None,
+                uri_no_mapping_hint: false,
             });
         }
         return;
@@ -709,6 +929,7 @@ fn finalize_doc_or_attachment(
             target: format!("{target}#{anchor}"),
             is_anchor: true,
             hint_payload: hint_payload_for(ctx, target),
+            uri_no_mapping_hint: false,
         });
         return;
     }
@@ -726,6 +947,7 @@ fn finalize_doc_or_attachment(
             target: target.to_string(),
             is_anchor: false,
             hint_payload: hint_payload_for(ctx, target),
+            uri_no_mapping_hint: false,
         });
     } else {
         ctx.graph.resolved_references.push(ResolvedReference {

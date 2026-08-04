@@ -49,6 +49,22 @@ struct CheckArgs {
     watch: bool,
     #[arg(long)]
     stdin: bool,
+    /// Permit subprocess execution of `sync_cmd` entries defined under
+    /// `[uri.mappings]`. Without this flag, sync is skipped and a one-time
+    /// info diagnostic is emitted per configured mapping. Note: enabling this
+    /// flag means `.downlint.toml` controls which commands run.
+    #[arg(long = "allow-uri-sync", action = ArgAction::SetTrue)]
+    allow_uri_sync: bool,
+    /// Suppress the "no URI mapping found" hint diagnostic. The broken-link
+    /// diagnostic itself is still emitted.
+    #[arg(long = "no-uri-hints", action = ArgAction::SetTrue)]
+    no_uri_hints: bool,
+    /// Batch size for per-file `sync_cmd` invocations across external
+    /// mappings. Controls how many `{path}` placeholders are fanned out per
+    /// spawned subprocess. Lower values reduce memory; higher values reduce
+    /// fork overhead.
+    #[arg(long = "uri-sync-batch-size", default_value_t = 50)]
+    uri_sync_batch_size: usize,
     path: Option<PathBuf>,
 }
 
@@ -112,6 +128,9 @@ fn map_check_args(args: CheckArgs, quiet: bool) -> check::CheckOptions {
         stdin: args.stdin,
         quiet,
         path: args.path,
+        allow_uri_sync: args.allow_uri_sync,
+        no_uri_hints: args.no_uri_hints,
+        uri_sync_batch_size: args.uri_sync_batch_size.max(1),
     }
 }
 

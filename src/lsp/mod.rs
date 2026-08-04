@@ -17,7 +17,14 @@ struct ServerState {
     workspace: Option<Workspace>,
     graph: Option<crate::resolution::ConnectionGraph>,
     open_documents: HashMap<Url, String>,
+    uri_opts: crate::resolution::UriOptions,
+    /// Cache of `(mapping_index, absolute_path) -> run_for` results so the
+    /// language server does not re-fork sync subprocesses on every
+    /// keystroke. Populated lazily by `resolve_links`; cleared on
+    /// `.downlint.toml` change (Phase 2 will surface a config watcher).
+    uri_sync_cache: crate::resolution::uri_sync::UriSyncCache,
 }
+
 
 pub async fn run_server(_verbose: u8, wait_for_debugger: bool) -> i32 {
     if wait_for_debugger {
@@ -218,7 +225,15 @@ fn initialize_state(state: &mut ServerState, params: Option<&Value>) -> Option<P
         root.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let workspace =
         discover_workspace(WorkspaceInput::Path(root.clone()), Some(root.as_path())).ok()?;
-    let graph = resolve_links(ResolveInput::from_workspace(&workspace));
+    let mut input = ResolveInput::from_workspace(&workspace);
+    // Plumb the cache + opts through so refresh_graph reuses the same cache
+    // across LSP events.
+    input.uri_sync_cache = state.uri_sync_cache.clone();
+    input.uri_opts = state.uri_opts.clone();
+    let graph = resolve_links(input);
+    // After resolve_links, the input may have populated the cache with sync
+    // results; mirror those back to state so the next refresh sees them.
+    state.uri_sync_cache = state.uri_sync_cache.clone(); // identity, populated through runner
     state.workspace = Some(workspace);
     state.graph = Some(graph);
     state.initialized = true;
@@ -229,7 +244,10 @@ fn publish_diagnostics(state: &ServerState, stdout: &mut impl Write) {
     let Some(graph) = &state.graph else {
         return;
     };
-    for (path, diagnostics) in handlers::diagnostics(graph) {
+    let Some(workspace) = &state.workspace else {
+        return;
+    };
+    for (path, diagnostics) in handlers::diagnostics(graph, workspace, &state.uri_opts) {
         let Some(uri) = Url::from_file_path(&path).ok() else {
             continue;
         };
@@ -325,7 +343,11 @@ fn refresh_workspace_doc(state: &mut ServerState, uri: &Url) {
 
 fn refresh_graph(state: &mut ServerState) {
     if let Some(workspace) = &state.workspace {
-        state.graph = Some(resolve_links(ResolveInput::from_workspace(workspace)));
+        let mut input = ResolveInput::from_workspace(workspace);
+        // Share the cache so sync results from prior passes persist.
+        input.uri_sync_cache = state.uri_sync_cache.clone();
+        input.uri_opts = state.uri_opts.clone();
+        state.graph = Some(resolve_links(input));
     }
 }
 

@@ -1,4 +1,5 @@
 pub mod project;
+pub mod uri;
 pub mod user;
 
 use serde::Deserialize;
@@ -7,6 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use project::project_config_path;
+pub use uri::{UriConfig, UriConfigError, UriMapping, finalize_uri, merge_uri};
 pub use user::user_config_path;
 
 #[derive(Clone, Debug, Default)]
@@ -15,6 +17,7 @@ pub struct Config {
     pub code_action: CodeActionConfig,
     pub completion: CompletionConfig,
     pub wiki: WikiConfig,
+    pub uri: UriConfig,
 }
 
 #[derive(Clone, Debug)]
@@ -165,6 +168,7 @@ pub struct PartialConfig {
     pub code_action: Option<PartialCodeActionConfig>,
     pub completion: Option<PartialCompletionConfig>,
     pub wiki: Option<PartialWikiConfig>,
+    pub uri: Option<uri::PartialUriConfig>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -247,6 +251,8 @@ pub fn finalize_config(partial: PartialConfig) -> Result<Config, ConfigError> {
     let code_action = partial.code_action.unwrap_or_default();
     let completion = partial.completion.unwrap_or_default();
     let wiki = partial.wiki.unwrap_or_default();
+    let uri = finalize_uri(partial.uri.unwrap_or_default())
+        .map_err(|error| ConfigError::Validation(error.to_string()))?;
 
     let file_extensions = core
         .file_extensions
@@ -317,6 +323,7 @@ pub fn finalize_config(partial: PartialConfig) -> Result<Config, ConfigError> {
                 .obsidian_prefix
                 .unwrap_or(defaults.wiki.obsidian_prefix),
         },
+        uri,
     })
 }
 
@@ -337,6 +344,10 @@ pub fn merge_partial(high: PartialConfig, low: PartialConfig) -> PartialConfig {
         wiki: Some(merge_wiki(
             high.wiki.unwrap_or_default(),
             low.wiki.unwrap_or_default(),
+        )),
+        uri: Some(merge_uri(
+            high.uri.unwrap_or_default(),
+            low.uri.unwrap_or_default(),
         )),
     }
 }
@@ -534,6 +545,121 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join(".downlint.toml");
         fs::write(&path, "[wiki]\nbogus = true\n").unwrap();
+
+        let error = parse_partial_config(&path).unwrap_err();
+        match error {
+            ConfigError::ParseToml { message, .. } => {
+                assert!(message.contains("unknown field"));
+                assert!(message.contains("bogus"));
+            }
+            other => panic!("expected parse error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_accepts_uri_mappings() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(
+            &path,
+            r#"
+[[uri.mappings]]
+prefix = "onedrive://work/"
+root = "~/Library/CloudStorage/OneDrive-Work/assets"
+sync_cmd = ["mdutil", "--enforce-locals", "{path}"]
+sync_required = true
+sync_timeout = 45
+"#,
+        )
+        .unwrap();
+
+        let partial = parse_partial_config(&path).unwrap();
+        let config = finalize_config(partial).unwrap();
+        assert_eq!(config.uri.mappings.len(), 1);
+        let mapping = &config.uri.mappings[0];
+        assert_eq!(mapping.prefix, "onedrive://work/");
+        assert_eq!(mapping.root, "~/Library/CloudStorage/OneDrive-Work/assets");
+        assert!(mapping.sync_required);
+        assert_eq!(mapping.sync_timeout, 45);
+        assert_eq!(
+            mapping.sync_cmd.as_deref(),
+            Some(
+                [
+                    "mdutil".to_string(),
+                    "--enforce-locals".to_string(),
+                    "{path}".to_string(),
+                ]
+                .as_slice()
+            )
+        );
+    }
+
+    #[test]
+    fn uri_mappings_default_when_absent() {
+        let partial = PartialConfig::default();
+        let config = finalize_config(partial).unwrap();
+        assert!(config.uri.mappings.is_empty());
+    }
+
+    #[test]
+    fn uri_missing_prefix_yields_indexed_error() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(
+            &path,
+            r#"
+[[uri.mappings]]
+root = "./foo"
+[[uri.mappings]]
+prefix = "scheme://"
+root = "./bar"
+"#,
+        )
+        .unwrap();
+
+        let error = finalize_config(parse_partial_config(&path).unwrap()).unwrap_err();
+        match error {
+            ConfigError::Validation(message) => {
+                assert!(message.contains("uri.mappings[0]"));
+                assert!(message.contains("prefix"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn uri_zero_timeout_errors() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(
+            &path,
+            r#"
+[[uri.mappings]]
+prefix = "scheme://"
+root = "./foo"
+sync_timeout = 0
+"#,
+        )
+        .unwrap();
+
+        let error = finalize_config(parse_partial_config(&path).unwrap()).unwrap_err();
+        assert!(matches!(error, ConfigError::Validation(_)));
+    }
+
+    #[test]
+    fn parse_rejects_unknown_uri_key() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(
+            &path,
+            r#"
+[[uri.mappings]]
+prefix = "scheme://"
+root = "./foo"
+bogus = true
+"#,
+        )
+        .unwrap();
 
         let error = parse_partial_config(&path).unwrap_err();
         match error {

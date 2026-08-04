@@ -125,12 +125,18 @@ pub fn document_symbols(graph: &ConnectionGraph, path: &PathBuf) -> Value {
     json!(symbols)
 }
 
-pub fn diagnostics(graph: &ConnectionGraph) -> Vec<(PathBuf, Value)> {
+pub fn diagnostics(
+    graph: &ConnectionGraph,
+    workspace: &crate::utils::Workspace,
+    uri_opts: &crate::resolution::UriOptions,
+) -> Vec<(PathBuf, Value)> {
     let diagnostics = check_diagnostics(
         graph,
         &DiagnosticConfig {
             min_severity: DiagnosticSeverity::Info,
         },
+        workspace,
+        uri_opts,
     );
     let mut grouped: std::collections::HashMap<PathBuf, Vec<Value>> =
         std::collections::HashMap::new();

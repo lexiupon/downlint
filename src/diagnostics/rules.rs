@@ -94,6 +94,63 @@ pub fn ambiguous_link(reference: &AmbiguousReference) -> Option<Diagnostic> {
     })
 }
 
+/// Hint diagnostic: emitted once per run if any unresolved reference was a
+/// URI-scheme link (`scheme://...`) that did not match any `[uri.mappings]`
+/// prefix. Surfaces the example config so the user can find the `[uri]`
+/// section without reading the RFC. Returns `None` if no such unresolved
+/// reference exists.
+pub fn uri_no_mapping_hint(unresolved: &[UnresolvedReference]) -> Option<Diagnostic> {
+    let first = unresolved.iter().find(|reference| reference.uri_no_mapping_hint)?;
+    Some(Diagnostic {
+        path: first.source_path.clone(),
+        range: first.name_range.unwrap_or(first.full_range),
+        severity: DiagnosticSeverity::Info,
+        code: DiagnosticCode::DNL006,
+        message: format!(
+            "No URI mapping found for '{}'. Configure [[uri.mappings]] in .downlint.toml, e.g.:\n\
+             \n  [[uri.mappings]]\n  \
+             prefix = \"onedrive://work/\"\n  \
+             root = \"~/Library/CloudStorage/OneDrive/assets\"\n\
+             \nSuppress this hint with --no-uri-hints.",
+            first.target,
+        ),
+        related: Vec::new(),
+    })
+}
+
+/// One-time info diagnostic: emitted at most once per run when there are
+/// `[uri.mappings]` entries with `sync_cmd` configured but the CLI flag
+/// `--allow-uri-sync` was not passed. Note this is advisory — the per-link
+/// behavior is decided in the resolution layer; this just informs the user
+/// why cloud-synced assets may not appear locally.
+pub fn uri_sync_skipped(source_path: &Path, mapping_count: usize, targets: &[&str]) -> Option<Diagnostic> {
+    if mapping_count == 0 {
+        return None;
+    }
+    let preview: Vec<String> = targets
+        .iter()
+        .take(3)
+        .map(|value| value.to_string())
+        .collect();
+    let listed = preview.join(", ");
+    let more = if targets.len() > 3 {
+        format!(" (+{} more)", targets.len() - 3)
+    } else {
+        String::new()
+    };
+    Some(Diagnostic {
+        path: source_path.to_path_buf(),
+        range: ByteRange::new(0, 0),
+        severity: DiagnosticSeverity::Info,
+        code: DiagnosticCode::DNL007,
+        message: format!(
+            "Skipped sync for {mapping_count} [uri.mappings] entry/entries (--allow-uri-sync not passed). Affected prefixes: {listed}{more}.\n\
+             Re-run with --allow-uri-sync to execute their `sync_cmd` (per-file).",
+        ),
+        related: Vec::new(),
+    })
+}
+
 pub fn non_breaking_space(path: &Path, input: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let mut offset = 0usize;

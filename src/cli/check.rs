@@ -31,6 +31,9 @@ pub struct CheckOptions {
     pub stdin: bool,
     pub quiet: bool,
     pub path: Option<PathBuf>,
+    pub allow_uri_sync: bool,
+    pub no_uri_hints: bool,
+    pub uri_sync_batch_size: usize,
 }
 
 pub async fn run_check(options: CheckOptions) -> i32 {
@@ -74,12 +77,22 @@ struct CheckResult {
 
 fn run_check_once(options: &CheckOptions) -> Result<CheckResult, ConfigError> {
     let workspace = build_workspace(options)?;
-    let graph = resolve_links(ResolveInput::from_workspace(&workspace));
+    let mut input = ResolveInput::from_workspace(&workspace);
+    if let Some(error) = input.uri_error.take() {
+        return Err(ConfigError::Validation(error));
+    }
+    input.uri_opts.allow_sync = options.allow_uri_sync;
+    input.uri_opts.no_hints = options.no_uri_hints;
+    input.uri_opts.batch_size = options.uri_sync_batch_size;
+    let uri_opts = input.uri_opts.clone();
+    let graph = resolve_links(input);
     let diagnostics = check_diagnostics(
         &graph,
         &DiagnosticConfig {
             min_severity: options.min_severity,
         },
+        &workspace,
+        &uri_opts,
     );
     Ok(CheckResult {
         workspace,

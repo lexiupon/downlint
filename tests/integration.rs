@@ -44,16 +44,63 @@ fn resolve_graph_with_config(
     config: Config,
 ) -> downlint::resolution::ConnectionGraph {
     let prefix_index = prefix_index_for(&docs);
-    let input = ResolveInput {
-        root: root.to_path_buf(),
-        documents: docs,
-        extra_documents: vec![],
-        config,
-        extra_folder_roots: vec![],
-        single_file: false,
-        prefix_index,
-    };
+    let input = make_input(root, docs, vec![], vec![], config, false, Some(prefix_index));
     resolve_links(input)
+}
+
+/// Build a `ResolveInput` with all the new URI fields defaulted. Used by
+/// tests that don't care about `[uri.mappings]` so they don't have to spell
+/// out the new fields at every site.
+fn make_input(
+    root: &std::path::Path,
+    documents: Vec<ResolveDocument>,
+    extra_documents: Vec<ResolveDocument>,
+    extra_folder_roots: Vec<std::path::PathBuf>,
+    config: Config,
+    single_file: bool,
+    prefix_index: Option<PrefixIndex>,
+) -> ResolveInput {
+    let prefix_index = prefix_index.unwrap_or_else(|| prefix_index_for(&documents));
+    ResolveInput {
+        root: root.to_path_buf(),
+        documents,
+        extra_documents,
+        config,
+        extra_folder_roots,
+        single_file,
+        prefix_index,
+        uri_resolver: downlint::resolution::uri::UriResolver::empty(),
+        uri_opts: downlint::resolution::UriOptions::default(),
+        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
+        uri_error: None,
+    }
+}
+
+/// Adapter: tests don't construct a real `Workspace`, so we pass a synthetic
+/// one with an empty `DiscoveredFolder` and the default `Config` that comes
+/// from `resolve_links`. The diagnostics layer only reads `workspace.config`
+/// (for `[uri.mappings]`) and the root path; the empty folder is harmless for
+/// non-URI tests.
+fn run_diagnostics(
+    graph: &downlint::resolution::ConnectionGraph,
+    config: &DiagnosticConfig,
+) -> Vec<downlint::diagnostics::Diagnostic> {
+    let workspace = downlint::utils::Workspace {
+        folder: downlint::utils::DiscoveredFolder {
+            root: std::path::PathBuf::from("."),
+            config_path: None,
+            documents: Vec::new(),
+            extra_folders: Vec::new(),
+        },
+        mode: downlint::utils::WorkspaceMode::MultiFile,
+        config: downlint::config::Config::default(),
+    };
+    check_diagnostics(
+        graph,
+        config,
+        &workspace,
+        &downlint::resolution::UriOptions::default(),
+    )
 }
 
 #[test]
@@ -83,7 +130,7 @@ fn explicit_file_like_targets_resolve_as_attachments_without_config() {
     );
 
     let graph = resolve_graph(root, vec![doc]);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     assert!(
         diagnostics
@@ -127,7 +174,7 @@ fn missing_explicit_file_like_targets_emit_broken_link_diagnostics() {
     );
 
     let graph = resolve_graph(root, vec![doc]);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
     let broken = diagnostics
         .iter()
         .filter(|diagnostic| diagnostic.code == DiagnosticCode::DNL002)
@@ -184,7 +231,7 @@ fn explicit_markdown_document_paths_resolve_as_documents_and_headings() {
 
     let guide_path = guide_doc.path.clone();
     let graph = resolve_graph(root, vec![test_doc, guide_doc]);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     assert!(
         diagnostics
@@ -301,10 +348,14 @@ fn wiki_link_with_non_ascii_title_resolves_correctly() {
         extra_folder_roots: vec![],
         single_file: false,
         prefix_index: Default::default(),
+        uri_resolver: downlint::resolution::uri::UriResolver::empty(),
+        uri_opts: downlint::resolution::UriOptions::default(),
+        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
+        uri_error: None,
     };
 
     let graph = resolve_links(input);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     let broken_links: Vec<_> = diagnostics
         .iter()
@@ -363,10 +414,14 @@ fn wiki_link_with_non_ascii_heading_anchor_resolves_correctly() {
         extra_folder_roots: vec![],
         single_file: false,
         prefix_index: Default::default(),
+        uri_resolver: downlint::resolution::uri::UriResolver::empty(),
+        uri_opts: downlint::resolution::UriOptions::default(),
+        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
+        uri_error: None,
     };
 
     let graph = resolve_links(input);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     let broken_links: Vec<_> = diagnostics
         .iter()
@@ -429,10 +484,14 @@ fn wiki_link_with_mojibake_does_not_match_correct_title() {
         extra_folder_roots: vec![],
         single_file: false,
         prefix_index: Default::default(),
+        uri_resolver: downlint::resolution::uri::UriResolver::empty(),
+        uri_opts: downlint::resolution::UriOptions::default(),
+        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
+        uri_error: None,
     };
 
     let graph = resolve_links(input);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     let broken_links: Vec<_> = diagnostics
         .iter()
@@ -497,10 +556,14 @@ fn wiki_link_explicit_path_resolves_in_extra_folders() {
         extra_folder_roots: vec![ext_root.clone()],
         single_file: false,
         prefix_index: Default::default(),
+        uri_resolver: downlint::resolution::uri::UriResolver::empty(),
+        uri_opts: downlint::resolution::UriOptions::default(),
+        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
+        uri_error: None,
     };
 
     let graph = resolve_links(input);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     let broken_links: Vec<_> = diagnostics
         .iter()
@@ -574,10 +637,14 @@ fn wiki_link_with_slash_in_target_resolves_via_title_slug_in_extra_folders() {
         extra_folder_roots: vec![ext_root.clone()],
         single_file: false,
         prefix_index: Default::default(),
+        uri_resolver: downlint::resolution::uri::UriResolver::empty(),
+        uri_opts: downlint::resolution::UriOptions::default(),
+        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
+        uri_error: None,
     };
 
     let graph = resolve_links(input);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     let broken_links: Vec<_> = diagnostics
         .iter()
@@ -642,10 +709,14 @@ fn inline_link_with_non_ascii_filename_resolves_correctly() {
         extra_folder_roots: vec![],
         single_file: false,
         prefix_index: Default::default(),
+        uri_resolver: downlint::resolution::uri::UriResolver::empty(),
+        uri_opts: downlint::resolution::UriOptions::default(),
+        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
+        uri_error: None,
     };
 
     let graph = resolve_links(input);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     let broken_links: Vec<_> = diagnostics
         .iter()
@@ -681,7 +752,7 @@ fn folder_link_to_existing_directory_resolves() {
     );
 
     let graph = resolve_graph(root, vec![doc]);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     assert!(
         diagnostics.iter().all(|d| d.code != DiagnosticCode::DNL002),
@@ -706,7 +777,7 @@ fn folder_link_to_missing_directory_is_broken() {
     );
 
     let graph = resolve_graph(root, vec![doc]);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     let broken: Vec<_> = diagnostics
         .iter()
@@ -729,7 +800,7 @@ fn folder_link_to_file_not_directory_is_broken() {
     );
 
     let graph = resolve_graph(root, vec![doc]);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     let broken: Vec<_> = diagnostics
         .iter()
@@ -752,7 +823,7 @@ fn wiki_link_to_folder_resolves() {
     );
 
     let graph = resolve_graph(root, vec![doc]);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     assert!(
         diagnostics.iter().all(|d| d.code != DiagnosticCode::DNL002),
@@ -774,7 +845,7 @@ fn folder_link_with_anchor_is_unresolved() {
     );
 
     let graph = resolve_graph(root, vec![doc]);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     let broken: Vec<_> = diagnostics
         .iter()
@@ -805,10 +876,14 @@ fn folder_link_in_extra_folder_resolves() {
         extra_folder_roots: vec![extra_root.clone()],
         single_file: false,
         prefix_index: Default::default(),
+        uri_resolver: downlint::resolution::uri::UriResolver::empty(),
+        uri_opts: downlint::resolution::UriOptions::default(),
+        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
+        uri_error: None,
     };
 
     let graph = resolve_links(input);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     assert!(
         diagnostics.iter().all(|d| d.code != DiagnosticCode::DNL002),
@@ -948,7 +1023,7 @@ fn obsidian_prefix_off_with_hint() {
     assert_eq!(payload.len(), 1);
 
     // Check the diagnostic message contains the hint line.
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
     let dnl002: Vec<_> = diagnostics
         .iter()
         .filter(|d| d.code == DiagnosticCode::DNL002)
@@ -991,7 +1066,7 @@ fn obsidian_prefix_hint_caps_at_five() {
         .expect("hint payload");
     assert_eq!(payload.len(), 6);
 
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
     let dnl002 = diagnostics
         .iter()
         .find(|d| d.code == DiagnosticCode::DNL002)
@@ -1304,6 +1379,10 @@ fn obsidian_prefix_single_file_mode() {
         extra_folder_roots: vec![],
         single_file: true,
         prefix_index,
+        uri_resolver: downlint::resolution::uri::UriResolver::empty(),
+        uri_opts: downlint::resolution::UriOptions::default(),
+        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
+        uri_error: None,
     };
     let graph = resolve_links(input);
     assert_eq!(graph.resolved_references.len(), 1);
@@ -1339,7 +1418,7 @@ fn obsidian_prefix_does_not_resolve_folder_link() {
         graph.unresolved_references.is_empty(),
         "folder-link must not be reported as unresolved"
     );
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
     assert!(
         diagnostics.iter().all(|d| d.code != DiagnosticCode::DNL002),
         "folder-link must not emit DNL002"
@@ -1372,7 +1451,7 @@ fn inline_anchor_to_existing_heading_resolves() {
 ",
     );
     let graph = resolve_graph(root, vec![doc]);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     assert!(
         graph.resolved_references.iter().any(|r| matches!(
@@ -1406,7 +1485,7 @@ fn inline_anchor_to_missing_heading_emits_dnl005_not_dnl002() {
 ",
     );
     let graph = resolve_graph(root, vec![doc]);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     assert_eq!(graph.resolved_references.len(), 0);
     assert_eq!(graph.unresolved_references.len(), 1);
@@ -1453,7 +1532,7 @@ fn wiki_anchor_to_missing_heading_emits_dnl005_not_dnl002() {
 ",
     );
     let graph = resolve_graph(root, vec![doc]);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     let dnl002: Vec<_> = diagnostics
         .iter()
@@ -1494,7 +1573,7 @@ some text [Appendix A2](#a2-cuga-bimetallic-for-c₂-at-high-rates-nat-commun-15
 ",
     );
     let graph = resolve_graph(root, vec![doc]);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     assert!(
         graph.resolved_references.iter().any(|r| matches!(
@@ -1542,7 +1621,7 @@ fn inline_anchor_tolerant_miss_still_emits_dnl005() {
 ",
     );
     let graph = resolve_graph(root, vec![doc]);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     assert_eq!(graph.unresolved_references.len(), 1);
     let dnl005: Vec<_> = diagnostics
@@ -1580,7 +1659,7 @@ some content
         "[link](./other.md#appendix-a2)\n",
     );
     let graph = resolve_graph(root, vec![target, source]);
-    let diagnostics = check_diagnostics(&graph, &DiagnosticConfig::default());
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     let dnl002: Vec<_> = diagnostics
         .iter()
