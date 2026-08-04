@@ -15,18 +15,18 @@ use tempfile::TempDir;
 fn config_with_mapping(
     prefix: &str,
     root: &str,
-    sync_cmd: Option<Vec<String>>,
-    sync_required: bool,
-    sync_timeout: u32,
+    warm_cmd: Option<Vec<String>>,
+    warm_required: bool,
+    warm_timeout: u32,
 ) -> Config {
     let mut config = Config::default();
     let uri = finalize_uri(PartialUriConfig {
         mappings: Some(vec![PartialUriMapping {
             prefix: Some(prefix.to_string()),
             root: Some(root.to_string()),
-            sync_cmd,
-            sync_required: Some(sync_required),
-            sync_timeout: Some(sync_timeout),
+            warm_cmd,
+            warm_required: Some(warm_required),
+            warm_timeout: Some(warm_timeout),
             verify_cmd: None,
         }]),
         auto_verify: None,
@@ -40,9 +40,9 @@ fn config_with_mapping(
 fn config_with_mapping_and_verify(
     prefix: &str,
     root: &str,
-    sync_cmd: Option<Vec<String>>,
-    sync_required: bool,
-    sync_timeout: u32,
+    warm_cmd: Option<Vec<String>>,
+    warm_required: bool,
+    warm_timeout: u32,
     verify_cmd: Option<Vec<String>>,
 ) -> Config {
     let mut config = Config::default();
@@ -50,9 +50,9 @@ fn config_with_mapping_and_verify(
         mappings: Some(vec![PartialUriMapping {
             prefix: Some(prefix.to_string()),
             root: Some(root.to_string()),
-            sync_cmd,
-            sync_required: Some(sync_required),
-            sync_timeout: Some(sync_timeout),
+            warm_cmd,
+            warm_required: Some(warm_required),
+            warm_timeout: Some(warm_timeout),
             verify_cmd,
         }]),
         auto_verify: None,
@@ -292,7 +292,7 @@ fn allow_uri_sync_with_mock_cmd_marks_present_after_run() {
     let target = assets.join("synced.txt");
     assert!(
         target.exists(),
-        "sync_cmd should have created the file at {target:?}"
+        "warm_cmd should have created the file at {target:?}"
     );
     assert!(
         graph
@@ -336,13 +336,13 @@ fn no_uri_sync_mapping_means_skipped_diagnostic() {
     let codes: Vec<DiagnosticCode> = diagnostics.iter().map(|d| d.code).collect();
     assert!(
         codes.contains(&DiagnosticCode::DNL007),
-        "DNL007 must fire when sync_cmd is configured but flag is off"
+        "DNL007 must fire when warm_cmd is configured but flag is off"
     );
 }
 
 #[cfg(unix)]
 #[test]
-fn sync_required_with_failing_cmd_marks_broken() {
+fn warm_required_with_failing_cmd_marks_broken() {
     let tmp = TempDir::new().unwrap();
     let assets = tmp.path().join("assets");
     fs::create_dir_all(&assets).unwrap();
@@ -471,9 +471,9 @@ fn sync_cache_is_shared_across_resolve_links_calls() {
         mappings: Some(vec![PartialUriMapping {
             prefix: Some("scheme://".to_string()),
             root: Some(assets.to_string_lossy().to_string()),
-            sync_cmd: Some(vec!["true".to_string()]),
-            sync_required: Some(false),
-            sync_timeout: Some(10),
+            warm_cmd: Some(vec!["true".to_string()]),
+            warm_required: Some(false),
+            warm_timeout: Some(10),
             verify_cmd: None,
         }]),
         auto_verify: None,
@@ -501,7 +501,7 @@ fn sync_cache_is_shared_across_resolve_links_calls() {
 #[cfg(unix)]
 #[test]
 fn soft_sync_failure_emits_dnl008_alongside_dnl002() {
-    // `sync_required = false` + sync ran + sync failed → DNL002 broken AND
+    // `warm_required = false` + sync ran + sync failed → DNL002 broken AND
     // DNL008 SyncFailureWarning. Both should be visible at min-severity=info.
     let tmp = TempDir::new().unwrap();
     let config = config_with_mapping(
@@ -533,7 +533,7 @@ fn soft_sync_failure_emits_dnl008_alongside_dnl002() {
 #[cfg(unix)]
 #[test]
 fn hard_sync_failure_does_not_emit_dnl008() {
-    // `sync_required = true` + sync failed → DNL002 broken ONLY. DNL008 is
+    // `warm_required = true` + sync failed → DNL002 broken ONLY. DNL008 is
     // reserved for soft failures.
     let tmp = TempDir::new().unwrap();
     let config = config_with_mapping(
@@ -555,7 +555,7 @@ fn hard_sync_failure_does_not_emit_dnl008() {
     assert!(codes.contains(&DiagnosticCode::DNL002));
     assert!(
         !codes.contains(&DiagnosticCode::DNL008),
-        "DNL008 must NOT fire for sync_required=true: {codes:?}"
+        "DNL008 must NOT fire for warm_required=true: {codes:?}"
     );
 }
 
@@ -612,7 +612,7 @@ fn dnl008_suppressed_at_warning_severity() {
 #[cfg(unix)]
 #[test]
 fn verify_cmd_pass_marks_present_after_sync() {
-    // sync_cmd creates the file, then verify_cmd checks it's non-empty.
+    // warm_cmd creates the file, then verify_cmd checks it's non-empty.
     let tmp = TempDir::new().unwrap();
     let assets = tmp.path().join("assets");
     fs::create_dir_all(&assets).unwrap();
@@ -653,7 +653,7 @@ fn verify_cmd_pass_marks_present_after_sync() {
 #[cfg(unix)]
 #[test]
 fn verify_cmd_failure_marks_broken_even_when_file_exists() {
-    // sync_cmd creates an empty file, verify_cmd fails (file is empty),
+    // warm_cmd creates an empty file, verify_cmd fails (file is empty),
     // so the link must be reported as broken.
     let tmp = TempDir::new().unwrap();
     let assets = tmp.path().join("assets");
@@ -690,7 +690,7 @@ fn verify_cmd_failure_marks_broken_even_when_file_exists() {
 #[test]
 fn auto_verify_off_skips_heuristics() {
     // When `[uri].auto_verify = "off"`, no placeholder detection runs.
-    // The link resolves because sync_cmd was a no-op and the file exists.
+    // The link resolves because warm_cmd was a no-op and the file exists.
     let tmp = TempDir::new().unwrap();
     let assets = tmp.path().join("assets");
     fs::create_dir_all(&assets).unwrap();
@@ -703,9 +703,9 @@ fn auto_verify_off_skips_heuristics() {
     partial.mappings = Some(vec![PartialUriMapping {
         prefix: Some("scheme://".to_string()),
         root: Some(assets.to_string_lossy().to_string()),
-        sync_cmd: None,
-        sync_required: None,
-        sync_timeout: None,
+        warm_cmd: None,
+        warm_required: None,
+        warm_timeout: None,
         verify_cmd: None,
     }]);
     partial.auto_verify = Some("off".to_string());
@@ -748,12 +748,12 @@ fn batch_size_three_fans_out_into_one_spawn() {
         mappings: Some(vec![PartialUriMapping {
             prefix: Some("scheme://".to_string()),
             root: Some(tmp.path().to_string_lossy().to_string()),
-            sync_cmd: Some(vec![
+            warm_cmd: Some(vec![
                 script.to_string_lossy().to_string(),
                 "{path}".to_string(),
             ]),
-            sync_required: Some(false),
-            sync_timeout: Some(10),
+            warm_required: Some(false),
+            warm_timeout: Some(10),
             verify_cmd: None,
         }]),
         auto_verify: None,
@@ -811,12 +811,12 @@ fn batch_size_one_preserves_per_file_behavior() {
         mappings: Some(vec![PartialUriMapping {
             prefix: Some("scheme://".to_string()),
             root: Some(tmp.path().to_string_lossy().to_string()),
-            sync_cmd: Some(vec![
+            warm_cmd: Some(vec![
                 script.to_string_lossy().to_string(),
                 "{path}".to_string(),
             ]),
-            sync_required: Some(false),
-            sync_timeout: Some(10),
+            warm_required: Some(false),
+            warm_timeout: Some(10),
             verify_cmd: None,
         }]),
         auto_verify: None,
@@ -847,7 +847,7 @@ fn batch_size_one_preserves_per_file_behavior() {
 #[test]
 fn batch_clamps_to_per_file_when_argv_exceeds_limit() {
     // Make the substituted {path} argument size exceed MAX_BATCH_BYTES by
-    // using a sync_cmd with multiple {path} slots and a long dummy arg. We
+    // using a warm_cmd with multiple {path} slots and a long dummy arg. We
     // don't need the path to actually exist on disk — the clamp triggers
     // purely on the constructed argv byte length, before any spawn.
     use downlint::resolution::uri_sync::{MAX_BATCH_BYTES, run_for_many};
@@ -861,20 +861,20 @@ fn batch_clamps_to_per_file_when_argv_exceeds_limit() {
         "x".repeat(MAX_BATCH_BYTES)
     ));
 
-    // sync_cmd has multiple {path} slots to push the constructed argv
+    // warm_cmd has multiple {path} slots to push the constructed argv
     // length over MAX_BATCH_BYTES when there are 2+ paths.
     let mut config = Config::default();
     let uri = finalize_uri(PartialUriConfig {
         mappings: Some(vec![PartialUriMapping {
             prefix: Some("scheme://".to_string()),
             root: Some(tmp.path().to_string_lossy().to_string()),
-            sync_cmd: Some(vec![
+            warm_cmd: Some(vec![
                 "true".to_string(),
                 "{path}".to_string(),
                 "{path}".to_string(),
             ]),
-            sync_required: Some(false),
-            sync_timeout: Some(10),
+            warm_required: Some(false),
+            warm_timeout: Some(10),
             verify_cmd: None,
         }]),
         auto_verify: None,

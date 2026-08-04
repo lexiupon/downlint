@@ -48,9 +48,9 @@ struct CompiledMapping {
     canonical_prefix: String,
     prefix_without_slash: String,
     expanded_root: PathBuf,
-    sync_cmd: Option<Vec<String>>,
-    sync_required: bool,
-    sync_timeout: u32,
+    warm_cmd: Option<Vec<String>>,
+    warm_required: bool,
+    warm_timeout: u32,
     verify_cmd: Option<Vec<String>>,
 }
 
@@ -75,9 +75,9 @@ impl UriResolver {
                 canonical_prefix,
                 prefix_without_slash,
                 expanded_root,
-                sync_cmd: mapping.sync_cmd.clone(),
-                sync_required: mapping.sync_required,
-                sync_timeout: mapping.sync_timeout,
+                warm_cmd: mapping.warm_cmd.clone(),
+                warm_required: mapping.warm_required,
+                warm_timeout: mapping.warm_timeout,
                 verify_cmd: mapping.verify_cmd.clone(),
             });
         }
@@ -109,12 +109,12 @@ impl UriResolver {
         self.mappings.len()
     }
 
-    /// Number of mappings that have a `sync_cmd` configured. Used by the
+    /// Number of mappings that have a `warm_cmd` configured. Used by the
     /// "sync skipped" diagnostic.
     pub fn sync_mapping_count(&self) -> usize {
         self.mappings
             .iter()
-            .filter(|mapping| mapping.sync_cmd.is_some())
+            .filter(|mapping| mapping.warm_cmd.is_some())
             .count()
     }
 
@@ -136,9 +136,9 @@ impl UriResolver {
     /// without re-parsing the original config.
     pub fn sync_config(&self, index: usize) -> Option<SyncConfigRef<'_>> {
         self.mappings.get(index).map(|mapping| SyncConfigRef {
-            cmd: mapping.sync_cmd.as_deref(),
-            required: mapping.sync_required,
-            timeout: mapping.sync_timeout,
+            cmd: mapping.warm_cmd.as_deref(),
+            required: mapping.warm_required,
+            timeout: mapping.warm_timeout,
             verify_cmd: mapping.verify_cmd.as_deref(),
         })
     }
@@ -493,9 +493,9 @@ mod tests {
             mappings: Some(vec![PartialUriMapping {
                 prefix: Some("scheme://".to_string()),
                 root: Some("./r".to_string()),
-                sync_cmd: Some(vec!["echo".to_string(), "{path}".to_string()]),
-                sync_required: Some(true),
-                sync_timeout: Some(60),
+                warm_cmd: Some(vec!["echo".to_string(), "{path}".to_string()]),
+                warm_required: Some(true),
+                warm_timeout: Some(60),
                 ..Default::default()
             }]),
         auto_verify: None,

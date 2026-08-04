@@ -32,18 +32,18 @@ pub enum DiagnosticCode {
     /// configured. The diagnostic includes a hint pointing the user at
     /// `.downlint.toml`. Suppressed with `--no-uri-hints`.
     DNL006,
-    /// Info-level: a `[uri.mappings]` entry has a `sync_cmd` configured but
+    /// Info-level: a `[uri.mappings]` entry has a `warm_cmd` configured but
     /// the run did not pass `--allow-uri-sync`. The diagnostic is emitted at
     /// most once per mapping per run; it is purely informational and is also
     /// suppressed when the user has set `--min-severity` to exclude Info.
     DNL007,
-    /// Info-level: a URI mapping's `sync_cmd` ran but failed (or timed out)
+    /// Info-level: a URI mapping's `warm_cmd` ran but failed (or timed out)
     /// and the file is still missing. Only emitted for mappings with
-    /// `sync_required = false` (mappings with `sync_required = true` already
+    /// `warm_required = false` (mappings with `warm_required = true` already
     /// produce a hard DNL002 broken link). Lets users distinguish a
     /// "soft" sync failure from a real missing file.
     DNL008,
-    /// Info-level: a URI mapping's `sync_cmd` would have produced an arg list
+    /// Info-level: a URI mapping's `warm_cmd` would have produced an arg list
     /// exceeding the per-batch byte cap (default 128 KiB). The runner fell
     /// back to per-file spawning for that mapping. Emitted at most once per
     /// mapping per run, similar to DNL007.
@@ -117,7 +117,7 @@ pub fn check_diagnostics(
             .uri
             .mappings
             .iter()
-            .filter(|mapping| mapping.sync_cmd.is_some())
+            .filter(|mapping| mapping.warm_cmd.is_some())
             .count();
         if sync_count > 0
             && let Some(diagnostic) = rules::uri_sync_skipped(
@@ -128,7 +128,7 @@ pub fn check_diagnostics(
                     .uri
                     .mappings
                     .iter()
-                    .filter(|mapping| mapping.sync_cmd.is_some())
+                    .filter(|mapping| mapping.warm_cmd.is_some())
                     .map(|mapping| mapping.prefix.as_str())
                     .collect::<Vec<_>>(),
             )

@@ -30,12 +30,20 @@ impl Default for UriConfig {
 pub struct UriMapping {
     pub prefix: String,
     pub root: String,
-    pub sync_cmd: Option<Vec<String>>,
-    pub sync_required: bool,
-    pub sync_timeout: u32,
-    /// Optional second-stage command that runs after `sync_cmd` succeeds.
+    /// Command to warm the file locally (e.g. `mdutil --enforce-locals {path}`)
+    /// before validation. Renamed from `warm_cmd` per RFC 0008. `{path}` is
+    /// substituted with the resolved absolute file path; the command runs
+    /// once per file (or batched per `batch_size`, see RFC 0007).
+    pub warm_cmd: Option<Vec<String>>,
+    /// When true, a failed `warm_cmd` causes the link to be reported as
+    /// broken. Renamed from `warm_required` per RFC 0008.
+    pub warm_required: bool,
+    /// Per-invocation deadline in seconds. Renamed from `warm_timeout` per
+    /// RFC 0008.
+    pub warm_timeout: u32,
+    /// Optional second-stage command that runs after `warm_cmd` succeeds.
     /// Exits 0 → file is real; non-zero → treat as a placeholder (i.e.
-    /// Missing). `{path}` substitution works identically to `sync_cmd`.
+    /// Missing). `{path}` substitution works identically to `warm_cmd`.
     pub verify_cmd: Option<Vec<String>>,
 }
 
@@ -51,9 +59,9 @@ pub struct PartialUriConfig {
 pub struct PartialUriMapping {
     pub prefix: Option<String>,
     pub root: Option<String>,
-    pub sync_cmd: Option<Vec<String>>,
-    pub sync_required: Option<bool>,
-    pub sync_timeout: Option<u32>,
+    pub warm_cmd: Option<Vec<String>>,
+    pub warm_required: Option<bool>,
+    pub warm_timeout: Option<u32>,
     pub verify_cmd: Option<Vec<String>>,
 }
 
@@ -86,20 +94,20 @@ pub fn finalize_mapping(
         .root
         .filter(|value| !value.is_empty())
         .ok_or_else(|| validation_at(index, "uri.mappings[*].root is required"))?;
-    let sync_timeout = partial.sync_timeout.unwrap_or(30);
-    if sync_timeout == 0 {
+    let warm_timeout = partial.warm_timeout.unwrap_or(30);
+    if warm_timeout == 0 {
         return Err(validation_at(
             index,
-            "uri.mappings[*].sync_timeout must be > 0",
+            "uri.mappings[*].warm_timeout must be > 0",
         ));
     }
 
     Ok(UriMapping {
         prefix,
         root,
-        sync_cmd: partial.sync_cmd,
-        sync_required: partial.sync_required.unwrap_or(false),
-        sync_timeout,
+        warm_cmd: partial.warm_cmd,
+        warm_required: partial.warm_required.unwrap_or(false),
+        warm_timeout: warm_timeout,
         verify_cmd: partial.verify_cmd,
     })
 }
@@ -158,16 +166,16 @@ mod tests {
     fn partial(
         prefix: Option<&str>,
         root: Option<&str>,
-        sync_cmd: Option<Vec<String>>,
-        sync_required: Option<bool>,
-        sync_timeout: Option<u32>,
+        warm_cmd: Option<Vec<String>>,
+        warm_required: Option<bool>,
+        warm_timeout: Option<u32>,
     ) -> PartialUriMapping {
         PartialUriMapping {
             prefix: prefix.map(|value| value.to_string()),
             root: root.map(|value| value.to_string()),
-            sync_cmd,
-            sync_required,
-            sync_timeout,
+            warm_cmd,
+            warm_required,
+            warm_timeout,
             verify_cmd: None,
         }
     }
@@ -186,13 +194,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cfg.prefix, "onedrive://work/");
-        assert!(!cfg.sync_required);
-        assert_eq!(cfg.sync_timeout, 30);
-        assert!(cfg.sync_cmd.is_none());
+        assert!(!cfg.warm_required);
+        assert_eq!(cfg.warm_timeout, 30);
+        assert!(cfg.warm_cmd.is_none());
     }
 
     #[test]
-    fn sync_required_and_timeout_override_defaults() {
+    fn warm_required_and_timeout_override_defaults() {
         let cfg = finalize_mapping(
             0,
             partial(
@@ -204,10 +212,10 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(cfg.sync_required);
-        assert_eq!(cfg.sync_timeout, 60);
+        assert!(cfg.warm_required);
+        assert_eq!(cfg.warm_timeout, 60);
         assert_eq!(
-            cfg.sync_cmd,
+            cfg.warm_cmd,
             Some(vec!["aws".into(), "s3".into(), "cp".into(), "{path}".into()])
         );
     }
@@ -256,7 +264,7 @@ mod tests {
         .unwrap_err();
         match error {
             UriConfigError::Validation(message) => {
-                assert!(message.contains("sync_timeout"));
+                assert!(message.contains("warm_timeout"));
             }
         }
     }

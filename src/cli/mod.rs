@@ -30,7 +30,8 @@ struct Cli {
 enum Command {
     Check(CheckArgs),
     Server(ServerArgs),
-    Sync(SyncArgs),
+    #[command(name = "warm-uri-mappings", visible_alias = "warm-uri", about = "Warm local copies of files referenced by [uri.mappings] without running validation")]
+    WarmUri(SyncArgs),
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -51,7 +52,7 @@ struct CheckArgs {
     watch: bool,
     #[arg(long)]
     stdin: bool,
-    /// Permit subprocess execution of `sync_cmd` entries defined under
+    /// Permit subprocess execution of `warm_cmd` entries defined under
     /// `[uri.mappings]`. Without this flag, sync is skipped and a one-time
     /// info diagnostic is emitted per configured mapping. Note: enabling this
     /// flag means `.downlint.toml` controls which commands run.
@@ -61,7 +62,7 @@ struct CheckArgs {
     /// diagnostic itself is still emitted.
     #[arg(long = "no-uri-hints", action = ArgAction::SetTrue)]
     no_uri_hints: bool,
-    /// Batch size for per-file `sync_cmd` invocations across external
+    /// Batch size for per-file `warm_cmd` invocations across external
     /// mappings. Controls how many `{path}` placeholders are fanned out per
     /// spawned subprocess. Lower values reduce memory; higher values reduce
     /// fork overhead.
@@ -76,7 +77,7 @@ struct ServerArgs {
     verbose: u8,
     #[arg(long)]
     wait_for_debugger: bool,
-    /// Permit subprocess execution of `sync_cmd` entries defined under
+    /// Permit subprocess execution of `warm_cmd` entries defined under
     /// `[uri.mappings]`. Without this flag, sync is skipped and a one-time
     /// info diagnostic is emitted per configured mapping. Note: enabling this
     /// flag means `.downlint.toml` controls which commands run.
@@ -86,7 +87,7 @@ struct ServerArgs {
     /// diagnostic itself is still emitted.
     #[arg(long = "no-uri-hints", action = ArgAction::SetTrue)]
     no_uri_hints: bool,
-    /// Batch size for per-file `sync_cmd` invocations across external
+    /// Batch size for per-file `warm_cmd` invocations across external
     /// mappings.
     #[arg(long = "uri-sync-batch-size", default_value_t = 50)]
     uri_sync_batch_size: usize,
@@ -98,11 +99,12 @@ struct SyncArgs {
     root: Option<PathBuf>,
     #[arg(long, short = 'v', default_value_t = 2)]
     verbose: u8,
-    /// REQUIRED for sync. Without this flag, the subcommand exits 2 with a
-    /// clear error message. Same semantics as `downlint check --allow-uri-sync`.
+    /// REQUIRED for warming. Without this flag, the subcommand exits 2
+    /// with a clear error message. Same safety gate as
+    /// `downlint check --allow-uri-sync`.
     #[arg(long = "allow-uri-sync", action = ArgAction::SetTrue)]
     allow_uri_sync: bool,
-    /// Batch size for per-file `sync_cmd` invocations across external mappings.
+    /// Batch size for per-file `warm_cmd` invocations across external mappings.
     #[arg(long = "uri-sync-batch-size", default_value_t = 50)]
     uri_sync_batch_size: usize,
 }
@@ -138,7 +140,7 @@ pub async fn run() -> i32 {
             init_tracing(args.verbose);
             check::run_check(map_check_args(args, cli.quiet)).await
         }
-        Some(Command::Sync(args)) => {
+        Some(Command::WarmUri(args)) => {
             init_tracing(args.verbose);
             sync::run_sync(map_sync_args(args, cli.quiet)).await
         }

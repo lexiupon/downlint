@@ -379,7 +379,7 @@ struct ResolveRefContext<'a> {
 ///   when `[uri]` is unconfigured or `--no-uri-hints` is set.
 /// - `Resolved` — run sync (if configured + allowed), then either resolve
 ///   (file present) or emit a broken-link diagnostic. Sync failure with
-///   `sync_required = true` also produces a broken diagnostic; otherwise it
+///   `warm_required = true` also produces a broken diagnostic; otherwise it
 ///   produces a warning-level status and validation continues.
 ///
 /// `anchor` is the heading/anchor portion of the link (e.g. `#section`).
@@ -486,11 +486,11 @@ fn resolve_uri_target(
                 // Sync ran (or would have, if `--allow-uri-sync` had been
                 // passed) and the file is still missing, or sync itself
                 // failed/timed out. The link is reported as broken in all
-                // cases. When the mapping has `sync_required = false`, we
+                // cases. When the mapping has `warm_required = false`, we
                 // additionally flag this as a soft failure so the
                 // diagnostics layer can emit DNL008 SyncFailureWarning
                 // alongside the regular DNL002 broken link.
-                let sync_required = resolver
+                let warm_required = resolver
                     .sync_config(mapping_index)
                     .map(|sync| sync.required)
                     .unwrap_or(false);
@@ -503,7 +503,7 @@ fn resolve_uri_target(
                     crate::resolution::uri_sync::PathStatus::SyncFailed
                         | crate::resolution::uri_sync::PathStatus::SyncTimedOut
                 );
-                let soft_failure = !sync_required && sync_ran && sync_failed;
+                let soft_failure = !warm_required && sync_ran && sync_failed;
                 ctx.graph.unresolved_references.push(UnresolvedReference {
                     source_path: doc.path.clone(),
                     occurrence_id: symbol.id,

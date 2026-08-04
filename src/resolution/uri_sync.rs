@@ -1,4 +1,4 @@
-//! Batched + cached execution of `sync_cmd` entries declared under
+//! Batched + cached execution of `warm_cmd` entries declared under
 //! `[uri.mappings]` in `.downlint.toml`.
 //!
 //! Sync is **per-file** (`{path}` placeholder receives one resolved absolute
@@ -38,9 +38,9 @@ pub enum PathStatus {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SyncDecision {
     Ran,
-    /// Mapping has a `sync_cmd` but the run did not have `--allow-uri-sync`.
+    /// Mapping has a `warm_cmd` but the run did not have `--allow-uri-sync`.
     Skipped,
-    /// Mapping has no `sync_cmd` at all — nothing to skip.
+    /// Mapping has no `warm_cmd` at all — nothing to skip.
     NotApplicable,
 }
 
@@ -50,7 +50,7 @@ pub struct CachedPathResult {
     pub decision: SyncDecision,
     pub status: PathStatus,
     /// True when the configured `verify_cmd` (or auto-detection heuristics)
-    /// marked the file as a cloud placeholder. Even if `sync_cmd` succeeded,
+    /// marked the file as a cloud placeholder. Even if `warm_cmd` succeeded,
     /// a placeholder makes the link unresolved. Lets the diagnostics layer
     /// render a more specific message.
     pub verify_was_placeholder: bool,
@@ -110,7 +110,7 @@ pub struct SyncRunner<'a> {
     resolver: &'a UriResolver,
     allow_sync: bool,
     /// Reserved for Phase 2 (fanning out multiple `{path}` placeholders per
-    /// single subprocess invocation). Currently the runner invokes `sync_cmd`
+    /// single subprocess invocation). Currently the runner invokes `warm_cmd`
     /// once per file, which is a strict subset of the eventual behavior.
     /// Field is kept (with `#[allow(dead_code)]`) so callers can already
     /// plumb the value through.
@@ -175,7 +175,7 @@ impl<'a> SyncRunner<'a> {
         result
     }
 
-    /// Returns `Skipped` if the mapping has a configured `sync_cmd` but the
+    /// Returns `Skipped` if the mapping has a configured `warm_cmd` but the
     /// CLI flag is off; `NotApplicable` if there's nothing to run; `Ran` if
     /// sync will execute.
     pub fn decision_for_mapping(&self, mapping_index: usize) -> SyncDecision {
@@ -192,8 +192,8 @@ impl<'a> SyncRunner<'a> {
         }
     }
 
-    /// Spawn the configured `sync_cmd` once, substituting `{path}` with the
-    /// resolved absolute path. Honors `sync_timeout`. Returns `SyncFailed`
+    /// Spawn the configured `warm_cmd` once, substituting `{path}` with the
+    /// resolved absolute path. Honors `warm_timeout`. Returns `SyncFailed`
     /// for non-zero exits, `SyncTimedOut` on deadline expiry.
     fn run_sync(&self, mapping_index: usize, path: &PathBuf) -> PathStatus {
         let Some(sync) = self.resolver.sync_config(mapping_index) else {
@@ -235,7 +235,7 @@ impl<'a> SyncRunner<'a> {
         }
     }
 
-    /// Run `sync_cmd` then `verify_cmd` (and auto-detection heuristics) to
+    /// Run `warm_cmd` then `verify_cmd` (and auto-detection heuristics) to
     /// decide between `Present` and `Missing`. The tuple return carries the
     /// final status plus whether verification specifically flagged the path
     /// as a placeholder (so diagnostics can attribute the failure).
@@ -255,7 +255,7 @@ impl<'a> SyncRunner<'a> {
         }
     }
 
-    /// Run the configured `verify_cmd` after `sync_cmd` succeeds, falling
+    /// Run the configured `verify_cmd` after `warm_cmd` succeeds, falling
     /// back to auto-detection heuristics when no `verify_cmd` is set.
     pub fn run_verify(&self, mapping_index: usize, path: &PathBuf) -> VerifyOutcome {
         let Some(sync) = self.resolver.sync_config(mapping_index) else {
@@ -530,7 +530,7 @@ fn run_batch_with_stdin(
 }
 
 /// Fallback path: invoked when the positional argv would exceed the byte
-/// cap. Spawns `sync_cmd` once per path (the original Phase-1 behavior).
+/// cap. Spawns `warm_cmd` once per path (the original Phase-1 behavior).
 fn batch_per_file(
     runner: &SyncRunner<'_>,
     mapping_index: usize,
@@ -589,23 +589,23 @@ mod tests {
     use crate::resolution::uri::UriResolver;
     use tempfile::TempDir;
 
-    /// Build a config with one optional mapping whose `sync_cmd` is `["true"]`
-    /// (POSIX no-op) and `sync_required = required`.
+    /// Build a config with one optional mapping whose `warm_cmd` is `["true"]`
+    /// (POSIX no-op) and `warm_required = required`.
     fn resolver_with(
         tmp: &TempDir,
         prefix: &str,
         root: &str,
-        sync_cmd: Option<Vec<String>>,
-        sync_required: bool,
-        sync_timeout: u32,
+        warm_cmd: Option<Vec<String>>,
+        warm_required: bool,
+        warm_timeout: u32,
     ) -> UriResolver {
         let uri = finalize_uri(PartialUriConfig {
             mappings: Some(vec![PartialUriMapping {
                 prefix: Some(prefix.to_string()),
                 root: Some(root.to_string()),
-                sync_cmd,
-                sync_required: Some(sync_required),
-                sync_timeout: Some(sync_timeout),
+                warm_cmd,
+                warm_required: Some(warm_required),
+                warm_timeout: Some(warm_timeout),
                 verify_cmd: None,
             }]),
             auto_verify: None,
@@ -619,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    fn decision_for_mapping_without_sync_cmd_is_not_applicable() {
+    fn decision_for_mapping_without_warm_cmd_is_not_applicable() {
         let tmp = TempDir::new().unwrap();
         let resolver = resolver_with(
             &tmp,
@@ -637,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn decision_for_mapping_with_sync_cmd_but_no_flag_is_skipped() {
+    fn decision_for_mapping_with_warm_cmd_but_no_flag_is_skipped() {
         let tmp = TempDir::new().unwrap();
         let resolver = resolver_with(
             &tmp,
@@ -652,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn decision_for_mapping_with_sync_cmd_and_flag_is_ran() {
+    fn decision_for_mapping_with_warm_cmd_and_flag_is_ran() {
         let tmp = TempDir::new().unwrap();
         let resolver = resolver_with(
             &tmp,
@@ -688,7 +688,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn run_for_with_running_sync_cmd_marks_present_after_run() {
+    fn run_for_with_running_warm_cmd_marks_present_after_run() {
         let tmp = TempDir::new().unwrap();
         let target = tmp.path().join("synced.txt");
         let script = tmp.path().join("create.sh");
@@ -725,7 +725,7 @@ mod tests {
     }
 
     #[test]
-    fn run_for_with_failing_sync_cmd_returns_sync_failed() {
+    fn run_for_with_failing_warm_cmd_returns_sync_failed() {
         let tmp = TempDir::new().unwrap();
         let resolver = resolver_with(
             &tmp,

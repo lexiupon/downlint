@@ -119,7 +119,7 @@ pub fn uri_no_mapping_hint(unresolved: &[UnresolvedReference]) -> Option<Diagnos
 }
 
 /// One-time info diagnostic: emitted at most once per run when there are
-/// `[uri.mappings]` entries with `sync_cmd` configured but the CLI flag
+/// `[uri.mappings]` entries with `warm_cmd` configured but the CLI flag
 /// `--allow-uri-sync` was not passed. Note this is advisory — the per-link
 /// behavior is decided in the resolution layer; this just informs the user
 /// why cloud-synced assets may not appear locally.
@@ -144,15 +144,17 @@ pub fn uri_sync_skipped(source_path: &Path, mapping_count: usize, targets: &[&st
         severity: DiagnosticSeverity::Info,
         code: DiagnosticCode::DNL007,
         message: format!(
-            "Skipped sync for {mapping_count} [uri.mappings] entry/entries (--allow-uri-sync not passed). Affected prefixes: {listed}{more}.\n\
-             Re-run with --allow-uri-sync to execute their `sync_cmd` (per-file).",
+            "URI mappings skipped: {mapping_count} {entry_word} {have_word} a `warm_cmd` but --allow-uri-sync was not passed. Affected prefixes: {listed}{more}.\n\
+             Run 'downlint warm-uri-mappings --allow-uri-sync' to warm them.",
+            entry_word = if mapping_count == 1 { "entry" } else { "entries" },
+            have_word = if mapping_count == 1 { "has" } else { "have" },
         ),
         related: Vec::new(),
     })
 }
 
 /// Info-level: emitted once per source file when at least one of its URI
-/// references ended up as a "soft" sync failure (`sync_required = false` +
+/// references ended up as a "soft" sync failure (`warm_required = false` +
 /// sync ran but did not produce a usable file). Capped at 5 mappings per
 /// file to mirror the obsidian-prefix hint pattern.
 pub fn sync_failure_warning(unresolved: &[UnresolvedReference]) -> Option<Diagnostic> {
@@ -163,7 +165,7 @@ pub fn sync_failure_warning(unresolved: &[UnresolvedReference]) -> Option<Diagno
         severity: DiagnosticSeverity::Info,
         code: DiagnosticCode::DNL008,
         message: format!(
-            "Sync completed but '{}' is still missing on disk. The link is reported as broken; with `sync_required = false`, this is a soft warning rather than a hard failure.",
+            "Sync completed but '{}' is still missing on disk. The link is reported as broken; with `warm_required = false`, this is a soft warning rather than a hard failure.",
             first.target,
         ),
         related: Vec::new(),

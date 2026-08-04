@@ -22,7 +22,7 @@ fn write_shell_script(dir: &std::path::Path, name: &str, body: &str) -> std::pat
 }
 
 #[test]
-fn sync_without_flag_exits_with_error() {
+fn warm_without_flag_exits_with_error() {
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join(".downlint.toml"),
@@ -30,14 +30,14 @@ fn sync_without_flag_exits_with_error() {
 [[uri.mappings]]
 prefix = "scheme://"
 root = "./assets"
-sync_cmd = ["true"]
+warm_cmd = ["true"]
 "#,
     )
     .unwrap();
 
     bin()
         .current_dir(tmp.path())
-        .arg("sync")
+        .arg("warm-uri-mappings")
         .assert()
         .failure()
         .code(2)
@@ -45,7 +45,7 @@ sync_cmd = ["true"]
 }
 
 #[test]
-fn sync_with_flag_no_targets_is_noop() {
+fn warm_with_flag_no_targets_is_noop() {
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join(".downlint.toml"),
@@ -53,7 +53,7 @@ fn sync_with_flag_no_targets_is_noop() {
 [[uri.mappings]]
 prefix = "scheme://"
 root = "./assets"
-sync_cmd = ["true"]
+warm_cmd = ["true"]
 "#,
     )
     .unwrap();
@@ -61,7 +61,7 @@ sync_cmd = ["true"]
     // No markdown files referencing the URI; nothing to sync.
     bin()
         .current_dir(tmp.path())
-        .args(["sync", "--allow-uri-sync"])
+        .args(["warm-uri-mappings", "--allow-uri-sync"])
         .assert()
         .success()
         .code(0);
@@ -69,7 +69,7 @@ sync_cmd = ["true"]
 
 #[cfg(unix)]
 #[test]
-fn sync_runs_sync_cmd_and_creates_files() {
+fn warm_runs_warm_cmd_and_creates_files() {
     let tmp = TempDir::new().unwrap();
     let script = write_shell_script(
         tmp.path(),
@@ -83,7 +83,7 @@ fn sync_runs_sync_cmd_and_creates_files() {
 [[uri.mappings]]
 prefix = "scheme://"
 root = "./assets"
-sync_cmd = ["{}", "{{path}}"]
+warm_cmd = ["{}", "{{path}}"]
 "#,
             script.to_string_lossy()
         ),
@@ -98,7 +98,7 @@ sync_cmd = ["{}", "{{path}}"]
 
     bin()
         .current_dir(tmp.path())
-        .args(["sync", "--allow-uri-sync"])
+        .args(["warm-uri-mappings", "--allow-uri-sync"])
         .assert()
         .success()
         .code(0)
@@ -111,7 +111,7 @@ sync_cmd = ["{}", "{{path}}"]
 
 #[cfg(unix)]
 #[test]
-fn sync_exit_code_reflects_failure() {
+fn warm_exit_code_reflects_failure() {
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join(".downlint.toml"),
@@ -119,7 +119,7 @@ fn sync_exit_code_reflects_failure() {
 [[uri.mappings]]
 prefix = "scheme://"
 root = "./assets"
-sync_cmd = ["false"]
+warm_cmd = ["false"]
 "#,
     )
     .unwrap();
@@ -132,7 +132,7 @@ sync_cmd = ["false"]
 
     bin()
         .current_dir(tmp.path())
-        .args(["sync", "--allow-uri-sync"])
+        .args(["warm-uri-mappings", "--allow-uri-sync"])
         .assert()
         .failure()
         .code(1)

@@ -61,9 +61,9 @@ impl SyncOutcome {
 fn run_sync_once(options: &SyncOptions) -> Result<SyncOutcome, ConfigError> {
     if !options.allow_uri_sync {
         return Err(ConfigError::Validation(
-            "'sync' requires --allow-uri-sync (safety gate). \
+            "'warm-uri-mappings' requires --allow-uri-sync (safety gate). \
              Without this flag, .downlint.toml could execute configured \
-             sync_cmd without explicit user consent."
+             warm_cmd without explicit user consent."
                 .into(),
         ));
     }

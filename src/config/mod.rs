@@ -566,9 +566,9 @@ mod tests {
 [[uri.mappings]]
 prefix = "onedrive://work/"
 root = "~/Library/CloudStorage/OneDrive-Work/assets"
-sync_cmd = ["mdutil", "--enforce-locals", "{path}"]
-sync_required = true
-sync_timeout = 45
+warm_cmd = ["mdutil", "--enforce-locals", "{path}"]
+warm_required = true
+warm_timeout = 45
 "#,
         )
         .unwrap();
@@ -579,10 +579,10 @@ sync_timeout = 45
         let mapping = &config.uri.mappings[0];
         assert_eq!(mapping.prefix, "onedrive://work/");
         assert_eq!(mapping.root, "~/Library/CloudStorage/OneDrive-Work/assets");
-        assert!(mapping.sync_required);
-        assert_eq!(mapping.sync_timeout, 45);
+        assert!(mapping.warm_required);
+        assert_eq!(mapping.warm_timeout, 45);
         assert_eq!(
-            mapping.sync_cmd.as_deref(),
+            mapping.warm_cmd.as_deref(),
             Some(
                 [
                     "mdutil".to_string(),
@@ -637,7 +637,7 @@ root = "./bar"
 [[uri.mappings]]
 prefix = "scheme://"
 root = "./foo"
-sync_timeout = 0
+warm_timeout = 0
 "#,
         )
         .unwrap();
