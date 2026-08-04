@@ -30,9 +30,9 @@ mirrored from S3) can be validated like any other link.
 |---|---|---|---|
 | `prefix` | string | *(required)* | URI prefix to match. Trailing `/` is optional and normalized automatically. |
 | `root` | string | *(required)* | Local filesystem path. Supports `~`, env vars (`$VAR`, `${VAR}`), and relative-to-config-dir paths. |
-| `sync_cmd` | string[] | `null` | Per-file sync command; `{path}` is replaced with the resolved absolute file. Requires `--allow-uri-sync`. |
-| `sync_required` | bool | `false` | If `true`, sync failure makes the link broken. |
-| `sync_timeout` | int | `30` | Seconds to wait for `sync_cmd` per invocation. |
+| `warm_cmd` | string[] | `null` | Per-file warming command; `{path}` is replaced with the resolved absolute file. Requires `--allow-uri-sync`. |
+| `warm_required` | bool | `false` | If `true`, warming failure makes the link broken. |
+| `warm_timeout` | int | `30` | Seconds to wait for `warm_cmd` per invocation. |
 
 Mappings are checked in declaration order — put more-specific prefixes first.
 
@@ -44,8 +44,8 @@ OneDrive (macOS):
 [[uri.mappings]]
 prefix = "onedrive://work/"
 root = "~/Library/CloudStorage/OneDrive-Work/assets"
-sync_cmd = ["mdutil", "--enforce-locals", "{path}"]
-sync_required = false
+warm_cmd = ["mdutil", "--enforce-locals", "{path}"]
+warm_required = false
 ```
 
 S3 mirror (via NAS):
@@ -54,10 +54,10 @@ S3 mirror (via NAS):
 [[uri.mappings]]
 prefix = "s3://reports/"
 root = "/Volumes/NAS/s3-reports"
-sync_cmd = ["aws", "s3", "cp", "{path}", "/dev/null"]
+warm_cmd = ["aws", "s3", "cp", "{path}", "/dev/null"]
 ```
 
-Local-only, no sync:
+Local-only, no warming:
 
 ```toml
 [[uri.mappings]]
@@ -69,27 +69,27 @@ root = "./internal-docs"
 
 | Flag | Effect |
 |---|---|
-| `--allow-uri-sync` | Permit subprocess execution of `sync_cmd` entries. **Security-sensitive**: anyone who can commit `.downlint.toml` can configure a `sync_cmd` to run on your machine. Without this flag, sync is skipped and a `DNL007` info diagnostic is emitted per mapping. |
+| `--allow-uri-sync` | Permit subprocess execution of `warm_cmd` entries. **Security-sensitive**: anyone who can commit `.downlint.toml` can configure a `warm_cmd` to run on your machine. Without this flag, warming is skipped and a `DNL007` info diagnostic is emitted per mapping. |
 | `--no-uri-hints` | Suppress the `DNL006` "no URI mapping found" hint while keeping the broken-link diagnostic. |
-| `--uri-sync-batch-size` | Batch size for sync invocations (default 50). Lower reduces memory, higher reduces fork overhead. |
+| `--uri-sync-batch-size` | Batch size for warming invocations (default 50). Lower reduces memory, higher reduces fork overhead. |
 
 #### Diagnostics
 
 | Code | Severity | Meaning |
 |---|---|---|
-| `DNL002` | error (wiki) / warning (inline) | Broken link — URI mapped to a missing file or sync_failed with `sync_required = true`. |
+| `DNL002` | error (wiki) / warning (inline) | Broken link — URI mapped to a missing file or `warm_cmd` failed with `warm_required = true`. |
 | `DNL006` | info | No `[uri.mappings]` prefix matched the URI target. Configure `[[uri.mappings]]` or set `--no-uri-hints`. |
-| `DNL007` | info | `sync_cmd` is configured but `--allow-uri-sync` was not passed. |
-| `DNL008` | info | Sync ran (`sync_required = false`) but the file is still missing — a soft warning alongside `DNL002`. |
-| `DNL009` | info | A `sync_cmd` batch's argv exceeded 128 KiB and the runner fell back to per-file. Emitted once per mapping per run. |
+| `DNL007` | info | `warm_cmd` is configured but `--allow-uri-sync` was not passed. The diagnostic message names `downlint warm-uri-mappings` so you can warm them explicitly. |
+| `DNL008` | info | Warming ran (`warm_required = false`) but the file is still missing — a soft warning alongside `DNL002`. |
+| `DNL009` | info | A `warm_cmd` batch's argv exceeded 128 KiB and the runner fell back to per-file. Emitted once per mapping per run. |
 
-### `[uri]` Phase 2
+### `[uri]` Phase 2 — verify_cmd and heuristics
 
 `[uri.mappings]` gained two new keys and one section-level key:
 
 | Key | Scope | Default | Description |
 |---|---|---|---|
-| `verify_cmd` | per-mapping | absent | Post-sync placeholder check. Exit 0 = real file, non-zero = placeholder. Honors `{path}` substitution. |
+| `verify_cmd` | per-mapping | absent | Post-warm placeholder check. Exit 0 = real file, non-zero = placeholder. Honors `{path}` substitution. |
 | `auto_verify` | `[uri]` | `"on"` | Toggles the built-in heuristics. Values: `"on"`, `"off"`, `"onedrive-only"`, `"icloud-only"`. |
 
 The heuristics detect OneDrive placeholders (resource forks on macOS),
@@ -103,10 +103,10 @@ OneDrive with `verify_cmd`:
 [[uri.mappings]]
 prefix = "onedrive://work/"
 root = "~/Library/CloudStorage/OneDrive-Work/assets"
-sync_cmd = ["mdutil", "--enforce-locals", "{path}"]
+warm_cmd = ["mdutil", "--enforce-locals", "{path}"]
 # `file` exits 0 only when the file is fully downloaded.
 verify_cmd = ["file", "{path}"]
-sync_required = false
+warm_required = false
 ```
 
 `rclone` batch with stdin:
@@ -116,19 +116,20 @@ sync_required = false
 prefix = "s3://reports/"
 root = "/Volumes/NAS/s3-reports"
 # `{paths}` triggers stdin piping (one path per line).
-sync_cmd = ["rclone", "copy", ":http:/s3.example/reports/{path}", "{path}"]
+warm_cmd = ["rclone", "copy", ":http:/s3.example/reports/{path}", "{path}"]
 ```
 
 Note: the simple `aws s3 cp` per-file pattern still works — batch fan-out
 is automatic when `batch_size > 1`. Only use `{paths}` for tools that
 natively read a list from stdin.
 
-### `downlint sync` subcommand
+### `downlint warm-uri-mappings` subcommand
 
-Cache warming without validation:
+Cache warming without validation. Useful as a one-shot step before running
+`check` so that all external files are hydrated locally first:
 
 ```
-$ downlint sync --allow-uri-sync
+$ downlint warm-uri-mappings --allow-uri-sync
 Sync summary (76ms):
   mapping[0]: total=42 synced=42 failed=0 missing=0 timed_out=0
 $ echo $?
@@ -140,10 +141,12 @@ The subcommand:
 - Always requires `--allow-uri-sync` (exits 2 with a clear error otherwise).
 - Walks every URI-scheme link target (both resolved and unresolved) in the
   workspace.
-- Batches per mapping (positional or stdin, depending on `sync_cmd`).
+- Batches per mapping (positional or stdin, depending on `warm_cmd`).
 - Does **not** run validation, does **not** emit `DNL002` broken-link
   diagnostics.
 - Exit code 0 on success, 1 on any per-path failure, 2 on gate / config.
+
+A short alias `downlint warm-uri` is also accepted.
 
 ### LSP `--allow-uri-sync`
 
@@ -155,10 +158,35 @@ $ downlint server --allow-uri-sync --no-uri-hints --uri-sync-batch-size 10
 ```
 
 These thread into `ServerState.uri_opts` at startup. Without
-`--allow-uri-sync`, the LSP never runs `sync_cmd`. To change flags you
+`--allow-uri-sync`, the LSP never runs `warm_cmd`. To change flags you
 must restart the server (no `workspace/didChangeConfiguration` in Phase 2).
 
-See [rfc/0007-uri-mapping-phase-2.md](./rfc/0007-uri-mapping-phase-2.md)
-for the Phase 2 specification and the original
-[rfc/0006-external-asset-uri-mapping.md](./rfc/0006-external-asset-uri-mapping.md)
-for Phase 1.
+### Naming history
+
+The config keys were originally `sync_cmd` / `sync_required` / `sync_timeout`
+and the subcommand was `downlint sync`. They were renamed in
+[RFC 0008](./rfc/0008-uri-warm-rename.md) because "sync" carries misleading
+two-way-sync connotations. The new vocabulary is "warm" — pulling files
+locally so subsequent validation is fast.
+
+Existing configs using `sync_cmd` etc. produce a clear parse error:
+
+```
+unknown field `sync_cmd`, expected one of `prefix`, `root`,
+`warm_cmd`, `warm_required`, `warm_timeout`, `verify_cmd`
+```
+
+Migration is a single `sed`:
+
+```sh
+sed -i.bak '
+  s/^sync_cmd = /warm_cmd = /
+  s/^sync_required = /warm_required = /
+  s/^sync_timeout = /warm_timeout = /
+' .downlint.toml
+```
+
+See [rfc/0006-external-asset-uri-mapping.md](./rfc/0006-external-asset-uri-mapping.md)
+for the Phase 1 specification,
+[rfc/0007-uri-mapping-phase-2.md](./rfc/0007-uri-mapping-phase-2.md) for Phase 2,
+and [rfc/0008-uri-warm-rename.md](./rfc/0008-uri-warm-rename.md) for the rename.

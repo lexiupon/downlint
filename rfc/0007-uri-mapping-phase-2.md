@@ -5,6 +5,14 @@
 **Author**: downlint maintainers
 **Target**: v1.2
 
+> **Note**: this RFC uses `sync_cmd` / `sync_required` / `sync_timeout` and
+> the subcommand name `downlint sync` throughout. Those were renamed to
+> `warm_cmd` / `warm_required` / `warm_timeout` and
+> `downlint warm-uri-mappings` per
+> [RFC 0008](./0008-uri-warm-rename.md). The historical document below
+> reflects the design vocabulary at the time of writing; see the linked RFC
+> for the current user-facing names.
+
 ## Summary
 
 Phase 1 shipped the basic `[uri.mappings]` feature (RFC 0006). This RFC closes

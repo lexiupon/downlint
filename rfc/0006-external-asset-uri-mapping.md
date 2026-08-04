@@ -4,6 +4,12 @@
 
 Draft
 
+> **Note**: this RFC originally used `sync_cmd`, `sync_required`, and
+> `sync_timeout` as config field names. Those were renamed to `warm_cmd`,
+> `warm_required`, and `warm_timeout` per [RFC 0008](./0008-uri-warm-rename.md).
+> The historical document below reflects the original design vocabulary;
+> see the linked RFC for the current user-facing names.
+
 ## Motivation
 
 In `~/kb-work`, large binary assets (PDFs, XLSX files >500KB) have been moved from the
