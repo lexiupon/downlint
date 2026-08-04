@@ -1,3 +1,4 @@
+pub mod auto_verify;
 pub mod conn;
 pub mod path;
 pub mod prefix;

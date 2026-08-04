@@ -40,6 +40,7 @@ struct PrefixMatch {
 #[derive(Clone, Debug)]
 pub struct UriResolver {
     mappings: Vec<CompiledMapping>,
+    auto_verify_mode: super::auto_verify::AutoVerifyMode,
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +51,7 @@ struct CompiledMapping {
     sync_cmd: Option<Vec<String>>,
     sync_required: bool,
     sync_timeout: u32,
+    verify_cmd: Option<Vec<String>>,
 }
 
 impl UriResolver {
@@ -58,6 +60,8 @@ impl UriResolver {
     /// `mappings` are sorted by descending prefix length so that the most
     /// specific prefix wins even if a less-specific one would also match.
     pub fn new(config: &UriConfig, config_dir: &Path) -> Result<Self, UriExpansionError> {
+        let auto_verify_mode = super::auto_verify::AutoVerifyMode::parse(&config.auto_verify)
+            .unwrap_or(super::auto_verify::AutoVerifyMode::On);
         let mut compiled = Vec::with_capacity(config.mappings.len());
         for (index, mapping) in config.mappings.iter().enumerate() {
             let expanded_root = expand_root(&mapping.root, config_dir)
@@ -74,6 +78,7 @@ impl UriResolver {
                 sync_cmd: mapping.sync_cmd.clone(),
                 sync_required: mapping.sync_required,
                 sync_timeout: mapping.sync_timeout,
+                verify_cmd: mapping.verify_cmd.clone(),
             });
         }
         compiled.sort_by(|left, right| {
@@ -82,12 +87,18 @@ impl UriResolver {
                 .len()
                 .cmp(&left.canonical_prefix.len())
         });
-        Ok(Self { mappings: compiled })
+        Ok(Self {
+            mappings: compiled,
+            auto_verify_mode,
+        })
     }
 
     /// Convenience for tests + callers that don't have any mappings configured.
     pub fn empty() -> Self {
-        Self { mappings: Vec::new() }
+        Self {
+            mappings: Vec::new(),
+            auto_verify_mode: super::auto_verify::AutoVerifyMode::On,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -128,7 +139,13 @@ impl UriResolver {
             cmd: mapping.sync_cmd.as_deref(),
             required: mapping.sync_required,
             timeout: mapping.sync_timeout,
+            verify_cmd: mapping.verify_cmd.as_deref(),
         })
+    }
+
+    /// The resolver's auto-detection mode (parsed from `[uri].auto_verify`).
+    pub fn auto_verify_mode(&self) -> super::auto_verify::AutoVerifyMode {
+        self.auto_verify_mode
     }
 
     fn first_match(&self, target: &str) -> Option<PrefixMatch> {
@@ -174,6 +191,7 @@ pub struct SyncConfigRef<'a> {
     pub cmd: Option<&'a [String]>,
     pub required: bool,
     pub timeout: u32,
+    pub verify_cmd: Option<&'a [String]>,
 }
 
 /// Per-mapping expansion failure. Surfaced at startup so misconfigured `root`
@@ -311,6 +329,7 @@ mod tests {
                 root: Some(root.to_string()),
                 ..Default::default()
             }]),
+        auto_verify: None,
         })
         .unwrap()
     }
@@ -399,6 +418,7 @@ mod tests {
                     ..Default::default()
                 },
             ]),
+        auto_verify: None,
         })
         .unwrap();
         let resolver = UriResolver::new(&cfg, dir.path()).unwrap();
@@ -478,6 +498,7 @@ mod tests {
                 sync_timeout: Some(60),
                 ..Default::default()
             }]),
+        auto_verify: None,
         })
         .unwrap();
         let resolver = UriResolver::new(&cfg, dir.path()).unwrap();

@@ -4,9 +4,23 @@ use std::fmt;
 /// Resolved (non-Partial) URI mapping configuration. Holds the parsed entries from
 /// `[[uri.mappings]]` plus the resolved config directory used to expand relative
 /// `root` values. Config errors are surfaced as `UriConfigError::Validation`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct UriConfig {
     pub mappings: Vec<UriMapping>,
+    /// Toggles the built-in placeholder heuristics (OneDrive, iCloud, generic
+    /// size-0+mtime). One of `"on"` (default), `"off"`, `"onedrive-only"`,
+    /// `"icloud-only"`. Stored as a `String` to keep the config layer free
+    /// of platform-specific dependencies; the resolver layer interprets it.
+    pub auto_verify: String,
+}
+
+impl Default for UriConfig {
+    fn default() -> Self {
+        Self {
+            mappings: Vec::new(),
+            auto_verify: "on".to_string(),
+        }
+    }
 }
 
 /// One row of `[[uri.mappings]]`. The config layer owns the raw form; the
@@ -19,12 +33,17 @@ pub struct UriMapping {
     pub sync_cmd: Option<Vec<String>>,
     pub sync_required: bool,
     pub sync_timeout: u32,
+    /// Optional second-stage command that runs after `sync_cmd` succeeds.
+    /// Exits 0 → file is real; non-zero → treat as a placeholder (i.e.
+    /// Missing). `{path}` substitution works identically to `sync_cmd`.
+    pub verify_cmd: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PartialUriConfig {
     pub mappings: Option<Vec<PartialUriMapping>>,
+    pub auto_verify: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -35,6 +54,7 @@ pub struct PartialUriMapping {
     pub sync_cmd: Option<Vec<String>>,
     pub sync_required: Option<bool>,
     pub sync_timeout: Option<u32>,
+    pub verify_cmd: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -80,6 +100,7 @@ pub fn finalize_mapping(
         sync_cmd: partial.sync_cmd,
         sync_required: partial.sync_required.unwrap_or(false),
         sync_timeout,
+        verify_cmd: partial.verify_cmd,
     })
 }
 
@@ -91,7 +112,21 @@ pub fn finalize_uri(partial: PartialUriConfig) -> Result<UriConfig, UriConfigErr
             mappings.push(finalize_mapping(index, entry)?);
         }
     }
-    Ok(UriConfig { mappings })
+    let auto_verify = match partial.auto_verify.as_deref() {
+        None | Some("on") => "on".to_string(),
+        Some("off") | Some("onedrive-only") | Some("icloud-only") => {
+            partial.auto_verify.unwrap()
+        }
+        Some(other) => {
+            return Err(UriConfigError::Validation(format!(
+                "uri.auto_verify must be one of \"on\", \"off\", \"onedrive-only\", \"icloud-only\" (got \"{other}\")"
+            )));
+        }
+    };
+    Ok(UriConfig {
+        mappings,
+        auto_verify,
+    })
 }
 
 /// Project-precedence merge of two partial `[uri]` sections. Project (`high`)
@@ -99,6 +134,7 @@ pub fn finalize_uri(partial: PartialUriConfig) -> Result<UriConfig, UriConfigErr
 pub fn merge_uri(high: PartialUriConfig, low: PartialUriConfig) -> PartialUriConfig {
     PartialUriConfig {
         mappings: high.mappings.or(low.mappings),
+        auto_verify: high.auto_verify.or(low.auto_verify),
     }
 }
 
@@ -115,6 +151,7 @@ mod tests {
     fn mapping_with(mappings: Vec<PartialUriMapping>) -> PartialUriConfig {
         PartialUriConfig {
             mappings: Some(mappings),
+            auto_verify: None,
         }
     }
 
@@ -131,6 +168,7 @@ mod tests {
             sync_cmd,
             sync_required,
             sync_timeout,
+            verify_cmd: None,
         }
     }
 

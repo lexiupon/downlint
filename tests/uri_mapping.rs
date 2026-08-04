@@ -27,7 +27,35 @@ fn config_with_mapping(
             sync_cmd,
             sync_required: Some(sync_required),
             sync_timeout: Some(sync_timeout),
+            verify_cmd: None,
         }]),
+        auto_verify: None,
+    })
+    .unwrap();
+    config.uri = uri;
+    config
+}
+
+/// Like `config_with_mapping` but with an optional `verify_cmd`.
+fn config_with_mapping_and_verify(
+    prefix: &str,
+    root: &str,
+    sync_cmd: Option<Vec<String>>,
+    sync_required: bool,
+    sync_timeout: u32,
+    verify_cmd: Option<Vec<String>>,
+) -> Config {
+    let mut config = Config::default();
+    let uri = finalize_uri(PartialUriConfig {
+        mappings: Some(vec![PartialUriMapping {
+            prefix: Some(prefix.to_string()),
+            root: Some(root.to_string()),
+            sync_cmd,
+            sync_required: Some(sync_required),
+            sync_timeout: Some(sync_timeout),
+            verify_cmd,
+        }]),
+        auto_verify: None,
     })
     .unwrap();
     config.uri = uri;
@@ -446,7 +474,9 @@ fn sync_cache_is_shared_across_resolve_links_calls() {
             sync_cmd: Some(vec!["true".to_string()]),
             sync_required: Some(false),
             sync_timeout: Some(10),
+            verify_cmd: None,
         }]),
+        auto_verify: None,
     })
     .unwrap();
     let resolver = UriResolver::new(&uri, tmp.path()).unwrap();
@@ -577,4 +607,111 @@ fn dnl008_suppressed_at_warning_severity() {
         !codes.contains(&DiagnosticCode::DNL008),
         "DNL008 must be suppressed at warning severity: {codes:?}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn verify_cmd_pass_marks_present_after_sync() {
+    // sync_cmd creates the file, then verify_cmd checks it's non-empty.
+    let tmp = TempDir::new().unwrap();
+    let assets = tmp.path().join("assets");
+    fs::create_dir_all(&assets).unwrap();
+
+    let sync_script = tmp.path().join("create.sh");
+    fs::write(&sync_script, "#!/bin/sh\necho content > \"$1\"\n").unwrap();
+    let mut perms = fs::metadata(&sync_script).unwrap().permissions();
+    use std::os::unix::fs::PermissionsExt;
+    perms.set_mode(0o755);
+    fs::set_permissions(&sync_script, perms).unwrap();
+
+    let config = config_with_mapping_and_verify(
+        "scheme://",
+        assets.to_str().unwrap(),
+        Some(vec![
+            sync_script.to_string_lossy().to_string(),
+            "{path}".to_string(),
+        ]),
+        false,
+        10,
+        // verify_cmd that succeeds when the file has content > 0 bytes.
+        Some(vec!["sh".to_string(), "-c".to_string(), format!("test -s \"{path}\"", path = "{path}")]),
+    );
+    let body = "[[scheme://verified.md]]\n";
+    let graph = build_graph(tmp.path(), "notes.md", body, config, true);
+
+    let target = assets.join("verified.md");
+    assert!(target.exists());
+    assert!(
+        graph
+            .unresolved_references
+            .iter()
+            .all(|r| r.target != "scheme://verified.md"),
+        "verify_cmd success should mark link resolved"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn verify_cmd_failure_marks_broken_even_when_file_exists() {
+    // sync_cmd creates an empty file, verify_cmd fails (file is empty),
+    // so the link must be reported as broken.
+    let tmp = TempDir::new().unwrap();
+    let assets = tmp.path().join("assets");
+    fs::create_dir_all(&assets).unwrap();
+
+    let sync_script = tmp.path().join("touch.sh");
+    fs::write(&sync_script, "#!/bin/sh\ntouch \"$1\"\n").unwrap();
+    let mut perms = fs::metadata(&sync_script).unwrap().permissions();
+    use std::os::unix::fs::PermissionsExt;
+    perms.set_mode(0o755);
+    fs::set_permissions(&sync_script, perms).unwrap();
+
+    let config = config_with_mapping_and_verify(
+        "scheme://",
+        assets.to_str().unwrap(),
+        Some(vec![
+            sync_script.to_string_lossy().to_string(),
+            "{path}".to_string(),
+        ]),
+        false,
+        10,
+        Some(vec!["false".to_string()]), // always fails
+    );
+    let body = "[[scheme://placeholder.md]]\n";
+    let graph = build_graph(tmp.path(), "notes.md", body, config, true);
+
+    assert_eq!(graph.unresolved_references.len(), 1);
+    assert_eq!(
+        graph.unresolved_references[0].target,
+        "scheme://placeholder.md"
+    );
+}
+
+#[test]
+fn auto_verify_off_skips_heuristics() {
+    // When `[uri].auto_verify = "off"`, no placeholder detection runs.
+    // The link resolves because sync_cmd was a no-op and the file exists.
+    let tmp = TempDir::new().unwrap();
+    let assets = tmp.path().join("assets");
+    fs::create_dir_all(&assets).unwrap();
+    let target = assets.join("real.md");
+    fs::write(&target, "ok").unwrap();
+
+    let mut config = config_with_mapping("scheme://", assets.to_str().unwrap(), None, false, 30);
+    // Override the default ("on") with "off".
+    let mut partial = PartialUriConfig::default();
+    partial.mappings = Some(vec![PartialUriMapping {
+        prefix: Some("scheme://".to_string()),
+        root: Some(assets.to_string_lossy().to_string()),
+        sync_cmd: None,
+        sync_required: None,
+        sync_timeout: None,
+        verify_cmd: None,
+    }]);
+    partial.auto_verify = Some("off".to_string());
+    config.uri = finalize_uri(partial).unwrap();
+
+    let body = "[[scheme://real.md]]\n";
+    let graph = build_graph(tmp.path(), "notes.md", body, config, false);
+    assert!(graph.unresolved_references.is_empty());
 }

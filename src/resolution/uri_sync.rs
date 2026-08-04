@@ -49,6 +49,11 @@ pub enum SyncDecision {
 pub struct CachedPathResult {
     pub decision: SyncDecision,
     pub status: PathStatus,
+    /// True when the configured `verify_cmd` (or auto-detection heuristics)
+    /// marked the file as a cloud placeholder. Even if `sync_cmd` succeeded,
+    /// a placeholder makes the link unresolved. Lets the diagnostics layer
+    /// render a more specific message.
+    pub verify_was_placeholder: bool,
 }
 
 /// Bounded, shared cache of sync results. Sharing lets the LSP layer (task #8)
@@ -150,18 +155,22 @@ impl<'a> SyncRunner<'a> {
         }
 
         let decision = self.decision_for_mapping(mapping_index);
-        let status = match decision {
-            SyncDecision::Ran => self.run_sync(mapping_index, &resolved_path),
+        let (status, verify_was_placeholder) = match decision {
+            SyncDecision::Ran => self.run_sync_and_verify(mapping_index, &resolved_path),
             SyncDecision::Skipped | SyncDecision::NotApplicable => {
                 if resolved_path.exists() {
-                    PathStatus::Present
+                    (PathStatus::Present, false)
                 } else {
-                    PathStatus::Missing
+                    (PathStatus::Missing, false)
                 }
             }
         };
 
-        let result = CachedPathResult { decision, status };
+        let result = CachedPathResult {
+            decision,
+            status,
+            verify_was_placeholder,
+        };
         self.cache.insert(key, result.clone());
         result
     }
@@ -225,6 +234,88 @@ impl<'a> SyncRunner<'a> {
             Err(WaitError::Io) => PathStatus::SyncFailed,
         }
     }
+
+    /// Run `sync_cmd` then `verify_cmd` (and auto-detection heuristics) to
+    /// decide between `Present` and `Missing`. The tuple return carries the
+    /// final status plus whether verification specifically flagged the path
+    /// as a placeholder (so diagnostics can attribute the failure).
+    fn run_sync_and_verify(
+        &self,
+        mapping_index: usize,
+        path: &PathBuf,
+    ) -> (PathStatus, bool) {
+        let status = self.run_sync(mapping_index, path);
+        if !matches!(status, PathStatus::Present) {
+            return (status, false);
+        }
+        match self.run_verify(mapping_index, path) {
+            VerifyOutcome::Passed => (PathStatus::Present, false),
+            VerifyOutcome::Failed => (PathStatus::Missing, true),
+            VerifyOutcome::NotConfigured => (PathStatus::Present, false),
+        }
+    }
+
+    /// Run the configured `verify_cmd` after `sync_cmd` succeeds, falling
+    /// back to auto-detection heuristics when no `verify_cmd` is set.
+    pub fn run_verify(&self, mapping_index: usize, path: &PathBuf) -> VerifyOutcome {
+        let Some(sync) = self.resolver.sync_config(mapping_index) else {
+            return VerifyOutcome::NotConfigured;
+        };
+        if let Some(cmd) = sync.verify_cmd {
+            return self.run_verify_cmd(mapping_index, path, cmd, sync.timeout);
+        }
+        // No verify_cmd → fall back to auto-detection heuristics. Returns
+        // Failed when a heuristic classifies the path as a placeholder,
+        // Passed when heuristics say real, and NotConfigured only when the
+        // resolver has no mode info (which doesn't actually happen).
+        let mode = self.resolver.auto_verify_mode();
+        match super::auto_verify::classify(path, mode) {
+            super::auto_verify::AutoVerifyOutcome::Placeholder => VerifyOutcome::Failed,
+            super::auto_verify::AutoVerifyOutcome::Real => VerifyOutcome::Passed,
+            super::auto_verify::AutoVerifyOutcome::Unknown => VerifyOutcome::Passed,
+        }
+    }
+
+    fn run_verify_cmd(
+        &self,
+        _mapping_index: usize,
+        path: &PathBuf,
+        cmd: &[String],
+        timeout_secs: u32,
+    ) -> VerifyOutcome {
+        if cmd.is_empty() {
+            return VerifyOutcome::NotConfigured;
+        }
+        let binary = &cmd[0];
+        let args: Vec<String> = cmd[1..]
+            .iter()
+            .map(|arg| substitute_path(arg, path))
+            .collect();
+        let timeout = Duration::from_secs(timeout_secs as u64);
+        let mut command = Command::new(binary);
+        command.args(&args);
+        let child = match command.spawn() {
+            Ok(child) => child,
+            Err(_) => return VerifyOutcome::Failed,
+        };
+        match wait_with_timeout(child, timeout) {
+            Ok(status) if status.success() => VerifyOutcome::Passed,
+            Ok(_) => VerifyOutcome::Failed,
+            Err(_) => VerifyOutcome::Failed,
+        }
+    }
+}
+
+/// Outcome of running `verify_cmd` (or auto-detection) on a synced path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VerifyOutcome {
+    /// File is real, not a placeholder.
+    Passed,
+    /// File is a placeholder or otherwise unreadable.
+    Failed,
+    /// No `verify_cmd` and auto-detection returned Unknown (effectively a
+    /// no-op; surfaces as `Present` in the caller).
+    NotConfigured,
 }
 
 /// Replace every occurrence of `{path}` in `arg` with the resolved absolute
@@ -295,7 +386,9 @@ mod tests {
                 sync_cmd,
                 sync_required: Some(sync_required),
                 sync_timeout: Some(sync_timeout),
+                verify_cmd: None,
             }]),
+            auto_verify: None,
         })
         .unwrap();
         UriResolver::new(&uri, tmp.path()).unwrap()
@@ -474,6 +567,7 @@ mod tests {
         cache.insert((0, PathBuf::from("/x")), CachedPathResult {
             decision: SyncDecision::Ran,
             status: PathStatus::Present,
+            verify_was_placeholder: false,
         });
         assert_eq!(cache.len(), 1);
         cache.clear();
