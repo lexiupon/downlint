@@ -26,7 +26,11 @@ struct ServerState {
 }
 
 
-pub async fn run_server(_verbose: u8, wait_for_debugger: bool) -> i32 {
+pub async fn run_server(
+    _verbose: u8,
+    wait_for_debugger: bool,
+    uri_opts: crate::resolution::UriOptions,
+) -> i32 {
     if wait_for_debugger {
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
@@ -35,6 +39,7 @@ pub async fn run_server(_verbose: u8, wait_for_debugger: bool) -> i32 {
     let mut reader = io::BufReader::new(stdin.lock());
     let mut stdout = io::stdout().lock();
     let mut state = ServerState::default();
+    state.uri_opts = uri_opts;
 
     while let Some(message) = read_message(&mut reader) {
         let request = match serde_json::from_slice::<RpcRequest>(&message) {
