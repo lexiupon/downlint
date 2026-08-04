@@ -1,4 +1,5 @@
 pub mod check;
+pub mod sync;
 
 use crate::diagnostics::DiagnosticSeverity;
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
@@ -29,6 +30,7 @@ struct Cli {
 enum Command {
     Check(CheckArgs),
     Server(ServerArgs),
+    Sync(SyncArgs),
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -90,6 +92,21 @@ struct ServerArgs {
     uri_sync_batch_size: usize,
 }
 
+#[derive(Args, Clone, Debug, Default)]
+struct SyncArgs {
+    #[arg(long)]
+    root: Option<PathBuf>,
+    #[arg(long, short = 'v', default_value_t = 2)]
+    verbose: u8,
+    /// REQUIRED for sync. Without this flag, the subcommand exits 2 with a
+    /// clear error message. Same semantics as `downlint check --allow-uri-sync`.
+    #[arg(long = "allow-uri-sync", action = ArgAction::SetTrue)]
+    allow_uri_sync: bool,
+    /// Batch size for per-file `sync_cmd` invocations across external mappings.
+    #[arg(long = "uri-sync-batch-size", default_value_t = 50)]
+    uri_sync_batch_size: usize,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 enum FormatArg {
     #[default]
@@ -120,6 +137,10 @@ pub async fn run() -> i32 {
         Some(Command::Check(args)) => {
             init_tracing(args.verbose);
             check::run_check(map_check_args(args, cli.quiet)).await
+        }
+        Some(Command::Sync(args)) => {
+            init_tracing(args.verbose);
+            sync::run_sync(map_sync_args(args, cli.quiet)).await
         }
         None => {
             init_tracing(cli.check.verbose);
@@ -165,6 +186,17 @@ fn init_tracing(verbose: u8) {
         .with_env_filter(level)
         .with_writer(std::io::stderr)
         .try_init();
+}
+
+/// Map clap's `SyncArgs` into the runtime `sync::SyncOptions`.
+fn map_sync_args(args: SyncArgs, quiet: bool) -> sync::SyncOptions {
+    sync::SyncOptions {
+        root: args.root,
+        verbose: args.verbose,
+        quiet,
+        allow_uri_sync: args.allow_uri_sync,
+        uri_sync_batch_size: args.uri_sync_batch_size.max(1),
+    }
 }
 
 #[cfg(test)]
