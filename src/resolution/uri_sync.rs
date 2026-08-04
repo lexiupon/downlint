@@ -328,6 +328,226 @@ fn substitute_path(arg: &str, path: &PathBuf) -> String {
     }
 }
 
+/// Maximum UTF-8 byte length of a constructed argv list before the batch
+/// fan-out falls back to per-file invocation. Chosen conservatively below
+/// typical ARG_MAX (Linux/macOS) and Windows' CreateProcess limit.
+pub const MAX_BATCH_BYTES: usize = 128 * 1024;
+
+/// Per-batch outcome returned by `run_for_many`. One batch = one subprocess
+/// invocation covering up to `batch_size` paths for one mapping.
+#[derive(Clone, Debug)]
+pub struct BatchOutcome {
+    /// Per-path status, in the same order as the input paths. Failed spawn
+    /// or timeout produces `SyncFailed` / `SyncTimedOut` for every entry.
+    pub statuses: Vec<PathStatus>,
+    /// True when the constructed argv exceeded `MAX_BATCH_BYTES` and the
+    /// runner fell back to per-file invocation. The caller emits a one-time
+    /// DNL009 BatchClamped info diagnostic per mapping.
+    pub fell_back_to_per_file: bool,
+    /// True when the batch was empty (no work). Not an error, just a no-op.
+    pub empty: bool,
+}
+
+impl BatchOutcome {
+    fn failed_all(status: PathStatus, count: usize) -> Self {
+        Self {
+            statuses: vec![status; count],
+            fell_back_to_per_file: false,
+            empty: count == 0,
+        }
+    }
+}
+
+/// Run sync for up to `batch_size` paths for a single mapping. Folds the
+/// constructed argv through `MAX_BATCH_BYTES` and falls back to per-file
+/// invocation if the limit would be exceeded. Honors the `{paths}`
+/// placeholder for stdin piping.
+pub fn run_for_many(
+    runner: &SyncRunner<'_>,
+    mapping_index: usize,
+    paths: Vec<PathBuf>,
+) -> BatchOutcome {
+    if paths.is_empty() {
+        return BatchOutcome {
+            statuses: Vec::new(),
+            fell_back_to_per_file: false,
+            empty: true,
+        };
+    }
+    let Some(sync) = runner.resolver.sync_config(mapping_index) else {
+        return BatchOutcome::failed_all(PathStatus::SyncFailed, paths.len());
+    };
+    let Some(cmd) = sync.cmd else {
+        return BatchOutcome::failed_all(PathStatus::SyncFailed, paths.len());
+    };
+    if cmd.is_empty() {
+        return BatchOutcome::failed_all(PathStatus::SyncFailed, paths.len());
+    }
+    let uses_stdin = cmd.iter().any(|arg| arg.contains("{paths}"));
+    let batch_size = runner.batch_size.max(1);
+    // Build the batched arg list once to measure against MAX_BATCH_BYTES.
+    let preview_args = build_batched_args(cmd, &paths[..paths.len().min(batch_size)]);
+    let argv_bytes: usize = preview_args.iter().map(|arg| arg.len() + 1).sum();
+    if argv_bytes > MAX_BATCH_BYTES && !uses_stdin {
+        return batch_per_file(runner, mapping_index, paths);
+    }
+    let statuses = if uses_stdin {
+        run_batch_with_stdin(sync.timeout, &cmd, &paths, batch_size)
+    } else {
+        run_batch_positional(sync.timeout, &cmd, &paths, batch_size)
+    };
+    BatchOutcome {
+        statuses,
+        fell_back_to_per_file: false,
+        empty: false,
+    }
+}
+
+/// Construct positional argv: repeat args template with each path substituted
+/// into `{path}` slots. Returns a flat list of strings.
+fn build_batched_args(cmd: &[String], paths: &[PathBuf]) -> Vec<String> {
+    let mut out = Vec::with_capacity(1 + cmd.len().saturating_sub(1) * paths.len());
+    out.push(cmd[0].clone());
+    for path in paths {
+        for arg in &cmd[1..] {
+            out.push(substitute_path(arg, path));
+        }
+    }
+    out
+}
+
+/// Run a positional batch via `Command`. Chunks `paths` into groups of
+/// `batch_size` and spawns one subprocess per group.
+fn run_batch_positional(
+    timeout_secs: u32,
+    cmd: &[String],
+    paths: &[PathBuf],
+    batch_size: usize,
+) -> Vec<PathStatus> {
+    let mut out = Vec::with_capacity(paths.len());
+    let timeout = Duration::from_secs(timeout_secs as u64);
+    for chunk in paths.chunks(batch_size.max(1)) {
+        let args = build_batched_args(cmd, chunk);
+        let mut command = Command::new(&cmd[0]);
+        command.args(&args);
+        let child = match command.spawn() {
+            Ok(child) => child,
+            Err(_) => {
+                for _ in 0..chunk.len() {
+                    out.push(PathStatus::SyncFailed);
+                }
+                continue;
+            }
+        };
+        let outcome = match wait_with_timeout(child, timeout) {
+            Ok(status) if status.success() => {
+                let mut v = Vec::with_capacity(chunk.len());
+                for p in chunk {
+                    v.push(if p.exists() {
+                        PathStatus::Present
+                    } else {
+                        PathStatus::Missing
+                    });
+                }
+                v
+            }
+            Ok(_) => vec![PathStatus::SyncFailed; chunk.len()],
+            Err(WaitError::TimedOut) => vec![PathStatus::SyncTimedOut; chunk.len()],
+            Err(WaitError::Io) => vec![PathStatus::SyncFailed; chunk.len()],
+        };
+        out.extend(outcome);
+    }
+    out
+}
+
+/// Run a `{paths}`-style batch via stdin piping. Each batch invocation gets
+/// one line per path on stdin. `{path}` substitutions produce empty strings
+/// since paths are in stdin instead.
+fn run_batch_with_stdin(
+    timeout_secs: u32,
+    cmd: &[String],
+    paths: &[PathBuf],
+    batch_size: usize,
+) -> Vec<PathStatus> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut out = Vec::with_capacity(paths.len());
+    let timeout = Duration::from_secs(timeout_secs as u64);
+    for chunk in paths.chunks(batch_size.max(1)) {
+        let args: Vec<String> = cmd[1..]
+            .iter()
+            .map(|arg| {
+                if arg.contains("{paths}") {
+                    arg.replace("{paths}", "")
+                } else if arg.contains("{path}") {
+                    // {path} without {paths} is meaningless in stdin mode;
+                    // empty-substitute so the user sees a clear argv error.
+                    String::new()
+                } else {
+                    arg.clone()
+                }
+            })
+            .collect();
+        let mut command = Command::new(&cmd[0]);
+        command.args(&args).stdin(Stdio::piped());
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(_) => {
+                for _ in 0..chunk.len() {
+                    out.push(PathStatus::SyncFailed);
+                }
+                continue;
+            }
+        };
+        if let Some(stdin) = child.stdin.as_mut() {
+            let body: String = chunk
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let _ = stdin.write_all(body.as_bytes());
+        }
+        // Closing stdin: drop the handle so the child sees EOF.
+        drop(child.stdin.take());
+        let statuses = match wait_with_timeout(child, timeout) {
+            Ok(status) if status.success() => chunk
+                .iter()
+                .map(|p| {
+                    if p.exists() {
+                        PathStatus::Present
+                    } else {
+                        PathStatus::Missing
+                    }
+                })
+                .collect(),
+            Ok(_) => vec![PathStatus::SyncFailed; chunk.len()],
+            Err(WaitError::TimedOut) => vec![PathStatus::SyncTimedOut; chunk.len()],
+            Err(WaitError::Io) => vec![PathStatus::SyncFailed; chunk.len()],
+        };
+        out.extend(statuses);
+    }
+    out
+}
+
+/// Fallback path: invoked when the positional argv would exceed the byte
+/// cap. Spawns `sync_cmd` once per path (the original Phase-1 behavior).
+fn batch_per_file(
+    runner: &SyncRunner<'_>,
+    mapping_index: usize,
+    paths: Vec<PathBuf>,
+) -> BatchOutcome {
+    let mut statuses = Vec::with_capacity(paths.len());
+    for path in paths {
+        let result = runner.run_for(mapping_index, path);
+        statuses.push(result.status);
+    }
+    BatchOutcome {
+        statuses,
+        fell_back_to_per_file: true,
+        empty: false,
+    }
+}
+
 /// Internal: blocking wait with timeout. Uses a poll loop with a short sleep
 /// rather than `wait_timeout` (Unix-only) so the runner stays portable to
 /// Windows; precision is ~20ms.

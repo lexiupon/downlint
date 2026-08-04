@@ -715,3 +715,182 @@ fn auto_verify_off_skips_heuristics() {
     let graph = build_graph(tmp.path(), "notes.md", body, config, false);
     assert!(graph.unresolved_references.is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn batch_size_three_fans_out_into_one_spawn() {
+    // SyncRunner::run_for_many with batch_size=3 and three short paths
+    // should produce exactly one spawn (the positional fan-out joins all
+    // three paths into one argv list).
+    use downlint::resolution::uri_sync::run_for_many;
+
+    let tmp = TempDir::new().unwrap();
+    let counter = tmp.path().join("count.txt");
+    let counter_quoted = format!("\"{}\"", counter.to_string_lossy());
+
+    // Script appends one line per invocation. With batch fan-out, we get
+    // exactly one line for batch_size=3.
+    let script = tmp.path().join("log.sh");
+    fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nprintf 'called\\n' >> {counter_quoted}\nfor p in \"$@\"; do :; done\n"
+        ),
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&script).unwrap().permissions();
+    use std::os::unix::fs::PermissionsExt;
+    perms.set_mode(0o755);
+    fs::set_permissions(&script, perms).unwrap();
+
+    let mut config = Config::default();
+    let uri = finalize_uri(PartialUriConfig {
+        mappings: Some(vec![PartialUriMapping {
+            prefix: Some("scheme://".to_string()),
+            root: Some(tmp.path().to_string_lossy().to_string()),
+            sync_cmd: Some(vec![
+                script.to_string_lossy().to_string(),
+                "{path}".to_string(),
+            ]),
+            sync_required: Some(false),
+            sync_timeout: Some(10),
+            verify_cmd: None,
+        }]),
+        auto_verify: None,
+    })
+    .unwrap();
+    config.uri = uri;
+
+    let resolver = UriResolver::new(&config.uri, tmp.path()).unwrap();
+    let runner = downlint::resolution::uri_sync::SyncRunner::with_cache(
+        &resolver, true, /* batch_size */ 3, downlint::resolution::UriSyncCache::new(),
+    );
+
+    let paths = vec![
+        tmp.path().join("a"),
+        tmp.path().join("b"),
+        tmp.path().join("c"),
+    ];
+    let outcome = run_for_many(&runner, 0, paths);
+    assert_eq!(outcome.statuses.len(), 3);
+    assert!(!outcome.fell_back_to_per_file);
+    assert!(!outcome.empty);
+
+    let body = fs::read_to_string(&counter).unwrap();
+    // Batch fan-out → exactly one line (one spawn). Without fan-out we'd
+    // see three.
+    assert_eq!(body.lines().count(), 1, "expected 1 spawn, got: {body:?}");
+}
+
+#[test]
+fn batch_size_one_preserves_per_file_behavior() {
+    // batch_size=1 keeps Phase-1 behavior: one spawn per file. With three
+    // paths and batch_size=1 we expect three invocations.
+    use downlint::resolution::uri_sync::run_for_many;
+
+    let tmp = TempDir::new().unwrap();
+    let counter = tmp.path().join("count.txt");
+    let counter_quoted = format!("\"{}\"", counter.to_string_lossy());
+
+    let script = tmp.path().join("log.sh");
+    fs::write(
+        &script,
+        format!("#!/bin/sh\nprintf 'called\\n' >> {counter_quoted}\n"),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        let mut perms = fs::metadata(&script).unwrap().permissions();
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(0o755);
+        fs::set_permissions(&script, perms).unwrap();
+    }
+
+    let mut config = Config::default();
+    let uri = finalize_uri(PartialUriConfig {
+        mappings: Some(vec![PartialUriMapping {
+            prefix: Some("scheme://".to_string()),
+            root: Some(tmp.path().to_string_lossy().to_string()),
+            sync_cmd: Some(vec![
+                script.to_string_lossy().to_string(),
+                "{path}".to_string(),
+            ]),
+            sync_required: Some(false),
+            sync_timeout: Some(10),
+            verify_cmd: None,
+        }]),
+        auto_verify: None,
+    })
+    .unwrap();
+    config.uri = uri;
+
+    let resolver = UriResolver::new(&config.uri, tmp.path()).unwrap();
+    let runner = downlint::resolution::uri_sync::SyncRunner::with_cache(
+        &resolver, true, /* batch_size */ 1, downlint::resolution::UriSyncCache::new(),
+    );
+
+    let paths = vec![
+        tmp.path().join("a"),
+        tmp.path().join("b"),
+        tmp.path().join("c"),
+    ];
+    let outcome = run_for_many(&runner, 0, paths);
+    assert_eq!(outcome.statuses.len(), 3);
+    assert!(!outcome.fell_back_to_per_file);
+
+    let body = fs::read_to_string(&counter).unwrap();
+    // batch_size=1 → three spawns (one per path).
+    assert_eq!(body.lines().count(), 3, "expected 3 spawns, got: {body:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn batch_clamps_to_per_file_when_argv_exceeds_limit() {
+    // Make the substituted {path} argument size exceed MAX_BATCH_BYTES by
+    // using a sync_cmd with multiple {path} slots and a long dummy arg. We
+    // don't need the path to actually exist on disk — the clamp triggers
+    // purely on the constructed argv byte length, before any spawn.
+    use downlint::resolution::uri_sync::{MAX_BATCH_BYTES, run_for_many};
+
+    let tmp = TempDir::new().unwrap();
+    // Fake long path string that the runner will substitute into {path}.
+    // We don't actually create the file; the clamp is based on byte length.
+    let long_path = std::path::PathBuf::from(format!(
+        "{}/{}",
+        tmp.path().to_string_lossy(),
+        "x".repeat(MAX_BATCH_BYTES)
+    ));
+
+    // sync_cmd has multiple {path} slots to push the constructed argv
+    // length over MAX_BATCH_BYTES when there are 2+ paths.
+    let mut config = Config::default();
+    let uri = finalize_uri(PartialUriConfig {
+        mappings: Some(vec![PartialUriMapping {
+            prefix: Some("scheme://".to_string()),
+            root: Some(tmp.path().to_string_lossy().to_string()),
+            sync_cmd: Some(vec![
+                "true".to_string(),
+                "{path}".to_string(),
+                "{path}".to_string(),
+            ]),
+            sync_required: Some(false),
+            sync_timeout: Some(10),
+            verify_cmd: None,
+        }]),
+        auto_verify: None,
+    })
+    .unwrap();
+    config.uri = uri;
+
+    let resolver = UriResolver::new(&config.uri, tmp.path()).unwrap();
+    let runner = downlint::resolution::uri_sync::SyncRunner::with_cache(
+        &resolver, true, 2, downlint::resolution::UriSyncCache::new(),
+    );
+    let paths = vec![long_path.clone(), long_path];
+    let outcome = run_for_many(&runner, 0, paths);
+    assert!(
+        outcome.fell_back_to_per_file,
+        "argv over MAX_BATCH_BYTES should trigger fallback"
+    );
+    assert_eq!(outcome.statuses.len(), 2);
+}
