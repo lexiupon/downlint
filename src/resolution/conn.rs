@@ -55,6 +55,13 @@ pub struct UnresolvedReference {
     /// entirely when `[uri]` is not configured (so we never change behavior
     /// for users who haven't opted in) and when `UriOptions::no_hints` is true.
     pub uri_no_mapping_hint: bool,
+    /// True when the unresolved reference was a URI target whose mapping had
+    /// `sync_required = false`. The diagnostics layer pairs this with a
+    /// `DNL008 SyncFailureWarning` info diagnostic (in addition to the
+    /// regular `DNL002` broken link) so users see that the broken-link is
+    /// "soft" — the sync was attempted but did not produce a usable file.
+    /// Always false for non-URI broken links.
+    pub sync_was_soft_failure: bool,
 }
 
 #[derive(Clone, Debug)]

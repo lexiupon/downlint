@@ -467,3 +467,114 @@ fn sync_cache_is_shared_across_resolve_links_calls() {
         "cache hit should not add a second entry"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn soft_sync_failure_emits_dnl008_alongside_dnl002() {
+    // `sync_required = false` + sync ran + sync failed → DNL002 broken AND
+    // DNL008 SyncFailureWarning. Both should be visible at min-severity=info.
+    let tmp = TempDir::new().unwrap();
+    let config = config_with_mapping(
+        "scheme://",
+        tmp.path().to_str().unwrap(),
+        Some(vec!["false".to_string()]),
+        false,
+        10,
+    );
+    let body = "[[scheme://anywhere]]\n";
+    let graph = build_graph(tmp.path(), "notes.md", body, config, true);
+
+    let diag_config = DiagnosticConfig {
+        min_severity: DiagnosticSeverity::Info,
+    };
+    let opts = UriOptions::default();
+    let diagnostics = run_diagnostics(&graph, tmp.path(), &diag_config, &opts);
+    let codes: Vec<DiagnosticCode> = diagnostics.iter().map(|d| d.code).collect();
+    assert!(
+        codes.contains(&DiagnosticCode::DNL002),
+        "DNL002 must fire (broken link): {codes:?}"
+    );
+    assert!(
+        codes.contains(&DiagnosticCode::DNL008),
+        "DNL008 must fire for soft sync failure: {codes:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn hard_sync_failure_does_not_emit_dnl008() {
+    // `sync_required = true` + sync failed → DNL002 broken ONLY. DNL008 is
+    // reserved for soft failures.
+    let tmp = TempDir::new().unwrap();
+    let config = config_with_mapping(
+        "scheme://",
+        tmp.path().to_str().unwrap(),
+        Some(vec!["false".to_string()]),
+        true,
+        10,
+    );
+    let body = "[[scheme://anywhere]]\n";
+    let graph = build_graph(tmp.path(), "notes.md", body, config, true);
+
+    let diag_config = DiagnosticConfig {
+        min_severity: DiagnosticSeverity::Info,
+    };
+    let opts = UriOptions::default();
+    let diagnostics = run_diagnostics(&graph, tmp.path(), &diag_config, &opts);
+    let codes: Vec<DiagnosticCode> = diagnostics.iter().map(|d| d.code).collect();
+    assert!(codes.contains(&DiagnosticCode::DNL002));
+    assert!(
+        !codes.contains(&DiagnosticCode::DNL008),
+        "DNL008 must NOT fire for sync_required=true: {codes:?}"
+    );
+}
+
+#[test]
+fn missing_file_without_sync_does_not_emit_dnl008() {
+    // File is missing, no sync configured → DNL002 only (no soft failure
+    // because sync did not run).
+    let tmp = TempDir::new().unwrap();
+    let config =
+        config_with_mapping("scheme://", tmp.path().to_str().unwrap(), None, false, 30);
+    let body = "[[scheme://anything]]\n";
+    let graph = build_graph(tmp.path(), "notes.md", body, config, false);
+
+    let diag_config = DiagnosticConfig {
+        min_severity: DiagnosticSeverity::Info,
+    };
+    let opts = UriOptions::default();
+    let diagnostics = run_diagnostics(&graph, tmp.path(), &diag_config, &opts);
+    let codes: Vec<DiagnosticCode> = diagnostics.iter().map(|d| d.code).collect();
+    assert!(codes.contains(&DiagnosticCode::DNL002));
+    assert!(
+        !codes.contains(&DiagnosticCode::DNL008),
+        "DNL008 must NOT fire when sync did not run: {codes:?}"
+    );
+}
+
+#[test]
+fn dnl008_suppressed_at_warning_severity() {
+    // DNL008 is info-level; should not appear at min-severity=warning.
+    let tmp = TempDir::new().unwrap();
+    let config = config_with_mapping(
+        "scheme://",
+        tmp.path().to_str().unwrap(),
+        Some(vec!["false".to_string()]),
+        false,
+        10,
+    );
+    let body = "[[scheme://anywhere]]\n";
+    let graph = build_graph(tmp.path(), "notes.md", body, config, true);
+
+    let diag_config = DiagnosticConfig {
+        min_severity: DiagnosticSeverity::Warning,
+    };
+    let opts = UriOptions::default();
+    let diagnostics = run_diagnostics(&graph, tmp.path(), &diag_config, &opts);
+    let codes: Vec<DiagnosticCode> = diagnostics.iter().map(|d| d.code).collect();
+    assert!(codes.contains(&DiagnosticCode::DNL002));
+    assert!(
+        !codes.contains(&DiagnosticCode::DNL008),
+        "DNL008 must be suppressed at warning severity: {codes:?}"
+    );
+}

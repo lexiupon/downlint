@@ -151,6 +151,25 @@ pub fn uri_sync_skipped(source_path: &Path, mapping_count: usize, targets: &[&st
     })
 }
 
+/// Info-level: emitted once per source file when at least one of its URI
+/// references ended up as a "soft" sync failure (`sync_required = false` +
+/// sync ran but did not produce a usable file). Capped at 5 mappings per
+/// file to mirror the obsidian-prefix hint pattern.
+pub fn sync_failure_warning(unresolved: &[UnresolvedReference]) -> Option<Diagnostic> {
+    let first = unresolved.iter().find(|reference| reference.sync_was_soft_failure)?;
+    Some(Diagnostic {
+        path: first.source_path.clone(),
+        range: first.name_range.unwrap_or(first.full_range),
+        severity: DiagnosticSeverity::Info,
+        code: DiagnosticCode::DNL008,
+        message: format!(
+            "Sync completed but '{}' is still missing on disk. The link is reported as broken; with `sync_required = false`, this is a soft warning rather than a hard failure.",
+            first.target,
+        ),
+        related: Vec::new(),
+    })
+}
+
 pub fn non_breaking_space(path: &Path, input: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let mut offset = 0usize;

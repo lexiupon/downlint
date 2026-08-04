@@ -348,6 +348,7 @@ fn resolve_document(
                         is_anchor: false,
                         hint_payload: None,
                         uri_no_mapping_hint: false,
+                        sync_was_soft_failure: false,
                     });
                 }
             }
@@ -407,6 +408,7 @@ fn resolve_uri_target(
                 is_anchor: false,
                 hint_payload: None,
                 uri_no_mapping_hint: false,
+                sync_was_soft_failure: false,
             });
         }
         UriOutcome::NoMapping { target: raw } => {
@@ -424,6 +426,7 @@ fn resolve_uri_target(
                 is_anchor: anchor.is_some(),
                 hint_payload: None,
                 uri_no_mapping_hint: hint,
+                sync_was_soft_failure: false,
             });
         }
         UriOutcome::Resolved {
@@ -446,6 +449,7 @@ fn resolve_uri_target(
                     is_anchor: true,
                     hint_payload: None,
                     uri_no_mapping_hint: false,
+                    sync_was_soft_failure: false,
                 });
                 return;
             }
@@ -478,12 +482,27 @@ fn resolve_uri_target(
                     }],
                 });
             } else {
-                // Sync ran and the file is still missing, or sync itself
-                // failed/timed out. In all three cases the link is reported
-                // as broken per the RFC. A future Phase 2 will differentiate
-                // `sync_required = false` (warning + missing) from
-                // `sync_required = true` (broken); for now we surface a
-                // uniform broken-link diagnostic.
+                // Sync ran (or would have, if `--allow-uri-sync` had been
+                // passed) and the file is still missing, or sync itself
+                // failed/timed out. The link is reported as broken in all
+                // cases. When the mapping has `sync_required = false`, we
+                // additionally flag this as a soft failure so the
+                // diagnostics layer can emit DNL008 SyncFailureWarning
+                // alongside the regular DNL002 broken link.
+                let sync_required = resolver
+                    .sync_config(mapping_index)
+                    .map(|sync| sync.required)
+                    .unwrap_or(false);
+                let sync_ran = matches!(
+                    result.decision,
+                    crate::resolution::uri_sync::SyncDecision::Ran
+                );
+                let sync_failed = matches!(
+                    result.status,
+                    crate::resolution::uri_sync::PathStatus::SyncFailed
+                        | crate::resolution::uri_sync::PathStatus::SyncTimedOut
+                );
+                let soft_failure = !sync_required && sync_ran && sync_failed;
                 ctx.graph.unresolved_references.push(UnresolvedReference {
                     source_path: doc.path.clone(),
                     occurrence_id: symbol.id,
@@ -494,6 +513,7 @@ fn resolve_uri_target(
                     is_anchor: false,
                     hint_payload: None,
                     uri_no_mapping_hint: false,
+                    sync_was_soft_failure: soft_failure,
                 });
             }
         }
@@ -618,6 +638,7 @@ fn resolve_wiki_ref(
                 is_anchor: true,
                 hint_payload: hint_payload_for(ctx, anchor),
                 uri_no_mapping_hint: false,
+                sync_was_soft_failure: false,
             });
         }
         return;
@@ -637,6 +658,7 @@ fn resolve_wiki_ref(
                 is_anchor: false,
                 hint_payload: None,
                 uri_no_mapping_hint: false,
+                sync_was_soft_failure: false,
             });
             return;
         }
@@ -660,6 +682,7 @@ fn resolve_wiki_ref(
                 is_anchor: false,
                 hint_payload: None,
                 uri_no_mapping_hint: false,
+                sync_was_soft_failure: false,
             });
         }
         return;
@@ -793,6 +816,7 @@ fn resolve_inline_ref(
                 is_anchor: true,
                 hint_payload: None,
                 uri_no_mapping_hint: false,
+                sync_was_soft_failure: false,
             });
         }
         return;
@@ -812,6 +836,7 @@ fn resolve_inline_ref(
                 is_anchor: false,
                 hint_payload: None,
                 uri_no_mapping_hint: false,
+                sync_was_soft_failure: false,
             });
             return;
         }
@@ -835,6 +860,7 @@ fn resolve_inline_ref(
                 is_anchor: false,
                 hint_payload: None,
                 uri_no_mapping_hint: false,
+                sync_was_soft_failure: false,
             });
         }
         return;
@@ -927,6 +953,7 @@ fn finalize_doc_or_attachment(
             is_anchor: true,
             hint_payload: hint_payload_for(ctx, target),
             uri_no_mapping_hint: false,
+            sync_was_soft_failure: false,
         });
         return;
     }
@@ -945,6 +972,7 @@ fn finalize_doc_or_attachment(
             is_anchor: false,
             hint_payload: hint_payload_for(ctx, target),
             uri_no_mapping_hint: false,
+            sync_was_soft_failure: false,
         });
     } else {
         ctx.graph.resolved_references.push(ResolvedReference {

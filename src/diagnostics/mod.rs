@@ -37,6 +37,17 @@ pub enum DiagnosticCode {
     /// most once per mapping per run; it is purely informational and is also
     /// suppressed when the user has set `--min-severity` to exclude Info.
     DNL007,
+    /// Info-level: a URI mapping's `sync_cmd` ran but failed (or timed out)
+    /// and the file is still missing. Only emitted for mappings with
+    /// `sync_required = false` (mappings with `sync_required = true` already
+    /// produce a hard DNL002 broken link). Lets users distinguish a
+    /// "soft" sync failure from a real missing file.
+    DNL008,
+    /// Info-level: a URI mapping's `sync_cmd` would have produced an arg list
+    /// exceeding the per-batch byte cap (default 128 KiB). The runner fell
+    /// back to per-file spawning for that mapping. Emitted at most once per
+    /// mapping per run, similar to DNL007.
+    DNL009,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -90,6 +101,10 @@ pub fn check_diagnostics(
     }
 
     if let Some(diagnostic) = rules::uri_no_mapping_hint(&graph.unresolved_references) {
+        diagnostics.push(diagnostic);
+    }
+
+    if let Some(diagnostic) = rules::sync_failure_warning(&graph.unresolved_references) {
         diagnostics.push(diagnostic);
     }
 
