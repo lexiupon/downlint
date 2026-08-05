@@ -53,7 +53,7 @@ struct CheckArgs {
     #[arg(long)]
     stdin: bool,
     /// Permit subprocess execution of `warm_cmd` entries defined under
-    /// `[uri.mappings]`. Without this flag, sync is skipped and a one-time
+    /// `[uri.mappings]`. Without this flag, warming is skipped and a one-time
     /// info diagnostic is emitted per configured mapping. Note: enabling this
     /// flag means `.downlint.toml` controls which commands run.
     #[arg(long = "allow-uri-sync", action = ArgAction::SetTrue)]
@@ -78,7 +78,7 @@ struct ServerArgs {
     #[arg(long)]
     wait_for_debugger: bool,
     /// Permit subprocess execution of `warm_cmd` entries defined under
-    /// `[uri.mappings]`. Without this flag, sync is skipped and a one-time
+    /// `[uri.mappings]`. Without this flag, warming is skipped and a one-time
     /// info diagnostic is emitted per configured mapping. Note: enabling this
     /// flag means `.downlint.toml` controls which commands run.
     #[arg(long = "allow-uri-sync", action = ArgAction::SetTrue)]

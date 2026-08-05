@@ -1065,6 +1065,11 @@ a simple O(n) greedy scan.
 | `AmbiguousLink` | DNL001 | **Error** | Warning | N/A |
 | `BrokenLink` | DNL002 | **Error** | Warning | N/A |
 | `NonBreakableWhitespace` | DNL003 | N/A | N/A | Warning |
+| `BrokenAnchor` | DNL005 | Warning (wiki) / Warning (inline) | N/A | N/A |
+| `UriNoMappingHint` | DNL006 | N/A | N/A | Info |
+| `UriSyncSkipped` | DNL007 | N/A | N/A | Info |
+| `SyncFailureWarning` | DNL008 | N/A | N/A | Info |
+| `BatchClamped` | DNL009 | N/A | N/A | Info |
 
 > **Key rule**: WikiLinks and embed wiki-links (`[[...]]`, `![[...]]`) receive **Error**
 > severity for broken/ambiguous local targets. Markdown links/images (`[...](...)`,
@@ -1099,6 +1104,51 @@ a simple O(n) greedy scan.
 - Broken or ambiguous embed targets produce DNL002/DNL001 with **Error** severity.
 - Embeds may target documents or attachments. Missing attachments are still broken links.
 
+**BrokenAnchor** (DNL005): An anchor (`#section`, `[[#section]]`, or `path#section`) failed
+to resolve to a heading in the target document. Distinct from DNL002 because the link target
+was unambiguously an anchor — the user knows the file exists, the heading is missing.
+
+- Always **Warning** regardless of link type (wiki or inline).
+- For cross-document anchors the diagnostic message shows `path#anchor`; for in-page
+  anchors it shows just `#anchor`.
+
+**UriNoMappingHint** (DNL006): A URI-scheme link (`scheme://...`) was validated, but no
+`[[uri.mappings]]` prefix in `.downlint.toml` matched. The diagnostic hints at how to add
+a mapping. **Info-level**, emitted once per source file (capped at one entry to avoid noise).
+
+- Suppressed when `[uri]` is unconfigured (so repos without the feature see zero change).
+- Suppressed with `--no-uri-hints` on `check` / `server` / `warm-uri-mappings`.
+- Not emitted when validation doesn't run on the link (excluded files are silent).
+
+**UriSyncSkipped** (DNL007): One or more `[[uri.mappings]]` entries have `warm_cmd`
+configured but the run did not pass `--allow-uri-sync`. The diagnostic tells the user which
+prefixes were affected and names the subcommand that would warm them.
+
+- **Info-level**, emitted at most once per run.
+- File path is the workspace root (`.`); range is `(0, 0)` because no specific source
+  position is meaningful for a global config warning.
+- Message format (RFC 0008 wording):
+  > "URI mappings skipped: N entries have a `warm_cmd` but --allow-uri-sync was not
+  > passed. Affected prefixes: scheme://, ... . Run
+  > 'downlint warm-uri-mappings --allow-uri-sync' to warm them."
+
+**SyncFailureWarning** (DNL008): A `warm_cmd` ran (or would have, with
+`--allow-uri-sync`) but the file is still missing on disk and `warm_required = false`.
+Emitted **alongside** DNL002 broken-link to distinguish "soft" failures.
+
+- **Info-level**, one per source file.
+- Mappings with `warm_required = true` continue to produce only DNL002 (hard broken link);
+  DNL008 is reserved for lenient-failure scenarios.
+- Suppressed when `--min-severity` is set to `warning` or higher.
+
+**BatchClamped** (DNL009): A `warm_cmd` batch's constructed argv exceeded the 128 KiB
+cap (`MAX_BATCH_BYTES`). The runner fell back to per-file invocation. Emitted once per
+mapping per run so users can reduce `batch_size` or shorten paths.
+
+- **Info-level**, attached to a synthetic (workspace-root) path with range `(0, 0)`.
+- Only fires when `batch_size > 1` and the user's `warm_cmd` includes `{path}`. The
+  `{paths}` stdin tier bypasses the argv cap and never triggers this diagnostic.
+
 ### 6.3 Diagnostic Computation
 
 **Per-Folder**:
@@ -1132,6 +1182,11 @@ All diagnostic messages use this format:
 | DNL001 | `Ambiguous link: 'target' resolves to multiple destinations` | `Ambiguous link: 'target' resolves to multiple destinations` |
 | DNL002 | `Broken link: 'target' could not be resolved` | `Broken link: 'target' could not be resolved` |
 | DNL003 | `Non-breaking whitespace after heading marker` | N/A |
+| DNL005 | `Broken anchor: 'target' could not be resolved` | `Broken anchor: 'target' could not be resolved` |
+| DNL006 | `No URI mapping found for 'target'. Configure [[uri.mappings]] in .downlint.toml, e.g.: ...` | (same) |
+| DNL007 | `URI mappings skipped: N entries have a warm_cmd but --allow-uri-sync was not passed. ...` | (same) |
+| DNL008 | `Sync completed but 'target' is still missing on disk. ...` | (same) |
+| DNL009 | `Batch fan-out clamped for mapping 'prefix'; falling back to per-file warm_cmd. ...` | (same) |
 
 **AmbiguousLink detail** — includes `DiagnosticRelatedInformation` listing each destination:
 ```json
@@ -1160,9 +1215,9 @@ All diagnostic messages use this format:
 
 | `--min-severity` | Shown |
 |------------------|-------|
-| `error` | DNL001 (Error), DNL002 with Error severity |
-| `warning` (default) | All errors + all warnings, including DNL003 |
-| `info` | All diagnostics, including any future info-level diagnostics |
+| `error` | DNL001 (Error), DNL002 with Error severity, DNL005 (Warning suppressed) |
+| `warning` (default) | All errors + all warnings, including DNL003 and DNL005 |
+| `info` | All diagnostics, including DNL006–DNL009 (URI hints, sync warnings, batch clamp) |
 
 > **Key distinction**: The severity assignment rules (WikiLink → Error, MarkdownLink → Warning)
 > are fixed. `--min-severity` only filters the output. Even at `warning`, wiki-link errors
@@ -1428,6 +1483,22 @@ candidates = 50
 
 # Wiki-link completion style: "title-slug" | "title" | "file-stem" | "file-path-stem"
 wiki.style = "title-slug"
+
+[uri]
+# Toggles the built-in placeholder-detection heuristics for warm_cmd outputs.
+# "on" (default) | "off" | "onedrive-only" | "icloud-only"
+auto_verify = "on"
+
+# External asset URI mappings. Maps `scheme://...` link targets to local
+# filesystem roots so cloud-stored assets (OneDrive, S3, NAS) can be
+# validated like any other link. See rfc/0006 + rfc/0007 + rfc/0008.
+[[uri.mappings]]
+prefix = "onedrive://work/"
+root = "~/Library/CloudStorage/OneDrive-Work/assets"
+warm_cmd = ["mdutil", "--enforce-locals", "{path}"]
+warm_required = false
+warm_timeout = 30
+verify_cmd = ["file", "{path}"]
 ```
 
 **Config Section Hierarchy**:
@@ -1437,6 +1508,7 @@ wiki.style = "title-slug"
 | `[core]` | Core markdown behavior: extensions, heading IDs, text sync, title handling |
 | `[code_action]` | Code action controls: TOC generation, missing file creation |
 | `[completion]` | Completion behavior: candidate limits, wiki-link display style |
+| `[uri]` | External asset URI mapping: prefix matching, root expansion, warm/verify commands |
 
 ### 9.3 Merge Logic
 
@@ -1459,6 +1531,27 @@ struct PartialConfig {
     core: Option<PartialCoreConfig>,
     code_action: Option<PartialCodeActionConfig>,
     completion: Option<PartialCompletionConfig>,
+    uri: Option<PartialUriConfig>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct PartialUriConfig {
+    mappings: Option<Vec<PartialUriMapping>>,
+    /// "on" (default) | "off" | "onedrive-only" | "icloud-only".
+    /// Validated at finalize time; invalid values are a config error.
+    auto_verify: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct PartialUriMapping {
+    prefix: Option<String>,
+    root: Option<String>,
+    warm_cmd: Option<Vec<String>>,
+    warm_required: Option<bool>,
+    warm_timeout: Option<u32>,
+    verify_cmd: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -1516,7 +1609,12 @@ fn merge_option<T>(hi: Option<T>, low: Option<T>) -> Option<T> { hi.or(low) }
 **Finalization**: After merging partial configs, construct non-optional runtime structs:
 
 ```rust
-struct Config { core: CoreConfig, code_action: CodeActionConfig, completion: CompletionConfig }
+struct Config {
+    core: CoreConfig,
+    code_action: CodeActionConfig,
+    completion: CompletionConfig,
+    uri: UriConfig,
+}
 struct CoreConfig {
     file_extensions: Vec<String>,
     heading_ids: HeadingIdsConfig,
@@ -1525,6 +1623,19 @@ struct CoreConfig {
     extra_folders: Vec<String>,
 }
 struct HeadingIdsConfig { enable: bool }
+struct UriConfig {
+    mappings: Vec<UriMapping>,
+    /// "on" | "off" | "onedrive-only" | "icloud-only". Defaults to "on".
+    auto_verify: String,
+}
+struct UriMapping {
+    prefix: String,
+    root: String,
+    warm_cmd: Option<Vec<String>>,
+    warm_required: bool,
+    warm_timeout: u32,
+    verify_cmd: Option<Vec<String>>,
+}
 ```
 
 ### 9.4 Config Validation Policy
@@ -1949,8 +2060,9 @@ A one-line summary of all flags before diving into details:
 | Category | Flags |
 |----------|-------|
 | **Global** | `--help`, `--version`, `-q` / `--quiet` |
-| **Check** (default) | `<PATH>`, `--root`, `--format`, `--min-severity`, `--color`, `--verbose`, `--fix`, `-w` / `--watch`, `--stdin`, `-` |
-| **Server** | `--verbose`, `--wait-for-debugger` |
+| **Check** (default) | `<PATH>`, `--root`, `--format`, `--min-severity`, `--color`, `--verbose`, `--fix`, `-w` / `--watch`, `--stdin`, `-`, `--allow-uri-sync`, `--no-uri-hints`, `--uri-sync-batch-size` |
+| **Server** | `--verbose`, `--wait-for-debugger`, `--allow-uri-sync`, `--no-uri-hints`, `--uri-sync-batch-size` |
+| **Warm URI Mappings** | `--root`, `--verbose`, `--allow-uri-sync`, `--uri-sync-batch-size` |
 
 > **Note**: `downlint` and `downlint check` are equivalent — both run the diagnostic
 > checker. The "Check" row refers to the default behavior (no subcommand), not a
@@ -1990,7 +2102,8 @@ Standalone diagnostic checker. This is the default behavior when no subcommand i
 ```
 downlint [--root <DIR>] [--format <text|json>] [--min-severity <info|warning|error>]
          [--color <auto|always|never>] [--verbose <LEVEL>] [--fix]
-         [-w|--watch] [--stdin|-] [<PATH>]
+         [-w|--watch] [--stdin|-] [--allow-uri-sync] [--no-uri-hints]
+         [--uri-sync-batch-size <N>] [<PATH>]
 ```
 
 **Arguments**:
@@ -2024,6 +2137,19 @@ downlint [--root <DIR>] [--format <text|json>] [--min-severity <info|warning|err
   - Uses a synthetic path `<stdin>.md` and single-file mode by default.
   - No cross-file diagnostics unless a future `--stdin-path`-style option is added.
   - Diagnostics still go to stdout/text or stdout/JSON according to `--format`.
+
+- `--allow-uri-sync` — Permit subprocess execution of `warm_cmd` entries defined under
+  `[uri.mappings]` in `.downlint.toml`. Without this flag, warm is skipped for any
+  mapping with a `warm_cmd` and a one-time `DNL007` info diagnostic is emitted per
+  mapping (per RFC 0008 wording). **Security-sensitive**: enabling this flag means
+  `.downlint.toml` controls which commands run on your machine. See rfc/0006 §4 and
+  rfc/0008.
+- `--no-uri-hints` — Suppress the `DNL006` "no URI mapping found" hint diagnostic.
+  The `DNL002` broken-link diagnostic itself is still emitted.
+- `--uri-sync-batch-size <N>` — Batch size for per-file `warm_cmd` invocations
+  across external mappings. Controls how many paths are fanned out per subprocess
+  when `batch_size > 1`. Lower values reduce memory; higher values reduce fork
+  overhead. Default: `50`. See rfc/0007 §3.
 
 > **Note**: `downlint` does NOT read from stdin by default. Use `downlint --stdin` or
 > `downlint -` explicitly: `echo "# Title" | downlint -`.
@@ -2122,6 +2248,11 @@ where `{NN}` is the two-digit code number. Full examples:
 - `[DNL001]` — AmbiguousLink
 - `[DNL002]` — BrokenLink
 - `[DNL003]` — NonBreakableWhitespace
+- `[DNL005]` — BrokenAnchor
+- `[DNL006]` — UriNoMappingHint (info)
+- `[DNL007]` — UriSyncSkipped (info)
+- `[DNL008]` — SyncFailureWarning (info)
+- `[DNL009]` — BatchClamped (info)
 
 Example: `docs/note.md:14:3: error: Broken link to 'missing' [DNL002]`
 
@@ -2134,12 +2265,84 @@ Starts the LSP server on stdin/stdout (JSON-RPC 2.0). Editor users invoke this c
 - `--verbose` / `-v <LEVEL>` — Logging level to stderr (default: 2)
   > Controls `tracing-subscriber` output for LSP server operations. Same flag as §11.2 (check).
 - `--wait-for-debugger` — Pause until a debugger attaches
+- `--allow-uri-sync` — Permit subprocess execution of `warm_cmd` entries. Same
+  semantics as on `check` (§11.2). Threads through `ServerState.uri_opts` at
+  startup; without this flag, the LSP never runs `warm_cmd`. To change the flag
+  you must restart the server (no `workspace/didChangeConfiguration` in v1.2).
+- `--no-uri-hints` — Suppress the `DNL006` "no URI mapping found" hint diagnostic
+  from server-published diagnostics. Same semantics as on `check`.
+- `--uri-sync-batch-size <N>` — Batch size for `warm_cmd` invocations across
+  external mappings. Default: `50`.
 
 **Global Flags** (inherited from §11.1):
 
 `--help`, `--version`, `-q` / `--quiet` — see §11.1.
 
-### 11.4 Logging Strategy
+### 11.4 `downlint warm-uri-mappings`
+
+Cache-warming runner for `[uri.mappings]`. Walks every URI-scheme link target in
+the workspace (both currently resolved and currently broken), groups by mapping,
+and runs each mapping's `warm_cmd` in batches. **Does not run validation** — use
+`downlint check` afterward to validate against the warmed cache.
+
+The subcommand was renamed from `downlint sync` per RFC 0008. `downlint warm-uri`
+is accepted as a short alias.
+
+**Usage**:
+
+```
+downlint warm-uri-mappings [--root <DIR>] [--verbose <LEVEL>] [--allow-uri-sync]
+                           [--uri-sync-batch-size <N>]
+```
+
+**Arguments**:
+
+- (none beyond flags)
+
+**Flags**:
+
+- `--root <DIR>` — Workspace root (same semantics as `check`)
+- `--verbose` / `-v <LEVEL>` — Logging level (same as `check`)
+- `--allow-uri-sync` — **REQUIRED**. Without this flag the subcommand exits with
+  code 2 and prints:
+  > `downlint: error: 'warm-uri-mappings' requires --allow-uri-sync (safety gate).`
+- `--uri-sync-batch-size <N>` — Batch size for `warm_cmd` invocations. Default: `50`.
+
+**Behavior**:
+
+- Discovers the workspace exactly like `check` (root inference, `.downlint.toml`
+  loading, `[uri]` parsing).
+- Resolves URI-scheme link targets via the configured `[[uri.mappings]]`.
+- For each mapping, fans out paths through `SyncRunner::run_for_many` (positional
+  `{path}` or `{paths}` stdin tier, see rfc/0007 §3).
+- Honors `verify_cmd` and auto-detection heuristics (`auto_verify`) post-warm
+  (rfc/0007 §1).
+- Prints a per-mapping summary on success:
+  ```
+  Sync summary (76ms):
+    mapping[0]: total=42 synced=42 failed=0 missing=0 timed_out=0
+  ```
+
+**Exit Codes**:
+
+| Code | Meaning |
+|------|---------|
+| `0` | All paths across all mappings synced successfully |
+| `1` | One or more paths failed (sync error, timeout, missing after sync) |
+| `2` | Missing `--allow-uri-sync` gate, config parse failure, or `[uri]` expansion error |
+
+**What it does NOT do**:
+
+- No validation. No `DNL002` broken-link diagnostics emitted.
+- No modification of the LSP cache (LSP has its own cache; see §11.3).
+- No traversal outside each mapping's `root` (same security model as `check`).
+
+**Global Flags** (inherited from §11.1):
+
+`--help`, `--version`, `-q` / `--quiet` — see §11.1. With `--quiet`, the
+per-mapping summary is suppressed.
+
+### 11.5 Logging Strategy
 
 > **Note**: The `--verbose` flag on `downlint server` is the same logging flag as
 > on `downlint check` (§11.2). Both use `tracing-subscriber` with the same
