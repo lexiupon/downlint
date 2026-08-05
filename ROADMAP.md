@@ -1,7 +1,8 @@
 # Downlint Roadmap
 
 This file tracks planned features and LSP methods for future versions of **Downlint**.
-See [spec.md](./spec.md) for the current v1 implementation spec.
+See [spec.md](./spec.md) for the current v1 implementation spec and
+[CHANGELOG.md](./CHANGELOG.md) for release-by-release notes.
 
 ---
 
