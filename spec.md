@@ -190,9 +190,9 @@ requires a graceful response.
 | Code intelligence | `textDocument/documentHighlight` | Implemented | Same-document highlights |
 | Symbols | `textDocument/documentSymbol` | Implemented | Hierarchical headings |
 | Symbols | `workspace/symbol` | Deferred | See §16.2 |
-| Refactoring/actions | `textDocument/rename` | Implemented | Headings, reference labels, attachments |
-| Refactoring/actions | `textDocument/prepareRename` | Implemented | Returns exact editable range |
-| Refactoring/actions | `textDocument/codeAction` | Implemented | TOC and create-missing-file actions |
+| Refactoring/actions | `textDocument/rename` | Implemented | String-only — link targets + heading text. Never moves files; file moves live behind `refactor.rename.file`. See §8.4 |
+| Refactoring/actions | `textDocument/prepareRename` | Implemented | Returns exact editable range; `null` on plain prose / link display text / anchors. See §8.3 |
+| Refactoring/actions | `textDocument/codeAction` | Implemented | TOC, create-missing-file, plus `refactor.rename.{file,heading,link-target}` per RFC 0009 |
 | Refactoring/actions | `codeAction/resolve` | Implemented | Lazily computes workspace edits |
 | Code lens | `textDocument/codeLens` | Implemented | v1 includes link/reference counts |
 | Code lens | `codeLens/resolve` | Implemented | Lazily resolves counts/details |
@@ -206,7 +206,7 @@ requires a graceful response.
 | Workspace | `workspace/didChangeConfiguration` | Implemented | Re-merge config and re-index affected roots |
 | Workspace | `workspace/didChangeWorkspaceFolders` | Implemented | Add/remove primary folders |
 | Workspace | `workspace/didCreateFiles` | Implemented | Update indexes after client-side file creation |
-| Workspace | `workspace/didRenameFiles` | Implemented | Update paths and link indexes after rename |
+| Workspace | `workspace/didRenameFiles` | Implemented | Update paths and link indexes after rename. O(refs) per renamed file; emits DNL002 on referencing docs when target moves out of indexed set. See §8 |
 | Workspace | `workspace/didDeleteFiles` | Implemented | Remove docs/attachments and publish clears |
 | Workspace | `workspace/willCreateFiles` | Deferred | Not advertised in v1 |
 | Workspace | `workspace/willRenameFiles` | Deferred | Not advertised in v1 |
@@ -1337,79 +1337,340 @@ Downlint includes code lenses in v1 for lightweight reference visibility.
 
 ### 8.1 Rename Types
 
-**Markdown Reference Labels** (`ML`, `MLD`):
+Downlint exposes four internal rename element kinds. The LSP surface
+distinguishes them (different `WorkspaceEdit` shapes, different
+`prepareRename` ranges); the CLI collapses two of them into a single
+`rename-file` subcommand and infers the kind from the source file's
+extension. See [rfc/0009-rename-and-link-refactor.md](./rfc/0009-rename-and-link-refactor.md)
+for the full specification.
 
-- Renames label in all references and definition
-- Validation: no `\n`, `[`, `]`, `(`, `)`
+| LSP Type | Element | LSP method | CLI subcommand |
+|---|---|---|---|
+| `A` | Attachment (image, PDF, …) — wiki-link whose target resolves to a non-markdown file | `refactor.rename.file` code action | `downlint rename-file` (kind inferred) |
+| `H` | Heading (H1..H6) — heading text in source | `refactor.rename.heading` code action | (none — editor-driven only) |
+| `F` | Markdown file (`.md`/`.markdown`/`.mdx`/anything in `[core].file_extensions`) | `refactor.rename.file` code action | `downlint rename-file` (kind inferred) |
+| `L` | Link-target identifier — text-only rewrite, no disk move | `textDocument/rename` + `refactor.rename.link-target` code action | `downlint rename-link` |
 
-**Heading Rename** (`H`):
+The CLI collapses LSP types `A` and `F` into `rename-file` and
+infers the kind-class from the source extension. Markdown-extension files
+go through Type F; everything else goes through Type A. The LSP
+`refactor.rename.file` handler does the same inference based on the
+cursor's resolved destination kind.
 
-- **H1 title**: Updates heading text + all wiki-links + markdown-link anchors
-  - Propagates to `referencing_folders`
-- **H2+ headings**: Updates heading text + same-doc links + cross-folder links
-  - Propagates to `referencing_folders`
-- Validation: no `\n`, `#`
+#### Type A — Attachment Rename
 
-**Attachment Rename** (`WL` with `Dest::Attachment`):
+**Invocation**: `downlint rename-file` (CLI) or `textDocument/codeAction`
+kind `refactor.rename.file` (LSP).
 
-1. Rename file on disk
-2. Update all wiki-link references
+**Procedure**:
 
-- Extension preserved automatically
-- Validation: no `\n`, `[`, `]`, `(`, `)`
+1. Build the `ConnectionGraph` for the workspace + `extra_folders`.
+2. Collect every occurrence that resolves to the source file
+   (Attachment destinations).
+3. Run conflict checks (exact-path, prefix-collision when
+   `obsidian_prefix = true`, extension-class preservation
+   `attachment ↔ attachment`). On conflict, reject with `MethodFailed`.
+4. Run the blocking rule. On block, reject.
+5. Apply: write text edits to every rewritten document, then move the
+   file on disk (text first so a partial disk failure leaves
+   consistent state — RFC §"Risks" #6).
+
+#### Type H — Heading Rename
+
+**LSP only.** No CLI subcommand — headings are editor-driven changes
+with no script use case. The `refactor.rename.heading` code action is
+the sole interface.
+
+The H1-vs-H2+ distinction adds no value at the rename layer (the
+propagation is the same: walk the graph, update every referencing
+link's `#section` slug). H1 and H2+ rename identically.
+
+**Validation**:
+
+- No `\n`, no `#` in `newName`.
+- The new heading text produces a slug that does not collide with an
+  existing slug in the same document. On collision, reject with
+  `MethodFailed`.
+
+**Slug update**: when the heading text changes, every link target's
+`#section` slug also changes. Downlint computes the new slug from the
+new heading text and emits a `TextEdit` replacing only the `#section`
+portion of every referencing link — not the entire link.
+
+**Scope**: The rename operates on the heading's `#section` slug in
+link targets. It does NOT:
+
+- Rewrite the heading text in the source document's frontmatter (if any).
+- Auto-disambiguate slug collisions (rejects with `MethodFailed`).
+- Handle the case where the heading is deleted (tracked as future work).
+
+**H1 title side-effect**: if `[core] title_from_heading = true` and the
+renamed heading is the document's H1, the document's title changes too.
+This affects resolution of title-only wiki-links `[[|Title]]` and any
+frontmatter `title:` aliases that get re-slugged. Downlint re-runs the
+resolver for affected documents after the rename and emits fresh
+diagnostics; it does not auto-edit title-only links (title resolution
+is intentionally tolerant and not a rename target).
+
+#### Type F — Markdown File Rename
+
+**Invocation**: `downlint rename-file` (CLI) or `textDocument/codeAction`
+kind `refactor.rename.file` (LSP).
+
+**Procedure**:
+
+1. Build the `ConnectionGraph` for the workspace + `extra_folders`.
+2. Collect every occurrence that resolves to the source file (Document
+   destinations).
+3. Run conflict checks. On conflict, reject.
+4. Run the blocking rule. On block, reject.
+5. Apply: write text edits to every rewritten document, then move the
+   file on disk.
+
+The LSP `codeAction/resolve` returns a `WorkspaceEdit` containing both
+the file rename (as a `RenameFile` document change) and per-document
+`TextEdit[]` for every occurrence that resolves to the file. The editor
+applies both atomically.
+
+**What counts as "referencing this file"**: A document `D_ref`
+references the file at path `P_old` if any of `D_ref`'s occurrences
+resolve through the `ConnectionGraph` to a destination whose
+`path == P_old`:
+
+- Wiki-link `[[stem]]` or `[[path/to/stem]]` whose resolved destination
+  is `P_old`.
+- Markdown-link `[text](url)` whose `url` resolves to `P_old`.
+- Reference definition `[id]: url` whose `url` resolves to `P_old`
+  (the URL is edited; the `[text][id]` references are not — they
+  continue to use the definition).
+
+**Prefix-resolved links — promoted to full stem**: if
+`obsidian_prefix = true` and `[[prefix]]` resolves uniquely to `P_old`
+(via prefix match), the rename rewrites the link target to the new
+full stem. This is a deliberate **promotion**: a prefix-only reference
+becomes a full-stem reference. Reasoning: after the rename, there is no
+longer any ambiguity — the file's new name is the only thing the link
+could point at — so silently widening the target is safe and is what
+the user expects when they rename the file.
+
+If `obsidian_prefix = false`, the same link is `DNL002` broken before
+the rename (no file matches the prefix without the flag). After the
+rename, the link remains broken unless the user also types the full new
+stem. This is the existing DNL002 behavior; the rename does not change
+it.
+
+**Path rewriting** for each rewritten occurrence:
+
+| Link form | Edit |
+|---|---|
+| `[[stem]]` | Replace the entire target range with the new stem |
+| `[[path/to/stem]]` | Replace only the trailing segment after the last `/` |
+| `[[stem\|alias]]` | Replace only the `stem` portion, preserve the alias verbatim |
+| `[[stem#heading]]` | Replace only the `stem` portion, preserve `#heading` |
+| `[[stem#heading\|alias]]` | Replace only the `stem` portion, preserve `#heading\|alias` |
+| `[text](path.md)` | Replace only the path portion of the URL, preserve the rest of the URL (query/fragment if any) |
+| `[text](path.md#head)` | Replace only the `path.md` portion, preserve `#head` |
+| `[text][id]` + `[id]: path.md` | Edit the definition URL only; do not touch references |
+
+The new path is computed relative to the referencing document's
+directory. Cross-subtree moves produce `../`-laden paths; this is fine,
+the resolver already handles `..`.
+
+#### Type L — Link Target String Rename
+
+**Invocation**:
+
+- `textDocument/rename` (LSP) — string-only, operates on the cursor's
+  string range. No resolution, no file moves, no blocking rule.
+- `textDocument/codeAction` kind `refactor.rename.link-target` (LSP) —
+  workspace-wide rewrite with full safety machinery.
+- `downlint rename-link` (CLI) — workspace-wide rewrite.
+
+The string-only `textDocument/rename` variant is a thin wrapper: it does
+no resolution, no conflict checks, no blocking-rule evaluation. It just
+returns one `TextEdit` replacing the string at the prepared range. This
+is by design — see §8.4 "Why textDocument/rename is string-only".
+
+**Procedure**:
+
+1. Find every occurrence in the workspace where the link target string
+   equals `--from` (or the prepared `oldName` for the LSP code action)
+   — exact match, modulo extension (`report`, `report.md`,
+   `report.markdown` all match).
+2. For each occurrence, resolve it through the `ConnectionGraph`. Keep
+   only occurrences whose resolution target is the file `old.md` (the
+   unique exact-stem match for `--from`). Drop occurrences that are:
+   - Unresolved (no file at all)
+   - Ambiguous (multiple matches — with `obsidian_prefix = true`)
+   - Title-resolved to a different file
+   - Inside code spans / code blocks / frontmatter
+3. Conflict check: `--to` must not resolve to any file. Specifically:
+   - `--to` (with any markdown extension appended) must not be an
+     existing file on disk.
+   - With `obsidian_prefix = true`, `--to` must not be a leading prefix
+     of any existing file's stem.
+   - With `obsidian_prefix = true`, `--to` must not have any other file
+     as a leading prefix of it (the reverse direction).
+   - `--to` must not match any document's title slug.
+4. Run the blocking rule. Reject on block.
+5. Rewrite the target string portion of every kept occurrence
+   (preserving `|alias`, `#heading`, etc.) from `--from` to `--to`.
+   Disk is not touched.
 
 ### 8.2 Workspace Edit Construction
 
-Multi-file renames require coordinating edits across multiple documents. The LSP server
-constructs a `WorkspaceEdit` that may contain changes for several files in a single operation.
+Multi-file renames require coordinating edits across multiple documents.
+The LSP server constructs a `WorkspaceEdit` that carries changes for
+several files in a single operation. Implementation lives in
+`src/lsp/edit.rs::build_workspace_edit`.
 
 **Construction process**:
 
-1. **Collect edits per document**: For each document affected by a rename, compute the text
-   edits needed (e.g., updating a heading title in all wiki-link anchors)
-2. **Sort within each document**: Edits are sorted in reverse order (end-of-doc first)
-   to prevent offset shifts from invalidating subsequent edits
-3. **Group by file**: Organize edits into a `HashMap<Uri, Vec<TextEdit>>` per file
-4. **Choose format**: Use `DocumentChanges` (modern LSP 3.16+) when the client supports
-   it, falling back to `Changes` for older clients
+1. **Collect edits per document**: For each document affected by a
+   rename, compute the text edits needed (e.g., updating a heading
+   title in all wiki-link anchors). The shared rename library produces
+   a `RenamePlan { edits: Vec<DocumentEdit>, file_moves: Vec<FileMove> }`
+   value object that captures every edit and every disk move.
+2. **Sort within each document**: Edits are sorted in reverse order
+   (end-of-doc first) to prevent offset shifts from invalidating
+   subsequent edits. `RenamePlan::sorted_for_apply` does this; the LSP
+   builder re-sorts defensively at serialize time.
+3. **Group by file**: Organize edits into a `Vec<TextDocumentEdit>` per
+   file (one entry per affected document).
+4. **Format selection**: Use `DocumentChanges` (LSP 3.16+) — required
+   for `RenameFile` operations, which only `documentChanges` can
+   carry. Older `changes`-only clients are not supported for renames.
 
 **Example — Renaming a heading across files**:
 
-```rust
-// Rename "Old Title" → "New Title" affects:
-// - docs/a.md: heading text + 2 wiki-link anchors
-// - docs/b.md: 1 wiki-link anchor  
-// - assets/c.md: 1 markdown link anchor
-
-WorkspaceEdit {
-    changes: Some({
-        "file:///docs/a.md": [
-            TextEdit { range: H1_range, new_text: "New Title" },
-            TextEdit { range: anchor_1_range, new_text: "new-title" },
-            TextEdit { range: anchor_2_range, new_text: "new-title" },
-        ],
-        "file:///docs/b.md": [
-            TextEdit { range: anchor_range, new_text: "new-title" },
-        ],
-        "file:///assets/c.md": [
-            TextEdit { range: anchor_range, new_text: "new-title" },
-        ],
-    }),
-    document_changes: None,  // Use DocumentChanges when client supports it
+```json
+{
+  "documentChanges": [
+    {
+      "textDocument": { "uri": "file:///docs/a.md", "version": null },
+      "edits": [
+        { "range": { … H1_range … }, "newText": "New Title" },
+        { "range": { … anchor_1_range … }, "newText": "new-title" },
+        { "range": { … anchor_2_range … }, "newText": "new-title" }
+      ]
+    },
+    {
+      "textDocument": { "uri": "file:///docs/b.md", "version": null },
+      "edits": [
+        { "range": { … anchor_range … }, "newText": "new-title" }
+      ]
+    },
+    {
+      "textDocument": { "uri": "file:///assets/c.md", "version": null },
+      "edits": [
+        { "range": { … anchor_range … }, "newText": "new-title" }
+      ]
+    }
+  ]
 }
 ```
 
-**Validation**: Before sending the workspace edit, validate that all target ranges
-still exist in the current document state. If any range has shifted (due to concurrent edits),
-the rename should be rejected with a `MethodFailed` error including the prepare-rename result.
+**Validation**: The CLI apply path (Phase 5) writes text edits to disk
+in reverse order, then moves the file. The LSP apply path relies on
+the editor to apply both atomically. If a range has shifted due to
+concurrent edits, the editor rejects the `WorkspaceEdit`.
 
 ### 8.3 Prepare Rename
 
-Returns the rename range for the element:
+Returns the rename range for the element under the cursor. The
+implementation is string-only — it does **not** consult the
+connection graph or the file system. Implementation lives in
+`src/lsp/handlers/rename.rs::prepare_rename`.
 
-- WikiLink: attachment name range
-- MarkdownLink/Def: label range
-- Heading: title range
+| Cursor position | Range returned |
+|---|---|
+| Inside a wiki-link target string (between `[[` and `\|`/`#`/`]]`) | The target string's range, excluding `\|alias` and `#heading` |
+| Inside a markdown-link URL portion (between `(` and `)`/`#`) | The URL's range, excluding `#anchor` |
+| Inside a reference definition URL (`[id]: url`) | The URL's range |
+| Inside a heading text occurrence (H1..H6) | The heading text's range, excluding the `#` markers |
+| Anything else (plain prose, code spans, link display text, frontmatter) | `null` |
+
+`null` (rather than a range) is the LSP signal that the cursor is not
+on a renameable element. Editors turn this into "no rename available"
+in the UI.
+
+The code actions (`refactor.rename.file`, `refactor.rename.heading`,
+`refactor.rename.link-target`) do **not** use `prepareRename`. They
+compute their own availability based on resolution — see `src/lsp/handlers/code_action.rs`.
+
+### 8.4 Why `textDocument/rename` is String-Only
+
+The cursor on `[[report]]` is fundamentally ambiguous:
+
+- It could be a filename stem (resolves to `report.md`).
+- It could be an H1 title (resolves to the title of `report.md` or
+  another doc).
+- It could be a prefix of multiple files (`report.md`, `report-2024.md`,
+  `report-2025.md` with `obsidian_prefix = true`).
+- It could be unresolved (no file matches at all, `DNL002`).
+
+The LSP wire has no way to ask the user "which interpretation did you
+mean?" before honoring `textDocument/rename`. If F2 silently moves
+files, the user can corrupt their vault with one keystroke.
+
+**Decision**: `textDocument/rename` is the **safe default** — it
+renames the string under the cursor and never moves files. File moves
+are surfaced as code actions where the user picks the operation from a
+menu.
+
+The string-only handler does no resolution, no conflict checks, no
+blocking-rule evaluation. It is a pure string-replace operation. All
+safety machinery lives in the code actions (`src/rename/`).
+
+### 8.5 Blocking Rule
+
+A rename is blocked if any document that would be rewritten contains a
+`Warning` or `Error` diagnostic other than on the occurrence(s) being
+rewritten.
+
+This rule applies to:
+
+- The `refactor.rename.file` code action.
+- The `refactor.rename.link-target` code action.
+- The `downlint rename-file` CLI subcommand.
+- The `downlint rename-link` CLI subcommand.
+
+It does **not** apply to `textDocument/rename`, which is a pure
+string-replace operation with no resolution, no file moves, and no
+propagation. The string-only rename cannot introduce broken-link
+cascades, so the blocking rule is unnecessary.
+
+The rationale: a propagating rename is about to mutate text in a
+document. If that document already has diagnostics, the rename would
+compound existing problems — propagating broken links, burying
+ambiguities, or masking data-flow issues. The user must clean up first.
+
+| Severity | Blocks? |
+|---|---|
+| `Error` (e.g. `DNL002`) | **Yes** |
+| `Warning` (e.g. `DNL001`, `DNL005`) | **Yes** |
+| `Information` (e.g. `DNL006`, `DNL007`, `DNL008`, `DNL009`) | No |
+| `Hint` | No |
+
+Scope: "document that would be rewritten" — every document that
+contains at least one occurrence being edited. The blocking check
+inspects all *other* occurrences in those documents. An occurrence
+being rewritten that itself has a diagnostic does not block itself
+(we're about to fix it via the rewrite); but other diagnostics in the
+same document do block.
+
+### 8.6 Indexing Guard
+
+All rename operations (LSP and CLI) require indexing to be complete.
+If a rename is requested while indexing is in progress, the operation
+is rejected immediately with a clear message: "Indexing in progress —
+try again in a moment." Implementation tracks this via
+`ServerState::indexing` (set around every `resolve_links` call) and
+`is_indexing()` helper. The LSP handler returns `MethodFailed`; the
+CLI exits with code 3.
+
+This prevents inconsistent `ConnectionGraph` state from producing
+incorrect rewrites.
 
 ---
 
@@ -2388,7 +2649,8 @@ Tests are organized **by feature/module** (not by test type), making it easy to 
 | **References** | `refs_tests.rs` | Resolution, cross-folder, ambiguity |
 | **Diagnostics** | `diag_tests.rs` | Broken links, edge cases, extra folders |
 | **Features** | `code_action_tests.rs` | TOC generation, insertion, create missing file |
-| | `refactor_tests.rs` | Rename (labels, headings, attachments) |
+| | `rename_tests.rs` | Rename operations: prepareRename ranges, code-action offering, file/attachment/heading/link-target planners, didRenameFiles. Per RFC 0009 |
+| | `cli_rename_tests.rs` | CLI subprocess tests: rename-file / rename-link exit codes, dry-run, conflicts |
 | | `lenses_tests.rs` | Code lens generation |
 | **System** | `server_tests.rs` | Server negotiation, text sync, capability handling |
 | | `workspace_tests.rs` | Folder management, extra folders, document lifecycle |
@@ -2512,7 +2774,8 @@ Strategy: Use `insta::assert_snapshot!()` for full output; inline snapshots for 
 Tests exercising multiple components together:
 - `refs_tests.rs` — Reference resolution with incremental updates
 - `diag_tests.rs` — Diagnostics across single/multi-file folders with extra folders
-- `refactor_tests.rs` — Rename operations affecting multiple documents
+- `rename_tests.rs` — LSP rename behavior (prepareRename, string-only rename, code actions, planner dispatch). Mirrors the harness style of `tests/integration.rs`.
+- `cli_rename_tests.rs` — CLI subprocess tests for `rename-file` / `rename-link`, asserting stdout/stderr/exit code.
 - `workspace_tests.rs` — Folder management, document add/remove/update
 - `conn_tests.rs` — Connection graph state after operations
 

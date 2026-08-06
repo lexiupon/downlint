@@ -8,6 +8,54 @@ See [spec.md](./spec.md) for the current v1 implementation spec and
 
 ## Recently Shipped
 
+### Rename & Link Refactor (RFC 0009)
+
+Closes the gap between detecting broken links (DNL002) and fixing them.
+Three rename operations are now supported end-to-end:
+
+- **File rename** (markdown or attachment) — moves the file on disk and
+  rewrites every wiki/markdown/reference-definition link that resolves
+  to it. Extension-class preservation enforced; exact-path and
+  prefix-collision detection.
+- **Heading rename** — recomputes the heading slug and rewrites every
+  `#section` in referencing links across the workspace.
+- **Link-target rename** — workspace-wide string rewrite with conflict
+  + blocking checks.
+
+LSP wire surface additions:
+
+- `textDocument/prepareRename` — returns the editable range for a
+  string at the cursor.
+- `textDocument/rename` (string-only) — the safe F2 default; never
+  moves files. File moves are surfaced as code actions.
+- `textDocument/codeAction` — three new kinds: `refactor.rename.file`,
+  `refactor.rename.link-target`, `refactor.rename.heading`.
+- `workspace/didRenameFiles` — reacts to editor-driven file renames by
+  updating the graph in-place and re-publishing diagnostics.
+
+CLI subcommands:
+
+- `downlint rename-file --from <PATH> --to <PATH> [--dry-run]`
+- `downlint rename-link --from <STRING> --to <STRING> [--dry-run]`
+
+Exit codes (both subcommands): 0 success, 1 blocked by diagnostic, 2
+conflict, 3 bad arguments / config / indexing. The blocking rule
+refuses renames when any rewritten document contains a `Warning` or
+`Error` diagnostic on an unrelated occurrence — the rationale is
+documented inline in the error message.
+
+The persistent server (`downlint server --detach`) is a Phase 5
+stretch goal and currently returns exit 3 with a clear message. The
+`.downlint/.rename.lock` atomic-application guard (RFC §"Risks" #6) is
+not yet implemented; the apply path writes text edits first, then the
+file move, and partial failures are surfaced as DNL002 rather than
+auto-rolled-back.
+
+See [rfc/0009-rename-and-link-refactor.md](./rfc/0009-rename-and-link-refactor.md)
+for the full specification.
+
+### `[uri]` — External Asset URI Mapping (RFC 0006)
+
 ### `[uri]` — External Asset URI Mapping (RFC 0006)
 
 Maps URI-style wiki-link targets (`onedrive://work/...`, `s3://reports/...`) to

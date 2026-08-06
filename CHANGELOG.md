@@ -8,6 +8,85 @@ context.
 
 ## [Unreleased]
 
+### Added
+
+**Rename & Link Refactor (RFC 0009)** — downlint can now rename files,
+headings, and link identifiers safely across the workspace. Closes the
+gap between detecting broken links (DNL002) and fixing them. The LSP
+and CLI share a single rename library (`src/rename/`); both call
+`plan_rename(input) -> RenamePlan` and then either serialize to a
+`WorkspaceEdit` (LSP) or apply text-first-then-disk (CLI).
+
+#### LSP wire surface
+
+- `textDocument/prepareRename` — returns the editable range for a
+  string at the cursor (link target or heading text), `null` otherwise.
+- `textDocument/rename` — string-only rename. **Never moves files.**
+  This is the safe F2 default; file moves are surfaced as code actions.
+- `textDocument/codeAction` — three new kinds:
+  - `refactor.rename.file` — moves a file on disk and rewrites every
+    reference (markdown file or attachment; class is inferred from the
+    source extension). Full safety machinery: extension-class
+    preservation, exact-path and prefix-collision checks, blocking rule
+    across rewritten documents, atomic text-first-then-disk.
+  - `refactor.rename.link-target` — workspace-wide string rewrite with
+    conflict + blocking checks. Useful for fixing typos that caused a
+    broken link (`DNL002`), or renaming a logical identifier across
+    many documents.
+  - `refactor.rename.heading` — recomputes the heading slug and
+    rewrites every `#section` in referencing links across the
+    workspace.
+- `workspace/didRenameFiles` — reacts to editor-driven file renames by
+  updating the graph in-place (O(references to renamed file), not
+  O(whole graph)) and re-publishing diagnostics.
+
+#### CLI subcommands
+
+- `downlint rename-file --from <PATH> --to <PATH> [--dry-run]` —
+  renames a markdown file or attachment and propagates to references.
+  Kind-class is inferred from the source extension.
+- `downlint rename-link --from <STRING> --to <STRING> [--dry-run]` —
+  rewrites a logical link identifier across the workspace without
+  moving files.
+
+Exit codes (both subcommands):
+
+| Code | Meaning |
+|---|---|
+| 0 | Success (or dry-run clean) |
+| 1 | Blocked by an existing `Warning`/`Error` diagnostic on an unrelated occurrence |
+| 2 | Conflict detected (path collision, prefix shadow, or extension class mismatch) |
+| 3 | Bad arguments / config error / indexing in progress |
+
+#### Blocking rule
+
+A rename is refused when any document that would be rewritten contains a
+`Warning` or `Error` diagnostic other than on the occurrence(s) being
+rewritten. `Information` and `Hint` diagnostics do not block. The error
+message lists every blocking diagnostic inline. `textDocument/rename` is
+the only surface exempted from this rule (string-only — cannot introduce
+broken-link cascades).
+
+#### Indexing guard
+
+All rename operations (LSP and CLI) require indexing to be complete. If
+a rename is requested mid-index, the operation is rejected with a clear
+message: "Indexing in progress — try again in a moment." The LSP
+returns `MethodFailed`; the CLI exits with code 3. The indexing state is
+tracked in `ServerState::indexing` and the `is_indexing()` helper.
+
+### Notes
+
+- The persistent server (`downlint server --detach / --stop`) is
+  documented as a stretch goal in RFC 0009 §"Persistent Server Mode".
+  Phase 5 ships the CLI subcommands and the in-process planner; the
+  detached-server optimization for agent workflows is a future hardening.
+- The `.downlint/.rename.lock` atomic-application guard (RFC §"Risks"
+  #6) is not yet implemented. The current apply path writes text edits
+  first and then moves the file — partial failures leave a recoverable
+  state (DNL002 surfaces the gap) but no automatic rollback.
+- No new diagnostic codes. RFC 0009 reuses existing severity levels.
+
 ## [0.2.0] — External Asset URI Mapping
 
 The first user-facing feature after v0.1.0. Adds `[uri.mappings]` for

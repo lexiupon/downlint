@@ -4,6 +4,7 @@ pub mod config;
 pub mod diagnostics;
 pub mod lsp;
 pub mod parser;
+pub mod rename;
 pub mod resolution;
 pub mod utils;
 pub mod version;

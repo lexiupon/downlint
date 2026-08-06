@@ -1,4 +1,5 @@
 pub mod check;
+pub mod rename;
 pub mod sync;
 
 use crate::diagnostics::DiagnosticSeverity;
@@ -30,6 +31,14 @@ struct Cli {
 enum Command {
     Check(CheckArgs),
     Server(ServerArgs),
+    /// Move a markdown file or attachment on disk and rewrite every link
+    /// that points at it. Kind-class (markdown vs attachment) is inferred
+    /// from the source file's extension.
+    #[command(name = "rename-file", about = "Rename a markdown file or attachment and rewrite references")]
+    RenameFile(RenameFileArgs),
+    /// Rewrite a logical link identifier across the workspace. No disk move.
+    #[command(name = "rename-link", about = "Rewrite a link-target identifier across the workspace")]
+    RenameLink(RenameLinkArgs),
     #[command(name = "warm-uri-mappings", visible_alias = "warm-uri", about = "Warm local copies of files referenced by [uri.mappings] without running validation")]
     WarmUri(SyncArgs),
 }
@@ -91,6 +100,66 @@ struct ServerArgs {
     /// mappings.
     #[arg(long = "uri-sync-batch-size", default_value_t = 50)]
     uri_sync_batch_size: usize,
+    /// Start the server in the background and exit immediately. Used by
+    /// agent workflows that perform many renames in sequence. The server
+    /// runs as a planning service — CLI `rename-file` / `rename-link` with
+    /// `--server` connect to it via TCP.
+    #[arg(long = "detach", action = ArgAction::SetTrue)]
+    detach: bool,
+    /// Stop a running detached server for the current project. Exits 0 if
+    /// the server was stopped, 3 if no server was running.
+    #[arg(long = "stop", action = ArgAction::SetTrue)]
+    stop: bool,
+    /// TCP port for the detached server. Use `--port 0` to let the OS
+    /// pick an available port (the chosen port is reported to stdout and
+    /// written to `.downlint/.server.pid`).
+    #[arg(long = "port", default_value_t = 0)]
+    port: u16,
+}
+
+#[derive(Args, Clone, Debug, Default)]
+struct RenameFileArgs {
+    #[arg(long)]
+    root: Option<PathBuf>,
+    /// Workspace-relative path to the source file.
+    #[arg(long)]
+    from: PathBuf,
+    /// Workspace-relative path to the destination.
+    #[arg(long)]
+    to: PathBuf,
+    /// Print the planned edits without applying them.
+    #[arg(long, action = ArgAction::SetTrue)]
+    dry_run: bool,
+    #[arg(long, short = 'v', default_value_t = 2)]
+    verbose: u8,
+    #[arg(long, short = 'q', action = ArgAction::SetTrue)]
+    quiet: bool,
+    /// Connect to a detached server for planning (avoids re-indexing).
+    /// Falls back to in-process indexing if no server is detected.
+    #[arg(long, action = ArgAction::SetTrue)]
+    server: bool,
+}
+
+#[derive(Args, Clone, Debug, Default)]
+struct RenameLinkArgs {
+    #[arg(long)]
+    root: Option<PathBuf>,
+    /// Source identifier (no `/`, `#`, `|`, etc.).
+    #[arg(long)]
+    from: String,
+    /// Destination identifier (no `/`, `#`, `|`, etc.).
+    #[arg(long)]
+    to: String,
+    /// Print the planned edits without applying them.
+    #[arg(long, action = ArgAction::SetTrue)]
+    dry_run: bool,
+    #[arg(long, short = 'v', default_value_t = 2)]
+    verbose: u8,
+    #[arg(long, short = 'q', action = ArgAction::SetTrue)]
+    quiet: bool,
+    /// Connect to a detached server for planning.
+    #[arg(long, action = ArgAction::SetTrue)]
+    server: bool,
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -129,6 +198,21 @@ pub async fn run() -> i32 {
     match cli.command {
         Some(Command::Server(args)) => {
             init_tracing(args.verbose);
+            if args.stop {
+                // Stop a detached server. For now, the persistent server
+                // is a Phase 5 stretch goal; this branch returns 3 with a
+                // clear message until the server module lands.
+                eprintln!(
+                    "downlint: persistent server not yet implemented (RFC 0009 Phase 5 stretch goal)"
+                );
+                return 3;
+            }
+            if args.detach {
+                eprintln!(
+                    "downlint: persistent server not yet implemented (RFC 0009 Phase 5 stretch goal)"
+                );
+                return 3;
+            }
             let uri_opts = crate::resolution::UriOptions {
                 allow_sync: args.allow_uri_sync,
                 no_hints: args.no_uri_hints,
@@ -143,6 +227,28 @@ pub async fn run() -> i32 {
         Some(Command::WarmUri(args)) => {
             init_tracing(args.verbose);
             sync::run_sync(map_sync_args(args, cli.quiet)).await
+        }
+        Some(Command::RenameFile(args)) => {
+            init_tracing(args.verbose);
+            rename::run_rename_file(rename::RenameFileOptions {
+                root: args.root,
+                from: args.from,
+                to: args.to,
+                dry_run: args.dry_run,
+                verbose: args.verbose,
+                quiet: args.quiet,
+            })
+        }
+        Some(Command::RenameLink(args)) => {
+            init_tracing(args.verbose);
+            rename::run_rename_link(rename::RenameLinkOptions {
+                root: args.root,
+                from: args.from,
+                to: args.to,
+                dry_run: args.dry_run,
+                verbose: args.verbose,
+                quiet: args.quiet,
+            })
         }
         None => {
             init_tracing(cli.check.verbose);

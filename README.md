@@ -190,3 +190,77 @@ See [rfc/0006-external-asset-uri-mapping.md](./rfc/0006-external-asset-uri-mappi
 for the Phase 1 specification,
 [rfc/0007-uri-mapping-phase-2.md](./rfc/0007-uri-mapping-phase-2.md) for Phase 2,
 and [rfc/0008-uri-warm-rename.md](./rfc/0008-uri-warm-rename.md) for the rename.
+
+## Rename
+
+Downlint can rename files, headings, and link-target identifiers safely
+across the workspace. The LSP and CLI share a single rename library; both
+call `plan_rename(input) -> RenamePlan` and then either serialize to a
+`WorkspaceEdit` (LSP) or apply text-first-then-disk (CLI). The
+implementation is specified in
+[rfc/0009-rename-and-link-refactor.md](./rfc/0009-rename-and-link-refactor.md).
+
+### LSP gestures
+
+| Gesture | Operation | Never moves files? |
+|---|---|---|
+| `textDocument/rename` (F2) | String-only at the cursor. Replaces the link target or heading text. | yes |
+| `refactor.rename.file` (code action) | Moves a file on disk and rewrites every reference. | no |
+| `refactor.rename.link-target` (code action) | Workspace-wide string rewrite with conflict + blocking checks. | yes (no disk move) |
+| `refactor.rename.heading` (code action) | Recomputes the heading slug and rewrites every `#section` in referencing links. | yes |
+
+The string-only F2 default is intentional — the cursor on `[[report]]`
+is fundamentally ambiguous (could be a file stem, an H1 title, a prefix
+of multiple files, or unresolved). `textDocument/rename` cannot ask the
+user "which interpretation?" before honoring F2. File moves are
+surfaced as code actions where the user picks the operation from a
+menu.
+
+### CLI
+
+```
+$ downlint rename-file --from reports/2024-q1.md --to reports/q1.md
+$ downlint rename-file --from assets/diagrams/old-flow.png \
+                      --to assets/diagrams/new-flow.png
+$ downlint rename-link --from report --to topic
+$ downlint rename-file --from old.md --to new.md --dry-run
+```
+
+`rename-file` accepts any file on disk — markdown or attachment. The
+kind-class is inferred from the source extension, so users don't have
+to think about it. `rename-link` rewrites a logical identifier
+workspace-wide without touching disk.
+
+Both subcommands accept `--dry-run` to print planned edits without
+applying them, and `--config` to override the default config lookup.
+`--allow-extra-folders` (default true) includes `extra_folders` in the
+scope of the rename.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Success (or dry-run clean) |
+| 1 | Blocked by an existing `Warning`/`Error` diagnostic on an unrelated occurrence |
+| 2 | Conflict detected (path collision, prefix shadow, or extension class mismatch) |
+| 3 | Bad arguments / config error / indexing in progress |
+
+### Blocking rule
+
+A rename is refused when any document that would be rewritten contains a
+`Warning` or `Error` diagnostic other than on the occurrence(s) being
+rewritten. `Information` and `Hint` diagnostics do not block. The error
+message lists every blocking diagnostic inline.
+
+```
+$ downlint rename-file --from report.md --to topic.md
+error: rename blocked — 1 occurrence has diagnostic DNL002
+  → docs/index.md:42  [[2024-q1]]  Broken link: '2024-q1' could not be resolved
+hint: fix the broken reference first, then re-run the rename.
+```
+
+The rationale: a propagating rename is about to mutate text in a
+document. If that document already has diagnostics, the rename would
+compound existing problems — propagating broken links, burying
+ambiguities, or masking data-flow issues. The user must clean up
+first.

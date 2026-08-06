@@ -5,6 +5,14 @@ use crate::utils::{PositionEncoding, Text};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
+pub mod code_action;
+pub mod rename;
+pub mod workspace;
+
+pub use code_action::{KIND_FILE as CODE_ACTION_KIND_FILE, KIND_HEADING as CODE_ACTION_KIND_HEADING, KIND_LINK_TARGET as CODE_ACTION_KIND_LINK_TARGET, code_actions};
+pub use rename::{PrepareRenameHit, hit_range_json, prepare_rename};
+pub use workspace::{FileRename, apply_file_renames};
+
 pub fn completion(
     graph: &ConnectionGraph,
     path: PathBuf,
