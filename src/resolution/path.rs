@@ -37,25 +37,34 @@ pub fn path_without_extension(path: &Path) -> String {
     value
 }
 
-fn percent_decode(input: &str) -> String {
-    let mut result = Vec::new();
+pub fn percent_decode(input: &str) -> String {
+    // Decode percent-encoded UTF-8 bytes back into a Unicode String.
+    // Per RFC 3986 §2.5, percent-encoded sequences in URIs represent
+    // octets; for non-ASCII payloads (CJK, accented Latin, emoji) those
+    // octets are the bytes of a UTF-8 encoding of the original text.
+    let mut bytes = Vec::with_capacity(input.len());
     let mut chars = input.chars();
     while let Some(ch) = chars.next() {
         if ch == '%' {
             let hex: String = chars.by_ref().take(2).collect();
             if hex.len() == 2 {
                 if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                    result.push(byte as char);
+                    bytes.push(byte);
                     continue;
                 }
             }
-            result.push(ch);
-            result.extend(hex.chars());
+            // Malformed escape: keep the literal characters.
+            bytes.push(ch as u32 as u8);
+            for hex_ch in hex.chars() {
+                bytes.push(hex_ch as u32 as u8);
+            }
         } else {
-            result.push(ch);
+            let mut buf = [0u8; 4];
+            let encoded = ch.encode_utf8(&mut buf);
+            bytes.extend_from_slice(encoded.as_bytes());
         }
     }
-    result.into_iter().collect()
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 pub fn resolve_explicit_path(root: &Path, source_dir: &Path, target: &str) -> PathBuf {

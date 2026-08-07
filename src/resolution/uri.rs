@@ -170,10 +170,14 @@ impl UriResolver {
     fn build_outcome(&self, target: &str, matched: PrefixMatch) -> UriOutcome {
         let mapping = &self.mappings[matched.index];
         let relative = matched.relative.trim_start_matches('/');
-        let resolved_path = if relative.is_empty() {
+        // Percent-decode the relative portion so `resolved_path` is a usable
+        // filesystem path. The original `target` field on the outcome keeps
+        // its encoded form for display/diagnostic purposes.
+        let relative_decoded = crate::resolution::path::percent_decode(relative);
+        let resolved_path = if relative_decoded.is_empty() {
             mapping.expanded_root.clone()
         } else {
-            mapping.expanded_root.join(relative)
+            mapping.expanded_root.join(&relative_decoded)
         };
         UriOutcome::Resolved {
             mapping_index: matched.index,
@@ -524,5 +528,50 @@ mod tests {
             resolver.resolve("onedrive://work/file"),
             UriOutcome::NoMapping { .. }
         ));
+    }
+
+    #[test]
+    fn percent_encoded_target_decodes_to_filesystem_path() {
+        let dir = tempdir();
+        let resolver = UriResolver::new(
+            &config_with_mapping(
+                "file:///Users/alice/icloud/assets/",
+                "/Users/alice/icloud/assets",
+            ),
+            dir.path(),
+        )
+        .unwrap();
+
+        // A realistic percent-encoded URL.
+        let target = "file:///Users/alice/icloud/assets/vendor/product%20example%20V1.3.pptx";
+        let outcome = resolver.resolve(target);
+        let resolved = match outcome {
+            UriOutcome::Resolved { resolved_path, .. } => resolved_path,
+            other => panic!("expected Resolved, got {other:?}"),
+        };
+        // The resolved path should be the actual filesystem filename:
+        // percent-decoded (spaces), not the encoded form.
+        let as_string = resolved.to_string_lossy().into_owned();
+        assert!(as_string.contains(' '), "expected decoded space, got {as_string:?}");
+        assert!(!as_string.contains("%20"), "%20 should be decoded, got {as_string:?}");
+        assert!(
+            as_string.ends_with("product example V1.3.pptx"),
+            "expected decoded filename, got {as_string:?}"
+        );
+
+        // Simpler URL, no encoding.
+        assert!(matches!(
+            resolver.resolve("file:///Users/alice/icloud/assets/vendor/test.txt"),
+            UriOutcome::Resolved { .. }
+        ));
+
+        // Exact prefix, no trailing file.
+        if let UriOutcome::Resolved { resolved_path, .. } =
+            resolver.resolve("file:///Users/alice/icloud/assets/")
+        {
+            assert_eq!(resolved_path, PathBuf::from("/Users/alice/icloud/assets"));
+        } else {
+            panic!("expected Resolved");
+        }
     }
 }
