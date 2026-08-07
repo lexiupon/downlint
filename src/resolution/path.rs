@@ -70,3 +70,28 @@ pub fn resolve_explicit_path(root: &Path, source_dir: &Path, target: &str) -> Pa
 fn is_scheme_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.')
 }
+
+/// Returns the scheme portion of a `scheme://...` or `scheme:...` target.
+/// Returns `None` if `input` has no scheme or only an empty prefix.
+pub fn scheme_of(input: &str) -> Option<&str> {
+    let prefix = input.split(':').next()?;
+    if prefix.is_empty() || !prefix.chars().all(is_scheme_char) {
+        return None;
+    }
+    if input.len() <= prefix.len() + 1 {
+        return None;
+    }
+    Some(prefix)
+}
+
+/// True for schemes that downlint never treats as "broken": the target
+/// points outside the workspace by design (a public web URL, an email
+/// address, etc.) and the user is responsible for its validity. These
+/// references resolve to themselves, regardless of whether a
+/// `[uri.mappings]` entry matches.
+pub fn is_external_web_scheme(scheme: &str) -> bool {
+    matches!(
+        scheme.to_ascii_lowercase().as_str(),
+        "http" | "https" | "ftp" | "ftps" | "mailto" | "tel" | "sms" | "irc" | "xmpp"
+    )
+}

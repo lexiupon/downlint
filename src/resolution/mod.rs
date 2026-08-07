@@ -12,7 +12,7 @@ use crate::resolution::conn::{
     AmbiguousReference, DestinationKind, ResolvedDestination, ResolvedDocument, ResolvedReference,
     UnresolvedReference,
 };
-use crate::resolution::path::{has_scheme, is_folder_link_target, path_without_extension, resolve_explicit_path};
+use crate::resolution::path::{has_scheme, is_external_web_scheme, is_folder_link_target, path_without_extension, resolve_explicit_path, scheme_of};
 use crate::resolution::prefix::PrefixIndex;
 use crate::resolution::uri::{UriOutcome, UriResolver};
 use crate::resolution::uri_sync::SyncRunner;
@@ -413,6 +413,15 @@ fn resolve_uri_target(
             });
         }
         UriOutcome::NoMapping { target: raw } => {
+            // External web URLs (http, https, mailto, ftp, ...) are not
+            // "broken" — they reference resources outside the workspace by
+            // design. Skip them silently rather than emitting a DNL002 that
+            // the user can do nothing about.
+            if let Some(scheme) = scheme_of(&raw) {
+                if is_external_web_scheme(scheme) {
+                    return;
+                }
+            }
             // Only suggest configuring [uri.mappings] when the user has
             // actually opted in. An empty resolver means no mappings are
             // configured; hinting there would add noise with no fix path.
