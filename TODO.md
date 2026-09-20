@@ -21,21 +21,21 @@ Things that are wrong, missing, or inconsistent relative to what should already 
 
 ### Diagnostics
 
-- [ ] **uri/batch-clamped is declared but never emitted** (`spec/linting.md` §4.8). The 128 KiB argv
+- [ ] **`uri/batch-clamped` is declared but never emitted** (`spec/linting.md` §4.8). The 128 KiB argv
   batch fallback sets `BatchOutcome.fell_back_to_per_file`, but the only caller
   (`warm-uri-mappings`) ignores it — the fallback is silent. Decide: emit the diagnostic
   (per the spec's intended behavior) or drop the code and the clause.
-- [ ] **No test for heading/nbsp** (`spec/linting.md` §4.3). The NBSP-after-heading rule has no
+- [ ] **No test for `heading/nbsp`** (`spec/linting.md` §4.3). The NBSP-after-heading rule has no
   test pinning it.
-- [ ] **No test for single-file-mode link/broken suppression** (`spec/linting.md` §4.2/§4.9).
+- [ ] **No test for single-file-mode `link/broken` suppression** (`spec/linting.md` §4.2/§4.9).
   Cross-file broken links are silently dropped in single-file mode; untested.
-- [ ] **No test for URI-target + anchor → link/broken-anchor** (`spec/linting.md` §3.7/§4.4). Anchors
-  on external assets always emit link/broken-anchor; untested.
+- [ ] **No test for URI-target + anchor → `link/broken-anchor`** (`spec/linting.md` §3.7/§4.4). Anchors
+  on external assets always emit `link/broken-anchor`; untested.
 
 ### Rename
 
 - [ ] **No atomic-apply guard** — the `.downlint/.rename.lock` rollback guard is not
-  implemented. Apply is text-first-then-disk; a partial disk failure surfaces as link/broken
+  implemented. Apply is text-first-then-disk; a partial disk failure surfaces as `link/broken`
   rather than rolling back.
 - [ ] **Heading rename has no usable path today** — it is LSP-only by decision (no CLI
   subcommand), but its code action is not executable (see Planned → LSP). Net effect:
@@ -163,10 +163,10 @@ of the code** (ground truth):
   whole `[wiki]` section).
 - Defaults: `core.file_extensions = ["md","markdown"]` (no `mdx`);
   `code_action.toc.include = [1..6]`; `uri.mappings[*].warm_timeout = 30`.
-- heading/nbsp message text: "Non-breaking whitespace after heading marker".
+- `heading/nbsp` message text: "Non-breaking whitespace after heading marker".
 - `uri/no-mapping`, `uri/sync-skipped`, `uri/sync-failed` multiplicity is **per-run**, not per-file.
 - Hidden files/directories are **excluded** by default (`hidden(false)`).
 - Exactly 9 silent web schemes: http, https, ftp, ftps, mailto, tel, sms, irc, xmpp.
-- link/broken-anchor is always Warning (even for wiki `[[#missing]]`).
+- `link/broken-anchor` is always Warning (even for wiki `[[#missing]]`).
 - Folder links resolve to the directory itself — no index-file lookup.
-- uri/batch-clamped is declared but not emitted (see Open Issues).
+- `uri/batch-clamped` is declared but not emitted (see Open Issues).

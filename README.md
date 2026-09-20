@@ -249,7 +249,7 @@ message lists every blocking diagnostic inline.
 
 ```
 $ downlint rename-file --from report.md --to topic.md
-error: rename blocked — 1 occurrence has diagnostic link/broken
+error: rename blocked — 1 occurrence has diagnostic `link/broken`
   → docs/index.md:42  [[2024-q1]]  Broken link: '2024-q1' could not be resolved
 hint: fix the broken reference first, then re-run the rename.
 ```

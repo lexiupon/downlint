@@ -51,11 +51,11 @@ Five subcommands. `downlint` with no subcommand runs the check.
 | `--min-severity <info\|warning\|error>` | `warning` | Filter output; exit code reflects the filtered set. |
 | `--color <auto\|always\|never>` | `auto` | ANSI coloring. |
 | `-v / --verbose <N>` | `2` | Logging to stderr (independent of `--min-severity`). |
-| `--fix` | off | Apply safe fixes in place (v1: heading/nbsp NBSP→space), then re-run. |
+| `--fix` | off | Apply safe fixes in place (v1: `heading/nbsp` NBSP→space), then re-run. |
 | `-w / --watch` | off | Re-run after debounced file changes. |
 | `--stdin` (or `-`) | off | Check one document from stdin (single-file mode). |
 | `--allow-uri-sync` | off | Permit `warm_cmd` subprocess execution (safety gate). |
-| `--no-uri-hints` | off | Suppress uri/no-mapping. |
+| `--no-uri-hints` | off | Suppress `uri/no-mapping`. |
 | `--uri-sync-batch-size <N>` | `50` | Warm batch fan-out (min 1). |
 
 - **Exit codes**: `0` clean at the chosen severity · `1` issues found · `2` error
@@ -154,7 +154,7 @@ New paths are computed relative to each referencing document (cross-subtree move
 
 ## 6. What downlint is not
 
-- **Not a formatter or general style linter** — checks are link-centric (plus heading/nbsp).
+- **Not a formatter or general style linter** — checks are link-centric (plus `heading/nbsp`).
   `textDocument/formatting` is never implemented (markdown is whitespace-sensitive).
 - **Not a sync tool** — "warm" is deliberately one-way; `warm-uri-mappings` prepares local
   copies for validation only.

@@ -17,7 +17,7 @@ pub enum DiagnosticSeverity {
     Error,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Eq, PartialEq, Serialize)]
 pub enum DiagnosticCode {
     /// Ambiguous link: a reference resolves to more than one destination.
     #[serde(rename = "link/ambiguous")]
@@ -75,6 +75,20 @@ impl DiagnosticCode {
             Self::UriSyncFailed => "uri/sync-failed",
             Self::UriBatchClamped => "uri/batch-clamped",
         }
+    }
+}
+
+impl std::fmt::Display for DiagnosticCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+// Debug shows the slug (not the variant name) so `{:?}` in logs and test-failure
+// messages reads the same as user-facing output.
+impl std::fmt::Debug for DiagnosticCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

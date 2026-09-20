@@ -57,8 +57,8 @@ pub struct UnresolvedReference {
     pub uri_no_mapping_hint: bool,
     /// True when the unresolved reference was a URI target whose mapping had
     /// `sync_required = false`. The diagnostics layer pairs this with a
-    /// `uri/sync-failed SyncFailureWarning` info diagnostic (in addition to the
-    /// regular `link/broken` broken link) so users see that the broken-link is
+    /// `uri/sync-failed` info diagnostic (in addition to the regular
+    /// `link/broken`) so users see that the broken-link is
     /// "soft" — the sync was attempted but did not produce a usable file.
     /// Always false for non-URI broken links.
     pub sync_was_soft_failure: bool,

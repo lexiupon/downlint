@@ -956,7 +956,7 @@ fn obsidian_prefix_unique_resolves() {
 }
 
 #[test]
-fn obsidian_prefix_ambiguous_link_ambiguous() {
+fn obsidian_prefix_multi_match_emits_link_ambiguous() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     let target_x = write_document(
@@ -1430,8 +1430,8 @@ fn obsidian_prefix_does_not_resolve_folder_link() {
 //
 // Markdown `[text](#anchor)` and `[[#anchor]]` links are in-page anchor
 // references, not file references. The diagnostic for an unresolved anchor
-// must use a distinct code (`link/broken-anchor BrokenAnchor`) and message, not the
-// generic `link/broken Broken link` message that is reserved for missing files.
+// must use a distinct code (`link/broken-anchor`) and message, not the generic
+// `link/broken` "Broken link" message that is reserved for missing files.
 // Tolerant matching (collapsing consecutive `-`) lets near-miss anchors still
 // resolve.
 // ============================================================================

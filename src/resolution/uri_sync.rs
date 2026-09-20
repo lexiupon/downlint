@@ -342,7 +342,7 @@ pub struct BatchOutcome {
     pub statuses: Vec<PathStatus>,
     /// True when the constructed argv exceeded `MAX_BATCH_BYTES` and the
     /// runner fell back to per-file invocation. The caller emits a one-time
-    /// uri/batch-clamped BatchClamped info diagnostic per mapping.
+    /// uri/batch-clamped info diagnostic per mapping.
     pub fell_back_to_per_file: bool,
     /// True when the batch was empty (no work). Not an error, just a no-op.
     pub empty: bool,

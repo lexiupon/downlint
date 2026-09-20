@@ -501,8 +501,8 @@ fn sync_cache_is_shared_across_resolve_links_calls() {
 #[cfg(unix)]
 #[test]
 fn soft_sync_failure_emits_uri_sync_failed_alongside_link_broken() {
-    // `warm_required = false` + sync ran + sync failed → link/broken broken AND
-    // uri/sync-failed SyncFailureWarning. Both should be visible at min-severity=info.
+    // `warm_required = false` + sync ran + sync failed → link/broken AND
+    // uri/sync-failed. Both should be visible at min-severity=info.
     let tmp = TempDir::new().unwrap();
     let config = config_with_mapping(
         "scheme://",

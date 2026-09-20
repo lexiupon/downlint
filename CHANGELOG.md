@@ -11,7 +11,7 @@ Pre-1.0 versions may include breaking changes.
 
 **Rename & Link Refactor** — downlint can now rename files,
 headings, and link identifiers safely across the workspace. Closes the
-gap between detecting broken links (link/broken) and fixing them. The LSP
+gap between detecting broken links (`link/broken`) and fixing them. The LSP
 and CLI share a single rename library (`src/rename/`); both call
 `plan_rename(input) -> RenamePlan` and then either serialize to a
 `WorkspaceEdit` (LSP) or apply text-first-then-disk (CLI).
@@ -91,7 +91,7 @@ tracked in `ServerState::indexing` and the `is_indexing()` helper.
   detached-server optimization for agent workflows is future hardening.
 - The `.downlint/.rename.lock` atomic-application guard is not yet
   implemented. The current apply path writes text edits first and then
-  moves the file — partial failures leave a recoverable state (link/broken
+  moves the file — partial failures leave a recoverable state (`link/broken`
   surfaces the gap) but no automatic rollback.
 - No new diagnostic codes; the feature reuses existing severity levels.
 

@@ -497,8 +497,8 @@ fn resolve_uri_target(
                 // failed/timed out. The link is reported as broken in all
                 // cases. When the mapping has `warm_required = false`, we
                 // additionally flag this as a soft failure so the
-                // diagnostics layer can emit uri/sync-failed SyncFailureWarning
-                // alongside the regular link/broken broken link.
+                // diagnostics layer can emit uri/sync-failed alongside the
+                // regular link/broken.
                 let warm_required = resolver
                     .sync_config(mapping_index)
                     .map(|sync| sync.required)
