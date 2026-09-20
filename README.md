@@ -164,9 +164,8 @@ must restart the server (no `workspace/didChangeConfiguration` in Phase 2).
 ### Naming history
 
 The config keys were originally `sync_cmd` / `sync_required` / `sync_timeout`
-and the subcommand was `downlint sync`. They were renamed in
-[RFC 0008](./rfc/0008-uri-warm-rename.md) because "sync" carries misleading
-two-way-sync connotations. The new vocabulary is "warm" — pulling files
+and the subcommand was `downlint sync`. They were renamed (RFC 0008, see git
+history) because "sync" carries misleading two-way-sync connotations. The new vocabulary is "warm" — pulling files
 locally so subsequent validation is fast.
 
 Existing configs using `sync_cmd` etc. produce a clear parse error:
@@ -186,19 +185,17 @@ sed -i.bak '
 ' .downlint.toml
 ```
 
-See [rfc/0006-external-asset-uri-mapping.md](./rfc/0006-external-asset-uri-mapping.md)
-for the Phase 1 specification,
-[rfc/0007-uri-mapping-phase-2.md](./rfc/0007-uri-mapping-phase-2.md) for Phase 2,
-and [rfc/0008-uri-warm-rename.md](./rfc/0008-uri-warm-rename.md) for the rename.
+Normative behavior: [spec/linting.md](./spec/linting.md) §3.7 (RES-07) and
+§4.5–4.8. (Original RFCs 0006–0008: git history.)
 
 ## Rename
 
 Downlint can rename files, headings, and link-target identifiers safely
 across the workspace. The LSP and CLI share a single rename library; both
 call `plan_rename(input) -> RenamePlan` and then either serialize to a
-`WorkspaceEdit` (LSP) or apply text-first-then-disk (CLI). The
-implementation is specified in
-[rfc/0009-rename-and-link-refactor.md](./rfc/0009-rename-and-link-refactor.md).
+`WorkspaceEdit` (LSP) or apply text-first-then-disk (CLI). The product
+behavior is in [spec/downlint.md](./spec/downlint.md) §4. (Original RFC 0009:
+git history.)
 
 ### LSP gestures
 

@@ -1,5 +1,11 @@
 # Downlint Implementation Spec
 
+> **Status: historical (bootstrap document).** This spec bootstrapped the implementation and
+> is no longer maintained. Living specs: [`spec/linting.md`](spec/linting.md) (normative
+> linting behavior) and [`spec/downlint.md`](spec/downlint.md) (product behavior).
+> Implementation details described here are documented by the code. Where this document
+> conflicts with the living specs or an implemented RFC, the living specs win.
+
 ## Goal
 
 Reimplement the original [Marksman](https://github.com/artempyanykh/marksman) - a Markdown Language Server Protocol (LSP) originally written in F# - as **Downlint** in Rust. This spec documents the original F# implementation of marksman for reference and faithful reproduction.

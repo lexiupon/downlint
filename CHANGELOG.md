@@ -92,9 +92,9 @@ tracked in `ServerState::indexing` and the `is_indexing()` helper.
 The first user-facing feature after v0.1.0. Adds `[uri.mappings]` for
 validating wiki/markdown links that point at external assets (OneDrive, S3,
 NAS, etc.) via a configurable mapping table. Ships in three phases:
-[RFC 0006](./rfc/0006-external-asset-uri-mapping.md) (basic feature),
-[RFC 0007](./rfc/0007-uri-mapping-phase-2.md) (hardening), and
-[RFC 0008](./rfc/0008-uri-warm-rename.md) (vocabulary rename).
+RFC 0006 (basic feature), RFC 0007 (hardening), and RFC 0008 (vocabulary
+rename). The RFCs are archived in git history; normative behavior is in
+`spec/linting.md` §3.7 and §4.5–4.8.
 
 ### Added
 
@@ -242,7 +242,7 @@ missing-file creation), and diagnostics.
 - `--watch` mode for incremental re-validation.
 - `--stdin` mode for piping single documents.
 - Project + user config layers with strict validation
-  (`deny_unknown_fields`) per §9.4 of `spec.md`.
+  (`deny_unknown_fields`) per the config validation rules (now `spec/linting.md` §5.2).
 
 ---
 

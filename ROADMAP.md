@@ -1,7 +1,9 @@
 # Downlint Roadmap
 
 This file tracks planned features and LSP methods for future versions of **Downlint**.
-See [spec.md](./spec.md) for the current v1 implementation spec and
+See [spec/linting.md](./spec/linting.md) (normative linting behavior) and
+[spec/downlint.md](./spec/downlint.md) (product behavior) for the current specs,
+[TODO.md](./TODO.md) for open issues, and
 [CHANGELOG.md](./CHANGELOG.md) for release-by-release notes.
 
 ---
@@ -51,8 +53,9 @@ not yet implemented; the apply path writes text edits first, then the
 file move, and partial failures are surfaced as DNL002 rather than
 auto-rolled-back.
 
-See [rfc/0009-rename-and-link-refactor.md](./rfc/0009-rename-and-link-refactor.md)
-for the full specification.
+Normative behavior: [spec/linting.md](./spec/linting.md); product surface and the
+rename feature: [spec/downlint.md](./spec/downlint.md) §4. (Original RFC 0009: git
+history.)
 
 ### `[uri]` — External Asset URI Mapping (RFC 0006)
 
@@ -72,9 +75,8 @@ local filesystem roots so cloud-stored assets can be validated like any other li
 - **Diagnostics**: `DNL006` (no-mapping hint) and `DNL007` (sync skipped notice),
   both info-level.
 
-See [rfc/0006-external-asset-uri-mapping.md](./rfc/0006-external-asset-uri-mapping.md)
-for the rationale and [rfc/0007-uri-mapping-phase-2.md](./rfc/0007-uri-mapping-phase-2.md)
-for Phase 2 follow-ups.
+Normative behavior: [spec/linting.md](./spec/linting.md) §3.7 (RES-07) and
+§4.5–4.8. (Original RFCs 0006–0007: git history.)
 
 ### `[uri]` Phase 2 — Sync Hardening (RFC 0007)
 
@@ -127,7 +129,8 @@ field names. One-line `sed` for users updating existing configs.
 ## Version 1 (Current)
 
 v1 focuses on core features: diagnostics, completion, rename, and basic code actions.
-All v1 details are in [spec.md](./spec.md).
+All v1 details are in [spec/linting.md](./spec/linting.md) and
+[spec/downlint.md](./spec/downlint.md).
 
 ---
 
