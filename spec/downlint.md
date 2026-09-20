@@ -170,6 +170,6 @@ New paths are computed relative to each referencing document (cross-subtree move
 |---|---|
 | What must hold (normative behavior) | `spec/linting.md` |
 | What is open / not yet shipped | `TODO.md` |
-| Why a decision was made | git history (`rfc/0001`–`0009`, archived 2026-09-20) |
+| Why a decision was made | `spec/linting.md` §8 (amendment history) |
 | How it is built | `src/` |
 | History | `CHANGELOG.md` |

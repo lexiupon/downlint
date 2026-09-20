@@ -5,9 +5,9 @@
 resolution rules, diagnostics, and configuration semantics. Deliberately
 implementation-independent: no data structures, algorithms, or module names.
 **Companions**: `spec/downlint.md` (product behavior, higher level), `TODO.md` (open
-issues). *How* things are built lives in the code. The *why* behind each rule was
-documented in `rfc/0001`–`0009`, which were folded into this spec on 2026-09-20 and
-removed from the working tree — see git history.
+issues). *How* things are built lives in the code. This document is self-contained:
+the normative clauses below do not depend on any external document. Provenance for
+where each rule originated is recorded in §8 (Amendment History).
 
 ---
 
@@ -232,7 +232,7 @@ Tests: `wiki_link_with_non_ascii_title_resolves_correctly`,
 `wiki_link_explicit_path_resolves_in_extra_folders`,
 `wiki_link_with_slash_in_target_resolves_via_title_slug_in_extra_folders`.
 
-### 3.4 RES-04 — Folder Link Resolution *(RFC 0003)*
+### 3.4 RES-04 — Folder Link Resolution
 
 **Detection.** A target is a folder link when the part before the first `#` ends with `/`.
 Applies to both wiki (`[[dir/]]`) and markdown (`[x](dir/)`) links. A target naming a
@@ -257,7 +257,7 @@ Tests: `folder_link_to_existing_directory_resolves`,
 `wiki_link_to_folder_resolves`, `folder_link_with_anchor_is_unresolved`,
 `folder_link_in_extra_folder_resolves`, `non_folder_link_to_directory_name_unchanged`.
 
-### 3.5 RES-05 — Prefix Matching *(RFC 0004)*
+### 3.5 RES-05 — Prefix Matching
 
 **Gate.** Prefix matching runs only for **wiki** targets, only when `wiki.obsidian_prefix`
 is true (default false), only for non-empty non-explicit targets, and only after exact,
@@ -292,7 +292,7 @@ Tests: `obsidian_prefix_unique_resolves`, `obsidian_prefix_ambiguous_dnl001`,
 `obsidian_prefix_does_not_resolve_folder_link`, `unique_prefix_resolves`,
 `ambiguous_prefix_resolves_to_multiple`, `leading_prefix_only_does_not_match_suffix`.
 
-### 3.6 RES-06 — Explicit File-Like Targets *(RFC 0001)*
+### 3.6 RES-06 — Explicit File-Like Targets
 
 There is **no attachment extension whitelist**. Resolution order for a local-looking
 target:
@@ -312,7 +312,7 @@ Tests: `explicit_file_like_targets_resolve_as_attachments_without_config`,
 `explicit_markdown_document_paths_resolve_as_documents_and_headings`,
 `parse_rejects_removed_attachment_extensions_key`.
 
-### 3.7 RES-07 — External URI Mapping *(RFC 0006 / 0007 / 0008)*
+### 3.7 RES-07 — External URI Mapping
 
 **Detection.** A target has a URI scheme when the part before the first `:` is non-empty
 and consists of scheme characters `[A-Za-z0-9+-.]`. Web schemes (LNK-03) are handled
@@ -410,7 +410,7 @@ Tests: `wiki_link_explicit_path_resolves_in_extra_folders`,
 Tests: `infer_root_prefers_target_parent_without_markers` (root inference); symlink
 traversal exercised by workspace fixtures.
 
-### 3.10 RES-10 — Exclusions *(RFC 0002)*
+### 3.10 RES-10 — Exclusions
 
 - `.gitignore` (plus `.ignore` and `.git/info/exclude`) is honored during traversal with
   standard gitignore semantics; a `.gitignore` in a subdirectory applies to that subtree.
@@ -621,7 +621,7 @@ Tests: `obsidian_prefix_single_file_mode`, `no_uri_sync_mapping_means_skipped_di
 - Unknown keys are a parse error (`deny_unknown_fields` on every section). Removing a key
   from the schema is therefore a breaking change: e.g. the legacy keys
   `core.attachment_file_extensions_add` and `[[uri.mappings]] sync_cmd` (renamed to
-  `warm_cmd` by RFC 0008) fail parsing.
+  `warm_cmd`) fail parsing.
 - Specific validations:
   - `core.file_extensions` must be non-empty.
   - `code_action.toc.include` must be non-empty and contain only levels 1–6.
@@ -703,7 +703,7 @@ produced.
 - `textDocument/foldingRange`, `workspace/symbol` — deferred to v2.
 - `workspace/willCreateFiles` / `willRenameFiles` / `willDeleteFiles` — deferred;
   `did*` notifications suffice for v1 indexing.
-- Wiki-link ↔ markdown-link conversion (was RFC 0005) — **not implemented**; the known
+- Wiki-link ↔ markdown-link conversion — **not implemented**; the known
   future direction for publishing wiki-based notes (see `TODO.md`).
 - DNL009 emission (4.8) — mechanism present, diagnostic unimplemented.
 
@@ -711,7 +711,7 @@ produced.
 
 ## 7. Non-Normative Appendix
 
-### A. Worked Examples
+### Worked Examples
 
 1. `[[20260801-topic-a]]` with files `20260801-topic-a-sub-x.md` and
    `20260801-topic-a-sub-y.md`:
@@ -722,13 +722,6 @@ produced.
    diagnostic. File missing → DNL002 (Warning).
 3. `[x](onedrive://work/big.pdf)` with a matching mapping, file present after warm →
    resolved attachment. No mapping configured at all → DNL002 (no DNL006 hint).
-
-### B. Rationale
-
-*Why* each rule exists was documented in the RFCs: 0001 (file-like targets), 0002 (ignore
-patterns), 0003 (folder links), 0004 (prefix matching), 0005 (wiki↔markdown conversion —
-unimplemented), 0006–0008 (URI mapping and warming), 0009 (rename). The RFCs were folded
-into this spec on 2026-09-20 and removed from the working tree; see git history.
 
 ---
 

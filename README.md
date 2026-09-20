@@ -164,8 +164,7 @@ must restart the server (no `workspace/didChangeConfiguration` in Phase 2).
 ### Naming history
 
 The config keys were originally `sync_cmd` / `sync_required` / `sync_timeout`
-and the subcommand was `downlint sync`. They were renamed (RFC 0008, see git
-history) because "sync" carries misleading two-way-sync connotations. The new vocabulary is "warm" — pulling files
+and the subcommand was `downlint sync`. They were renamed because "sync" carries misleading two-way-sync connotations. The new vocabulary is "warm" — pulling files
 locally so subsequent validation is fast.
 
 Existing configs using `sync_cmd` etc. produce a clear parse error:
@@ -186,7 +185,7 @@ sed -i.bak '
 ```
 
 Normative behavior: [spec/linting.md](./spec/linting.md) §3.7 (RES-07) and
-§4.5–4.8. (Original RFCs 0006–0008: git history.)
+§4.5–4.8.
 
 ## Rename
 
@@ -194,8 +193,7 @@ Downlint can rename files, headings, and link-target identifiers safely
 across the workspace. The LSP and CLI share a single rename library; both
 call `plan_rename(input) -> RenamePlan` and then either serialize to a
 `WorkspaceEdit` (LSP) or apply text-first-then-disk (CLI). The product
-behavior is in [spec/downlint.md](./spec/downlint.md) §4. (Original RFC 0009:
-git history.)
+behavior is in [spec/downlint.md](./spec/downlint.md) §4.
 
 ### LSP gestures
 

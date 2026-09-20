@@ -3,14 +3,13 @@
 All notable changes to **downlint** are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/) for post-1.0 releases.
-Pre-1.0 versions may include breaking changes; see the linked RFCs for design
-context.
+Pre-1.0 versions may include breaking changes.
 
 ## [Unreleased]
 
 ### Added
 
-**Rename & Link Refactor (RFC 0009)** — downlint can now rename files,
+**Rename & Link Refactor** — downlint can now rename files,
 headings, and link identifiers safely across the workspace. Closes the
 gap between detecting broken links (DNL002) and fixing them. The LSP
 and CLI share a single rename library (`src/rename/`); both call
@@ -77,24 +76,22 @@ tracked in `ServerState::indexing` and the `is_indexing()` helper.
 
 ### Notes
 
-- The persistent server (`downlint server --detach / --stop`) is
-  documented as a stretch goal in RFC 0009 §"Persistent Server Mode".
-  Phase 5 ships the CLI subcommands and the in-process planner; the
-  detached-server optimization for agent workflows is a future hardening.
-- The `.downlint/.rename.lock` atomic-application guard (RFC §"Risks"
-  #6) is not yet implemented. The current apply path writes text edits
-  first and then moves the file — partial failures leave a recoverable
-  state (DNL002 surfaces the gap) but no automatic rollback.
-- No new diagnostic codes. RFC 0009 reuses existing severity levels.
+- The persistent server (`downlint server --detach / --stop`) is a stretch
+  goal. The CLI subcommands and in-process planner ship now; the
+  detached-server optimization for agent workflows is future hardening.
+- The `.downlint/.rename.lock` atomic-application guard is not yet
+  implemented. The current apply path writes text edits first and then
+  moves the file — partial failures leave a recoverable state (DNL002
+  surfaces the gap) but no automatic rollback.
+- No new diagnostic codes; the feature reuses existing severity levels.
 
 ## [0.2.0] — External Asset URI Mapping
 
 The first user-facing feature after v0.1.0. Adds `[uri.mappings]` for
 validating wiki/markdown links that point at external assets (OneDrive, S3,
-NAS, etc.) via a configurable mapping table. Ships in three phases:
-RFC 0006 (basic feature), RFC 0007 (hardening), and RFC 0008 (vocabulary
-rename). The RFCs are archived in git history; normative behavior is in
-`spec/linting.md` §3.7 and §4.5–4.8.
+NAS, etc.) via a configurable mapping table. Shipped in three phases:
+basic feature, hardening, and a vocabulary rename. Normative behavior is
+in `spec/linting.md` §3.7 and §4.5–4.8.
 
 ### Added
 
@@ -116,7 +113,7 @@ verify_cmd = ["file", "{path}"]   # Phase 2
 
 **Per-file warming** — `warm_cmd` is invoked once per resolved file (with
 `{path}` substituted to the absolute path). Sync never spans an entire
-mount; the safety model is per-target. Renamed from `sync_cmd` per RFC 0008.
+mount; the safety model is per-target. The key was originally named `sync_cmd`.
 
 **`--allow-uri-sync` gate** — subprocess execution of `warm_cmd` requires
 this explicit flag on `check`, `server`, and `warm-uri-mappings`. Without
@@ -128,7 +125,7 @@ arbitrary commands without user consent.
 validation. Walks every URI-scheme link target (both resolved and
 unresolved), groups by mapping, and runs each mapping's `warm_cmd` in
 batches. Prints a per-mapping summary. Always requires `--allow-uri-sync`
-(exits 2 otherwise). Renamed from `downlint sync` per RFC 0008; alias
+(exits 2 otherwise). Originally named `downlint sync`; the alias
 `downlint warm-uri` is accepted.
 
 **`verify_cmd` per mapping** (Phase 2) — post-warm placeholder detection.
@@ -174,7 +171,7 @@ change.
 
 ### Changed
 
-**Vocabulary rename (RFC 0008)** — the `sync_*` config keys and `downlint sync`
+**Vocabulary rename** — the `sync_*` config keys and `downlint sync`
 subcommand were misleading (implied two-way sync). Renamed to `warm_*` /
 `downlint warm-uri-mappings` (alias `downlint warm-uri`). Internal types
 (`SyncRunner`, `SyncDecision`, `PathStatus` variants) keep their names.
@@ -228,12 +225,10 @@ missing-file creation), and diagnostics.
 - Heading-anchor links (`#section`, `[[#section]]`, `path#section`).
 - Tag scanning and cross-document tag references.
 - Cross-folder resolution via `[core].extra_folders`.
-- `[wiki].obsidian_prefix` opt-in for Obsidian-style prefix matching
-  (RFC 0004).
-- Folder link resolution (`[[folder/]]`) and symlink following
-  (RFC 0003).
+- `[wiki].obsidian_prefix` opt-in for Obsidian-style prefix matching.
+- Folder link resolution (`[[folder/]]`) and symlink following.
 - File-extension whitelist dropped in favor of configurable
-  `[core].file_extensions` (RFC 0001).
+  `[core].file_extensions`.
 - Custom ignore patterns via `[core].ignore`.
 - LSP server with completion, hover, definition, references, document
   symbols, code lens, code actions.
