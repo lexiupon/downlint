@@ -440,7 +440,7 @@ fn wiki_link_with_non_ascii_heading_anchor_resolves_correctly() {
 
 /// Reproduce the mojibake scenario: the link text in the source file contains
 /// mojibake (UTF-8 bytes misinterpreted as Latin-1), e.g. "MÃ¼ller" instead
-/// of "Müller". This should NOT match the document title "José García".
+/// of "Müller". This should NOT match the document title "Tom Müller".
 #[test]
 fn wiki_link_with_mojibake_does_not_match_correct_title() {
     let tmp = TempDir::new().unwrap();
