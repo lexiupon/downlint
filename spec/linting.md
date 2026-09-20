@@ -23,7 +23,7 @@ as described in RFC 2119.
 - Every normative statement carries a stable **clause ID**:
   - `LNK-n` — link model (§2)
   - `RES-n` — resolution (§3)
-  - `DNLnnn` — diagnostics (§4)
+  - `<category>/<rule>` semantic slug — diagnostics (§4), e.g. `link/broken`
   - configuration key name — configuration semantics (§5), e.g. `wiki.obsidian_prefix`
 - Citations elsewhere (tests, RFCs, code comments, issues) MUST use clause IDs — never line
   numbers or section titles.
@@ -39,7 +39,7 @@ as described in RFC 2119.
   When implemented, its behavior is folded into this document **in the same change**, and
   the proposal is archived out of the working tree (git history is the record).
 - A removed clause leaves a tombstone, e.g. `RES-07 — Removed by RFC 0012; see RES-09.`
-- Diagnostic codes are never reused. `DNL004` was never assigned and MUST NOT be assigned.
+- Diagnostic rule IDs are never reused; a retired rule ID leaves a tombstone. The one-time re-base from `DNLnnn` to semantic slugs (2026-09-21) is the single documented exception, recorded with its old→new mapping in §8.
 - Every amendment is recorded in §8 (Amendment History).
 
 ---
@@ -82,7 +82,7 @@ downlint MUST recognize exactly these link forms:
 4. wiki embed `![[target]]`
 5. full reference link `[text][label]`
 6. collapsed reference link `[label][]`
-7. shortcut reference link `[text]` — recognized but **never diagnosed** (see DNL002)
+7. shortcut reference link `[text]` — recognized but **never diagnosed** (see link/broken)
 
 Wiki-link parsing rules:
 
@@ -145,12 +145,12 @@ Tests: `is_explicit_path` unit suite in `resolution/mod.rs`; `explicit_md_target
   `irc`, `xmpp` (case-insensitive) MUST be skipped silently — no diagnostic of any kind.
   These are external web resources by design.
 - Other URI-scheme targets are NOT suppressed: they go through RES-07 and may produce
-  DNL002 (and DNL006).
+  link/broken (and uri/no-mapping).
 - Links inside masked regions (LNK-01) produce no diagnostics.
 - Shortcut reference links with no matching definition are always suppressed (too noisy in
   prose).
 
-Tests: `no_uri_hints_flag_suppresses_dnl006_but_keeps_dnl002` (web-scheme suppression
+Tests: `no_uri_hints_flag_suppresses_uri_no_mapping_but_keeps_link_broken` (web-scheme suppression
 exercised transitively); `obsidian_prefix_off_no_hint_no_match`.
 
 ---
@@ -175,7 +175,7 @@ Heading IDs are GitHub-compatible slugs. Algorithm:
 document the first heading with a given slug keeps the base slug; the Nth duplicate (N ≥ 2)
 gets suffix `-N+1` (`setup`, `setup-1`, `setup-2`) in document order. When the flag is
 false, all duplicates share the base slug, and an anchor to that slug resolves to **all**
-duplicates as a multi-destination resolved reference (not DNL001).
+duplicates as a multi-destination resolved reference (not link/ambiguous).
 
 **Tolerant anchor matching.** Anchor lookup tries, in order: (1) exact slug match,
 (2) tag match (lowercased ASCII), (3) *folded* slug match, where consecutive `-` are
@@ -198,7 +198,7 @@ Tests: `slug_preserves_cjk_and_strips_punctuation`, `slug_generation_with_accent
 - Backslashes in link targets are treated as path separators (normalized to `/` internally).
 - Stem and path comparisons are **ASCII case-insensitive** in memory, regardless of
   platform. *(non-normative: if both `Doc.md` and `doc.md` exist in one folder, a link to
-  either matches both → DNL001.)*
+  either matches both → link/ambiguous.)*
 - Unicode normalization: precomposed and decomposed forms (e.g. `é` U+00E9 vs `e` + U+0301)
   are equivalent for matching (NFKC).
 
@@ -224,7 +224,7 @@ title; otherwise the file stem. Title-only wiki links (`[[|My Title]]`) resolve 
 slug.
 
 **Tiering.** Primary-folder documents are searched first. If the primary tier yields more
-than one match, the link is immediately ambiguous (DNL001) and extra folders are not
+than one match, the link is immediately ambiguous (link/ambiguous) and extra folders are not
 consulted. If the primary tier yields zero, extra folders are searched (wiki, non-explicit
 targets only — RES-08). Matches are deduplicated by document path.
 
@@ -247,10 +247,10 @@ resolution.
 3. For workspace-absolute targets only, extra folder roots are also tried (direct join,
    then matching the first path component against the extra root's own name). The first
    existing directory wins; folder resolution never produces ambiguity.
-4. Otherwise the link is broken (DNL002) — including when the path exists but is a file.
+4. Otherwise the link is broken (link/broken) — including when the path exists but is a file.
 
 **Folder link + heading** (`[[dir/#h]]`, `[x](dir/#h)`) is invalid: the link is broken
-(DNL002).
+(link/broken).
 
 Tests: `folder_link_to_existing_directory_resolves`,
 `folder_link_to_missing_directory_is_broken`, `folder_link_to_file_not_directory_is_broken`,
@@ -269,21 +269,21 @@ prefix matches; a suffix does not.
 
 **Multiplicity.**
 
-- 0 candidates → broken (DNL002)
+- 0 candidates → broken (link/broken)
 - 1 candidate → resolved to that document (a `#heading` on the target still gets heading
   lookup on the resolved document)
-- ≥ 2 candidates → ambiguous (DNL001), with related information for every candidate.
+- ≥ 2 candidates → ambiguous (link/ambiguous), with related information for every candidate.
   Ambiguity is decided before heading lookup: even if only one candidate has the heading,
-  DNL001 is emitted.
+  link/ambiguous is emitted.
 
 **Interactions.** Alias (`[[x|title]]`) is display-only. Embeds follow the same rules.
 Explicit paths and folder links short-circuit before prefix matching.
 
 **Discoverability hint.** Regardless of the flag value, when a **wiki** link is broken and
-its target is a leading prefix of at least one document stem, the DNL002 message gains a
-hint line (see DNL002). Markdown links never receive the hint.
+its target is a leading prefix of at least one document stem, the link/broken message gains a
+hint line (see link/broken). Markdown links never receive the hint.
 
-Tests: `obsidian_prefix_unique_resolves`, `obsidian_prefix_ambiguous_dnl001`,
+Tests: `obsidian_prefix_unique_resolves`, `obsidian_prefix_ambiguous_link_ambiguous`,
 `obsidian_prefix_off_no_hint_no_match`, `obsidian_prefix_off_with_hint`,
 `obsidian_prefix_hint_caps_at_five`, `obsidian_prefix_case_insensitive`,
 `obsidian_prefix_does_not_match_suffix_only`, `obsidian_prefix_explicit_path_wins`,
@@ -302,7 +302,7 @@ target:
    `/`, `./`, or `../`, contains `/` or `\`, or is a basename with a non-empty base and
    extension — the resolved filesystem path is checked.
 3. If the file exists, the link resolves as an **attachment**.
-4. If the file does not exist, the link is broken (DNL002 at the reference's severity).
+4. If the file does not exist, the link is broken (link/broken at the reference's severity).
 
 Targets without a path separator and without an extension (e.g. `intro`) never trigger the
 attachment fallback. External web schemes (LNK-03) are still skipped.
@@ -352,30 +352,30 @@ config with arbitrary commands MUST NOT cause subprocess execution by itself.
 **Outcomes.**
 
 - *Present* → the link resolves as an attachment.
-- *Missing* → DNL002. Additionally DNL008 iff `warm_required = false` AND warming ran AND
-  the outcome was *failed* or *timed out*. With `warm_required = true`, only DNL002 is
+- *Missing* → link/broken. Additionally uri/sync-failed iff `warm_required = false` AND warming ran AND
+  the outcome was *failed* or *timed out*. With `warm_required = true`, only link/broken is
   emitted (hard failure).
-- **No mapping** → DNL002, plus DNL006 hint when at least one mapping is configured and
+- **No mapping** → link/broken, plus uri/no-mapping hint when at least one mapping is configured and
   `--no-uri-hints` was not passed.
-- **Anchor on a URI target** (`scheme://…#anchor`) → always DNL005: anchors on external
+- **Anchor on a URI target** (`scheme://…#anchor`) → always link/broken-anchor: anchors on external
   assets are not supported.
 
 **Batching.** Warming is batched, never per-link: paths are fanned out per subprocess in
 chunks of `--uri-sync-batch-size` (default 50, minimum 1). When a chunk's constructed
 argv would exceed 128 KiB, the runner falls back to per-file spawning; the `{paths}`
 stdin tier is exempt from the cap. *(Non-normative status: the fallback currently occurs
-silently — see DNL009.)*
+silently — see uri/batch-clamped.)*
 
 **Caching.** Within one LSP server, warm results are cached per (mapping, path) and shared
 across requests; each CLI run starts fresh.
 
 Tests: `onedrive_present_file_resolves`, `onedrive_missing_file_yields_broken_link`,
 `no_mapping_emits_hint_when_uri_configured`, `no_mapping_emits_no_hint_when_uri_unconfigured`,
-`no_uri_hints_flag_suppresses_dnl006_but_keeps_dnl002`,
+`no_uri_hints_flag_suppresses_uri_no_mapping_but_keeps_link_broken`,
 `allow_uri_sync_with_mock_cmd_marks_present_after_run`,
 `no_uri_sync_mapping_means_skipped_diagnostic`,
 `warm_required_with_failing_cmd_marks_broken`,
-`soft_sync_failure_emits_dnl008_alongside_dnl002`,
+`soft_sync_failure_emits_uri_sync_failed_alongside_link_broken`,
 `trailing_slash_normalization_matches_both_forms`, `env_var_expansion_in_root`,
 `relative_root_resolves_against_config_dir`, `more_specific_prefix_wins`,
 `verify_cmd_pass_marks_present_after_sync`,
@@ -437,23 +437,22 @@ Tests: `ignore_project_overrides_user`, `ignore_negation_pattern_parses`.
 
 | Code | Name | Assigned severity | Condition (clause) |
 |---|---|---|---|
-| DNL001 | AmbiguousLink | Error (wiki/embed) / Warning (markdown) | ≥ 2 destinations |
-| DNL002 | BrokenLink | Error (wiki/embed) / Warning (markdown) | no destination |
-| DNL003 | NonBreakableWhitespace | Warning | U+00A0 after heading marker |
-| — | *DNL004 unassigned; MUST NOT be assigned* | | |
-| DNL005 | BrokenAnchor | Warning (all link forms) | anchor did not resolve |
-| DNL006 | UriNoMappingHint | Info | unmapped URI target, mappings configured |
-| DNL007 | UriSyncSkipped | Info | warm mappings present, sync not allowed |
-| DNL008 | SyncFailureWarning | Info | soft warm failure |
-| DNL009 | BatchClamped | Info | declared; **not emitted** (see 4.8) |
+| link/ambiguous | AmbiguousLink | Error (wiki/embed) / Warning (markdown) | ≥ 2 destinations |
+| link/broken | BrokenLink | Error (wiki/embed) / Warning (markdown) | no destination |
+| heading/nbsp | NonBreakableWhitespace | Warning | U+00A0 after heading marker |
+| link/broken-anchor | BrokenAnchor | Warning (all link forms) | anchor did not resolve |
+| uri/no-mapping | UriNoMappingHint | Info | unmapped URI target, mappings configured |
+| uri/sync-skipped | UriSyncSkipped | Info | warm mappings present, sync not allowed |
+| uri/sync-failed | SyncFailureWarning | Info | soft warm failure |
+| uri/batch-clamped | BatchClamped | Info | declared; **not emitted** (see 4.8) |
 
-**Severity rule.** Wiki links and embeds receive **Error** for DNL001/DNL002 on local
-targets; markdown links, images, and reference links receive **Warning**. DNL005 is always
-Warning, DNL003 always Warning, DNL006–DNL009 always Info. `--min-severity` filters
+**Severity rule.** Wiki links and embeds receive **Error** for `link/ambiguous` and `link/broken` on local
+targets; markdown links, images, and reference links receive **Warning**. `link/broken-anchor` and
+`heading/nbsp` are always Warning; the four `uri/*` rules are always Info. `--min-severity` filters
 output only; it never changes assigned severity. The CLI default is `warning`; the LSP
 always reports at `info`.
 
-### 4.1 DNL001 — AmbiguousLink
+### 4.1 link/ambiguous — AmbiguousLink
 
 - **Condition**: a link target resolves to more than one destination — multiple primary
   matches, multiple extra-folder matches (when the primary tier is empty), or prefix
@@ -463,15 +462,15 @@ always reports at `info`.
 - **Related information**: one entry per destination, carrying its path. No cap.
 - **Range**: the target portion of the link (the editable destination text), falling back
   to the whole link.
-- Duplicate *link definitions* with the same label do NOT produce DNL001: the reference
+- Duplicate *link definitions* with the same label do NOT produce link/ambiguous: the reference
   link resolves to all of them as a multi-destination resolved reference.
 
-Tests: `obsidian_prefix_ambiguous_dnl001`.
+Tests: `obsidian_prefix_ambiguous_link_ambiguous`.
 
-### 4.2 DNL002 — BrokenLink
+### 4.2 link/broken — BrokenLink
 
 - **Condition**: a link target resolves to nothing, per §3, and the reference is not an
-  anchor miss (those are DNL005) and not a shortcut.
+  anchor miss (those are link/broken-anchor) and not a shortcut.
 - **Severity**: Error (wiki/embed), Warning (markdown).
 - **Message** (verbatim): `Broken link: '{target}' could not be resolved`
 - **Wiki hint** (second line, wiki links only): when the broken target is a leading
@@ -493,7 +492,7 @@ Tests: `missing_explicit_file_like_targets_emit_broken_link_diagnostics`,
 `onedrive_missing_file_yields_broken_link`, `folder_link_to_missing_directory_is_broken`,
 `obsidian_prefix_off_with_hint`, `obsidian_prefix_hint_caps_at_five`.
 
-### 4.3 DNL003 — NonBreakableWhitespace
+### 4.3 heading/nbsp — NonBreakableWhitespace
 
 - **Condition**: a line that **starts** with one or more `#` (indented lines do not
   trigger) and whose character immediately after the `#` run is U+00A0. `# Title`
@@ -505,7 +504,7 @@ Tests: `missing_explicit_file_like_targets_emit_broken_link_diagnostics`,
 
 Tests: *(none yet — coverage gap; see §8)*.
 
-### 4.4 DNL005 — BrokenAnchor
+### 4.4 link/broken-anchor — BrokenAnchor
 
 - **Condition**: an anchor failed to resolve after tolerant matching (RES-01):
   - in-page anchor (`[[#h]]`, `[x](#h)`) — no matching heading or tag in the document;
@@ -525,12 +524,12 @@ Tests: `inline_anchor_to_existing_heading_resolves`,
 `inline_anchor_cross_document_miss_emits_dnl005`,
 `inline_anchor_tolerant_miss_still_emits_dnl005`.
 
-### 4.5 DNL006 — UriNoMappingHint
+### 4.5 uri/no-mapping — UriNoMappingHint
 
 - **Condition**: a non-web URI-scheme target matched no `[[uri.mappings]]` prefix, at
   least one mapping is configured, and `--no-uri-hints` was not passed.
 - **Multiplicity**: at most **one per run**, attached to the first hint-eligible link.
-- **Severity**: Info. The underlying DNL002 for the same link is still emitted; DNL006 is
+- **Severity**: Info. The underlying link/broken for the same link is still emitted; uri/no-mapping is
   additive.
 - **Message** (verbatim):
   `No URI mapping found for '{target}'. Configure [[uri.mappings]] in .downlint.toml, e.g.:`
@@ -540,9 +539,9 @@ Tests: `inline_anchor_to_existing_heading_resolves`,
 
 Tests: `no_mapping_emits_hint_when_uri_configured`,
 `no_mapping_emits_no_hint_when_uri_unconfigured`,
-`no_uri_hints_flag_suppresses_dnl006_but_keeps_dnl002`.
+`no_uri_hints_flag_suppresses_uri_no_mapping_but_keeps_link_broken`.
 
-### 4.6 DNL007 — UriSyncSkipped
+### 4.6 uri/sync-skipped — UriSyncSkipped
 
 - **Condition**: at least one `[[uri.mappings]]` entry has `warm_cmd` and the run did not
   pass `--allow-uri-sync`.
@@ -557,21 +556,21 @@ Tests: `no_mapping_emits_hint_when_uri_configured`,
 
 Tests: `no_uri_sync_mapping_means_skipped_diagnostic`.
 
-### 4.7 DNL008 — SyncFailureWarning
+### 4.7 uri/sync-failed — SyncFailureWarning
 
 - **Condition**: warming ran (with `--allow-uri-sync`), the outcome was *failed* or
   *timed out*, the file is still missing on disk, and `warm_required = false`.
 - **Multiplicity**: at most **one per run**, attached to the first soft-failure link.
-- **Severity**: Info. Emitted **alongside** the DNL002 for the same link — it distinguishes
-  a soft failure from a hard one. Mappings with `warm_required = true` produce only DNL002.
+- **Severity**: Info. Emitted **alongside** the link/broken for the same link — it distinguishes
+  a soft failure from a hard one. Mappings with `warm_required = true` produce only link/broken.
 - **Message** (verbatim):
   `Sync completed but '{target}' is still missing on disk. The link is reported as broken; with 'warm_required = false', this is a soft warning rather than a hard failure.`
 - The failed command is never echoed in any diagnostic (secrets).
 
-Tests: `soft_sync_failure_emits_dnl008_alongside_dnl002`,
+Tests: `soft_sync_failure_emits_uri_sync_failed_alongside_link_broken`,
 `warm_required_with_failing_cmd_marks_broken`.
 
-### 4.8 DNL009 — BatchClamped *(declared, not emitted)*
+### 4.8 uri/batch-clamped — BatchClamped *(declared, not emitted)*
 
 - **Intended condition**: a warm batch's constructed argv exceeds the 128 KiB cap and the
   runner falls back to per-file spawning.
@@ -587,13 +586,13 @@ no diagnostic).
 
 - **Per occurrence**: each unresolved or ambiguous occurrence produces its own diagnostic;
   there is no deduplication across occurrences.
-- **Order** (per folder): broken links (DNL002/DNL005) → ambiguous links (DNL001) →
-  DNL006 → DNL008 → DNL007 → DNL003 (per document).
+- **Order** (per folder): broken links (`link/broken`, `link/broken-anchor`) → ambiguous links (`link/ambiguous`) →
+  uri/no-mapping → uri/sync-failed → uri/sync-skipped → heading/nbsp (per document).
 - **Filtering**: after computation, diagnostics below `--min-severity` are dropped from
   output. CLI exit code reflects the filtered set.
 - **Single-file mode**: cross-file diagnostics are disabled. Unresolved non-empty,
-  non-folder, non-anchor targets are silently dropped (no DNL002); in-page anchors and
-  folder links are still diagnosed; DNL003 still runs.
+  non-folder, non-anchor targets are silently dropped (no link/broken); in-page anchors and
+  folder links are still diagnosed; heading/nbsp still runs.
 - **Extra-folder documents** are not diagnosed from the primary session (RES-08).
 
 Tests: `obsidian_prefix_single_file_mode`, `no_uri_sync_mapping_means_skipped_diagnostic`
@@ -652,14 +651,14 @@ Tests: `parse_rejects_removed_attachment_extensions_key`, `uri_missing_prefix_yi
 | `uri.auto_verify` | `"on"` (`"on" \| "off" \| "onedrive-only" \| "icloud-only"`) | RES-07 placeholder heuristics. |
 | `uri.mappings[*].prefix` | required | RES-07 prefix match. |
 | `uri.mappings[*].root` | required | RES-07 root expansion. |
-| `uri.mappings[*].warm_cmd` | absent | RES-07 warming; drives DNL007 count. |
-| `uri.mappings[*].warm_required` | `false` | RES-07 hard vs soft failure (DNL008). |
+| `uri.mappings[*].warm_cmd` | absent | RES-07 warming; drives uri/sync-skipped count. |
+| `uri.mappings[*].warm_required` | `false` | RES-07 hard vs soft failure (uri/sync-failed). |
 | `uri.mappings[*].warm_timeout` | `30` (seconds) | RES-07 warm deadline; also the verify deadline. |
 | `uri.mappings[*].verify_cmd` | absent | RES-07 authoritative placeholder check. |
 
 CLI flags that affect linting behavior: `--min-severity` (default `warning`),
 `--allow-uri-sync`, `--no-uri-hints`, `--uri-sync-batch-size` (default 50, min 1),
-`--fix` (DNL003 only). See `spec/downlint.md` §3.1.
+`--fix` (heading/nbsp only). See `spec/downlint.md` §3.1.
 
 ---
 
@@ -687,7 +686,7 @@ produced.
 9. Tags inside code blocks are not detected; a trailing `#tag` in heading content is.
 10. Subtags (`#rust/cli`, `#rust/cli/help`) are distinct, string-equal symbols; tag
     matching is case-insensitive.
-11. `![[nonexistent]]` produces DNL002 at **Error** severity, like a broken wiki-link.
+11. `![[nonexistent]]` produces link/broken at **Error** severity, like a broken wiki-link.
 12. Ambiguity never crosses tiers (RES-08): a primary match wins over extra-folder
     candidates.
 13. `[text]` shortcut links are always suppressed from diagnostics.
@@ -705,7 +704,7 @@ produced.
   `did*` notifications suffice for v1 indexing.
 - Wiki-link ↔ markdown-link conversion — **not implemented**; the known
   future direction for publishing wiki-based notes (see `TODO.md`).
-- DNL009 emission (4.8) — mechanism present, diagnostic unimplemented.
+- uri/batch-clamped emission (4.8) — mechanism present, diagnostic unimplemented.
 
 ---
 
@@ -715,13 +714,13 @@ produced.
 
 1. `[[20260801-topic-a]]` with files `20260801-topic-a-sub-x.md` and
    `20260801-topic-a-sub-y.md`:
-   - `wiki.obsidian_prefix = false` → DNL002 (Error) + hint listing both candidates.
-   - `wiki.obsidian_prefix = true` → DNL001 (Error) with related info for both files.
+   - `wiki.obsidian_prefix = false` → link/broken (Error) + hint listing both candidates.
+   - `wiki.obsidian_prefix = true` → link/ambiguous (Error) with related info for both files.
    - Only one file exists, flag on → resolves to it.
 2. `[report](./data/report.xlsx)` with the file present → resolved attachment, no
-   diagnostic. File missing → DNL002 (Warning).
+   diagnostic. File missing → link/broken (Warning).
 3. `[x](onedrive://work/big.pdf)` with a matching mapping, file present after warm →
-   resolved attachment. No mapping configured at all → DNL002 (no DNL006 hint).
+   resolved attachment. No mapping configured at all → link/broken (no uri/no-mapping hint).
 
 ---
 
@@ -731,6 +730,7 @@ produced.
 |---|---|---|
 | 2026-09-20 | — | Initial extraction from the bootstrap `spec.md` and implemented RFCs 0001–0004, 0006–0009. Where the bootstrap spec and code disagreed, the code won: `[wiki]` section added to §5; `core.file_extensions` default `["md","markdown"]`; `code_action.toc.include` default `[1..6]`; `warm_timeout` default 30; DNL003 message text; DNL006/007/008 multiplicity is per-run; hidden files excluded by default; exactly 9 silent web schemes; DNL009 declared but not emitted; folder links resolve to the directory itself (no index-file lookup); DNL005 always Warning. |
 | 2026-09-20 | — | Bootstrap `spec.md` and `rfc/0001`–`0009` removed from the working tree (folded in; git history is the record). Open issues moved to `TODO.md`. |
+| 2026-09-21 | — | Diagnostic codes re-based from opaque `DNLnnn` to namespaced semantic slugs. Old→new: `DNL001`→`link/ambiguous`, `DNL002`→`link/broken`, `DNL003`→`heading/nbsp`, `DNL005`→`link/broken-anchor`, `DNL006`→`uri/no-mapping`, `DNL007`→`uri/sync-skipped`, `DNL008`→`uri/sync-failed`, `DNL009`→`uri/batch-clamped`. `DNL004` was never assigned and is retired with the numeric scheme. Severity is unchanged (still a separate axis). Wire-format breaking change: emitted `code` strings changed. |
 
-**Known coverage gaps** (clauses without tests yet): DNL003; DNL009 (by design, until
-emission lands); single-file-mode DNL002 suppression; URI-target + anchor → DNL005.
+**Known coverage gaps** (clauses without tests yet): `heading/nbsp`; `uri/batch-clamped` (by design, until
+emission lands); single-file-mode `link/broken` suppression; URI-target + anchor → `link/broken-anchor`.

@@ -11,7 +11,7 @@ unspecified keys fall back to defaults.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `obsidian_prefix` | bool | `false` | When `true`, wiki-link targets resolve against leading prefixes of file stems. For example, `[[20260801-topic-a]]` matches `20260801-topic-a-sub-x.md`. When `false` (default), a wiki-link target must equal a file stem (modulo existing title-slug and relative-path matching). When `false` and a broken wiki-link target is a leading prefix of one or more file stems, the `DNL002` diagnostic gains a hint listing the candidates so the user can discover the option. Multi-match cases (the prefix matches more than one file) emit `DNL001` ambiguous-link diagnostics, regardless of the flag value. |
+| `obsidian_prefix` | bool | `false` | When `true`, wiki-link targets resolve against leading prefixes of file stems. For example, `[[20260801-topic-a]]` matches `20260801-topic-a-sub-x.md`. When `false` (default), a wiki-link target must equal a file stem (modulo existing title-slug and relative-path matching). When `false` and a broken wiki-link target is a leading prefix of one or more file stems, the `link/broken` diagnostic gains a hint listing the candidates so the user can discover the option. Multi-match cases (the prefix matches more than one file) emit `link/ambiguous` ambiguous-link diagnostics, regardless of the flag value. |
 
 Example:
 
@@ -69,19 +69,19 @@ root = "./internal-docs"
 
 | Flag | Effect |
 |---|---|
-| `--allow-uri-sync` | Permit subprocess execution of `warm_cmd` entries. **Security-sensitive**: anyone who can commit `.downlint.toml` can configure a `warm_cmd` to run on your machine. Without this flag, warming is skipped and a `DNL007` info diagnostic is emitted per mapping. |
-| `--no-uri-hints` | Suppress the `DNL006` "no URI mapping found" hint while keeping the broken-link diagnostic. |
+| `--allow-uri-sync` | Permit subprocess execution of `warm_cmd` entries. **Security-sensitive**: anyone who can commit `.downlint.toml` can configure a `warm_cmd` to run on your machine. Without this flag, warming is skipped and a `uri/sync-skipped` info diagnostic is emitted per mapping. |
+| `--no-uri-hints` | Suppress the `uri/no-mapping` "no URI mapping found" hint while keeping the broken-link diagnostic. |
 | `--uri-sync-batch-size` | Batch size for warming invocations (default 50). Lower reduces memory, higher reduces fork overhead. |
 
 #### Diagnostics
 
 | Code | Severity | Meaning |
 |---|---|---|
-| `DNL002` | error (wiki) / warning (inline) | Broken link — URI mapped to a missing file or `warm_cmd` failed with `warm_required = true`. |
-| `DNL006` | info | No `[uri.mappings]` prefix matched the URI target. Configure `[[uri.mappings]]` or set `--no-uri-hints`. |
-| `DNL007` | info | `warm_cmd` is configured but `--allow-uri-sync` was not passed. The diagnostic message names `downlint warm-uri-mappings` so you can warm them explicitly. |
-| `DNL008` | info | Warming ran (`warm_required = false`) but the file is still missing — a soft warning alongside `DNL002`. |
-| `DNL009` | info | A `warm_cmd` batch's argv exceeded 128 KiB and the runner fell back to per-file. Emitted once per mapping per run. |
+| `link/broken` | error (wiki) / warning (inline) | Broken link — URI mapped to a missing file or `warm_cmd` failed with `warm_required = true`. |
+| `uri/no-mapping` | info | No `[uri.mappings]` prefix matched the URI target. Configure `[[uri.mappings]]` or set `--no-uri-hints`. |
+| `uri/sync-skipped` | info | `warm_cmd` is configured but `--allow-uri-sync` was not passed. The diagnostic message names `downlint warm-uri-mappings` so you can warm them explicitly. |
+| `uri/sync-failed` | info | Warming ran (`warm_required = false`) but the file is still missing — a soft warning alongside `link/broken`. |
+| `uri/batch-clamped` | info | A `warm_cmd` batch's argv exceeded 128 KiB and the runner fell back to per-file. Emitted once per mapping per run. |
 
 ### `[uri]` Phase 2 — verify_cmd and heuristics
 
@@ -142,7 +142,7 @@ The subcommand:
 - Walks every URI-scheme link target (both resolved and unresolved) in the
   workspace.
 - Batches per mapping (positional or stdin, depending on `warm_cmd`).
-- Does **not** run validation, does **not** emit `DNL002` broken-link
+- Does **not** run validation, does **not** emit `link/broken` broken-link
   diagnostics.
 - Exit code 0 on success, 1 on any per-path failure, 2 on gate / config.
 
@@ -249,7 +249,7 @@ message lists every blocking diagnostic inline.
 
 ```
 $ downlint rename-file --from report.md --to topic.md
-error: rename blocked — 1 occurrence has diagnostic DNL002
+error: rename blocked — 1 occurrence has diagnostic link/broken
   → docs/index.md:42  [[2024-q1]]  Broken link: '2024-q1' could not be resolved
 hint: fix the broken reference first, then re-run the rename.
 ```

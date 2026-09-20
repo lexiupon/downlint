@@ -11,7 +11,7 @@ Pre-1.0 versions may include breaking changes.
 
 **Rename & Link Refactor** — downlint can now rename files,
 headings, and link identifiers safely across the workspace. Closes the
-gap between detecting broken links (DNL002) and fixing them. The LSP
+gap between detecting broken links (link/broken) and fixing them. The LSP
 and CLI share a single rename library (`src/rename/`); both call
 `plan_rename(input) -> RenamePlan` and then either serialize to a
 `WorkspaceEdit` (LSP) or apply text-first-then-disk (CLI).
@@ -30,7 +30,7 @@ and CLI share a single rename library (`src/rename/`); both call
     across rewritten documents, atomic text-first-then-disk.
   - `refactor.rename.link-target` — workspace-wide string rewrite with
     conflict + blocking checks. Useful for fixing typos that caused a
-    broken link (`DNL002`), or renaming a logical identifier across
+    broken link (`link/broken`), or renaming a logical identifier across
     many documents.
   - `refactor.rename.heading` — recomputes the heading slug and
     rewrites every `#section` in referencing links across the
@@ -74,6 +74,16 @@ message: "Indexing in progress — try again in a moment." The LSP
 returns `MethodFailed`; the CLI exits with code 3. The indexing state is
 tracked in `ServerState::indexing` and the `is_indexing()` helper.
 
+### Changed
+
+- **Diagnostic codes re-based to semantic slugs** (breaking, wire format). The opaque
+  `DNLnnn` codes are now namespaced slugs: `DNL001`→`link/ambiguous`,
+  `DNL002`→`link/broken`, `DNL003`→`heading/nbsp`, `DNL005`→`link/broken-anchor`,
+  `DNL006`→`uri/no-mapping`, `DNL007`→`uri/sync-skipped`, `DNL008`→`uri/sync-failed`,
+  `DNL009`→`uri/batch-clamped`. Emitted `code` strings in CLI text/JSON and LSP
+  `publishDiagnostics` change accordingly; severity is unchanged (still a separate
+  field). Full mapping in `spec/linting.md` §8.
+
 ### Notes
 
 - The persistent server (`downlint server --detach / --stop`) is a stretch
@@ -81,7 +91,7 @@ tracked in `ServerState::indexing` and the `is_indexing()` helper.
   detached-server optimization for agent workflows is future hardening.
 - The `.downlint/.rename.lock` atomic-application guard is not yet
   implemented. The current apply path writes text edits first and then
-  moves the file — partial failures leave a recoverable state (DNL002
+  moves the file — partial failures leave a recoverable state (link/broken
   surfaces the gap) but no automatic rollback.
 - No new diagnostic codes; the feature reuses existing severity levels.
 
