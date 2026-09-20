@@ -42,12 +42,12 @@ pub struct UnresolvedReference {
     pub target: String,
     /// True when this unresolved reference was an in-page anchor (`[text](#foo)`,
     /// `[[#foo]]`, or `[text](file.md#foo)`) that failed to resolve to a heading.
-    /// The diagnostic rule uses this to emit DNL005 (Broken anchor) instead of
-    /// DNL002 (Broken link) so the user gets an accurate diagnosis.
+    /// The diagnostic rule uses this to emit link/broken-anchor (Broken anchor) instead of
+    /// link/broken (Broken link) so the user gets an accurate diagnosis.
     pub is_anchor: bool,
     /// Optional list of file paths whose stems begin with `target`. Populated by the
     /// resolution layer when an opt-in prefix index is available; rendered as a
-    /// discoverability hint in the DNL002 diagnostic.
+    /// discoverability hint in the link/broken diagnostic.
     pub hint_payload: Option<Vec<PathBuf>>,
     /// True when the link target has a URI scheme but no `[uri.mappings]`
     /// entry matched it. The diagnostics layer renders a one-time hint
@@ -57,8 +57,8 @@ pub struct UnresolvedReference {
     pub uri_no_mapping_hint: bool,
     /// True when the unresolved reference was a URI target whose mapping had
     /// `sync_required = false`. The diagnostics layer pairs this with a
-    /// `DNL008 SyncFailureWarning` info diagnostic (in addition to the
-    /// regular `DNL002` broken link) so users see that the broken-link is
+    /// `uri/sync-failed SyncFailureWarning` info diagnostic (in addition to the
+    /// regular `link/broken` broken link) so users see that the broken-link is
     /// "soft" — the sync was attempted but did not produce a usable file.
     /// Always false for non-URI broken links.
     pub sync_was_soft_failure: bool,

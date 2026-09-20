@@ -415,7 +415,7 @@ fn resolve_uri_target(
         UriOutcome::NoMapping { target: raw } => {
             // External web URLs (http, https, mailto, ftp, ...) are not
             // "broken" — they reference resources outside the workspace by
-            // design. Skip them silently rather than emitting a DNL002 that
+            // design. Skip them silently rather than emitting a link/broken that
             // the user can do nothing about.
             if let Some(scheme) = scheme_of(&raw) {
                 if is_external_web_scheme(scheme) {
@@ -497,8 +497,8 @@ fn resolve_uri_target(
                 // failed/timed out. The link is reported as broken in all
                 // cases. When the mapping has `warm_required = false`, we
                 // additionally flag this as a soft failure so the
-                // diagnostics layer can emit DNL008 SyncFailureWarning
-                // alongside the regular DNL002 broken link.
+                // diagnostics layer can emit uri/sync-failed SyncFailureWarning
+                // alongside the regular link/broken broken link.
                 let warm_required = resolver
                     .sync_config(mapping_index)
                     .map(|sync| sync.required)

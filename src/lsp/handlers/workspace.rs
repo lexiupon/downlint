@@ -11,7 +11,7 @@
 //! 4. Updates every `ResolvedReference.destinations[*].path` that pointed
 //!    at the old path, and every `AmbiguousReference.destinations`.
 //! 5. Re-runs diagnostics on the affected source documents.
-//! 6. For files that moved *out* of the indexed set, emits `DNL002`
+//! 6. For files that moved *out* of the indexed set, emits `link/broken`
 //!    on every referencing link.
 //!
 //! Performance target: O(references to renamed file), not O(whole graph).
@@ -36,7 +36,7 @@ pub struct FileRename {
 ///
 /// Files that moved out of the indexed set (no matching `ResolvedDocument`
 /// for either old or new path) are not handled here — the caller emits
-/// `DNL002` on referencing documents via the diagnostic pipeline.
+/// `link/broken` on referencing documents via the diagnostic pipeline.
 pub fn apply_file_renames(graph: &mut ConnectionGraph, renames: &[FileRename]) -> Vec<PathBuf> {
     let mut touched_sources: std::collections::HashSet<PathBuf> =
         std::collections::HashSet::new();
@@ -49,7 +49,7 @@ pub fn apply_file_renames(graph: &mut ConnectionGraph, renames: &[FileRename]) -
         let Some(doc_index) = graph.documents.iter().position(|doc| doc.path == *old_path) else {
             // The renamed file isn't in the indexed set. Mark every doc
             // that referenced the old path as touched so the caller can
-            // re-diagnose and surface DNL002.
+            // re-diagnose and surface link/broken.
             mark_referencing_sources_touched(graph, old_path, &mut touched_sources);
             continue;
         };
@@ -134,7 +134,7 @@ fn update_references_pointing_at(
 }
 
 /// Mark every source document that references `old_path` as touched, so
-/// the caller can re-diagnose and surface `DNL002` for any references
+/// the caller can re-diagnose and surface `link/broken` for any references
 /// whose destination just moved out of the indexed set.
 fn mark_referencing_sources_touched(
     graph: &ConnectionGraph,
@@ -281,7 +281,7 @@ mod tests {
 
     /// Renaming a file out of the indexed set (e.g. from
     /// `extra_folders` into a path the workspace doesn't track) marks
-    /// referencing sources as touched so the caller can emit DNL002.
+    /// referencing sources as touched so the caller can emit link/broken.
     #[test]
     fn did_rename_files_out_of_scope() {
         let (mut graph, temp) = build_graph_from(&[

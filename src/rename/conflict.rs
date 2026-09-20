@@ -10,7 +10,7 @@ pub enum ConflictKind {
     ExactPath,
     /// With `obsidian_prefix = true`, the new stem is a leading prefix of
     /// an existing file's stem, or vice versa — either would create a
-    /// `DNL001` ambiguity for an existing prefix-resolved link.
+    /// `link/ambiguous` ambiguity for an existing prefix-resolved link.
     PrefixCollision,
     /// The source file's extension class (markdown ↔ markdown, attachment
     /// ↔ attachment) cannot be preserved — e.g. `report.md` → `report.pdf`.

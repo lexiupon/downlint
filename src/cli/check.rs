@@ -126,12 +126,12 @@ fn emit_diagnostics(diagnostics: &[Diagnostic], format: &OutputFormat, workspace
                     .strip_prefix(&workspace.folder.root)
                     .unwrap_or(diagnostic.path.as_path());
                 println!(
-                    "{}:{}: {}: {} [{:?}]",
+                    "{}:{}: {}: {} [{}]",
                     rel.display(),
                     line_and_column(workspace, diagnostic),
                     severity_name(diagnostic.severity),
                     diagnostic.message,
-                    diagnostic.code
+                    diagnostic.code.as_str()
                 );
             }
         }
@@ -143,7 +143,7 @@ fn emit_diagnostics(diagnostics: &[Diagnostic], format: &OutputFormat, workspace
                         "path": diagnostic.path,
                         "range": diagnostic.range,
                         "severity": diagnostic.severity,
-                        "code": format!("{:?}", diagnostic.code),
+                        "code": diagnostic.code.as_str(),
                         "message": diagnostic.message,
                         "related": diagnostic.related,
                     })
@@ -183,7 +183,7 @@ fn severity_name(severity: DiagnosticSeverity) -> &'static str {
 fn apply_fixes(workspace: &mut Workspace, diagnostics: &[Diagnostic]) -> Result<(), ConfigError> {
     let mut grouped: HashMap<PathBuf, Vec<&Diagnostic>> = HashMap::new();
     for diagnostic in diagnostics {
-        if diagnostic.code == DiagnosticCode::DNL003 {
+        if diagnostic.code == DiagnosticCode::HeadingNbsp {
             grouped
                 .entry(diagnostic.path.clone())
                 .or_default()

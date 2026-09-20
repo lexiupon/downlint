@@ -20,7 +20,7 @@
 //! The CLI writes text edits to disk first, then moves the file. This
 //! ordering means a partial disk failure leaves consistent text+disk
 //! state (the text edits point at the new path; if the move fails, the
-//! user sees DNL002 broken-link diagnostics rather than a corrupt
+//! user sees link/broken broken-link diagnostics rather than a corrupt
 //! vault). Phase 5's minimum viable implementation does NOT use the
 //! `.downlint/.rename.lock` file — that's tracked as future hardening
 //! in RFC §"Risks" #6.

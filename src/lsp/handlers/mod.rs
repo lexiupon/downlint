@@ -166,7 +166,7 @@ pub fn diagnostics(
                     DiagnosticSeverity::Warning => 2,
                     DiagnosticSeverity::Info => 3,
                 },
-                "code": format!("{:?}", diagnostic.code),
+                "code": diagnostic.code.as_str(),
                 "message": diagnostic.message,
                 "relatedInformation": diagnostic.related.into_iter().filter_map(|related| {
                     Some(json!({

@@ -135,7 +135,7 @@ fn explicit_file_like_targets_resolve_as_attachments_without_config() {
     assert!(
         diagnostics
             .iter()
-            .all(|diagnostic| diagnostic.code != DiagnosticCode::DNL002),
+            .all(|diagnostic| diagnostic.code != DiagnosticCode::LinkBroken),
         "expected attachment links to resolve without broken-link diagnostics, got: {diagnostics:?}"
     );
     assert_eq!(graph.resolved_references.len(), 3);
@@ -177,7 +177,7 @@ fn missing_explicit_file_like_targets_emit_broken_link_diagnostics() {
     let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
     let broken = diagnostics
         .iter()
-        .filter(|diagnostic| diagnostic.code == DiagnosticCode::DNL002)
+        .filter(|diagnostic| diagnostic.code == DiagnosticCode::LinkBroken)
         .collect::<Vec<_>>();
 
     assert_eq!(
@@ -236,7 +236,7 @@ fn explicit_markdown_document_paths_resolve_as_documents_and_headings() {
     assert!(
         diagnostics
             .iter()
-            .all(|diagnostic| diagnostic.code != DiagnosticCode::DNL002),
+            .all(|diagnostic| diagnostic.code != DiagnosticCode::LinkBroken),
         "expected explicit markdown paths to resolve cleanly, got: {diagnostics:?}"
     );
 
@@ -359,7 +359,7 @@ fn wiki_link_with_non_ascii_title_resolves_correctly() {
 
     let broken_links: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .filter(|d| d.code == DiagnosticCode::LinkBroken)
         .collect();
 
     assert!(
@@ -425,7 +425,7 @@ fn wiki_link_with_non_ascii_heading_anchor_resolves_correctly() {
 
     let broken_links: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .filter(|d| d.code == DiagnosticCode::LinkBroken)
         .collect();
 
     assert!(
@@ -495,7 +495,7 @@ fn wiki_link_with_mojibake_does_not_match_correct_title() {
 
     let broken_links: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .filter(|d| d.code == DiagnosticCode::LinkBroken)
         .collect();
 
     // This SHOULD be broken because the slugs don't match.
@@ -567,7 +567,7 @@ fn wiki_link_explicit_path_resolves_in_extra_folders() {
 
     let broken_links: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .filter(|d| d.code == DiagnosticCode::LinkBroken)
         .collect();
 
     assert!(
@@ -648,7 +648,7 @@ fn wiki_link_with_slash_in_target_resolves_via_title_slug_in_extra_folders() {
 
     let broken_links: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .filter(|d| d.code == DiagnosticCode::LinkBroken)
         .collect();
 
     assert!(
@@ -720,7 +720,7 @@ fn inline_link_with_non_ascii_filename_resolves_correctly() {
 
     let broken_links: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .filter(|d| d.code == DiagnosticCode::LinkBroken)
         .collect();
 
     assert!(
@@ -755,7 +755,7 @@ fn folder_link_to_existing_directory_resolves() {
     let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     assert!(
-        diagnostics.iter().all(|d| d.code != DiagnosticCode::DNL002),
+        diagnostics.iter().all(|d| d.code != DiagnosticCode::LinkBroken),
         "folder link to existing directory should not produce broken link diagnostic"
     );
     assert_eq!(graph.resolved_references.len(), 1);
@@ -781,7 +781,7 @@ fn folder_link_to_missing_directory_is_broken() {
 
     let broken: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .filter(|d| d.code == DiagnosticCode::LinkBroken)
         .collect();
     assert_eq!(broken.len(), 1, "folder link to missing directory should be broken");
 }
@@ -804,7 +804,7 @@ fn folder_link_to_file_not_directory_is_broken() {
 
     let broken: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .filter(|d| d.code == DiagnosticCode::LinkBroken)
         .collect();
     assert_eq!(broken.len(), 1, "folder link to a file should be broken");
 }
@@ -826,7 +826,7 @@ fn wiki_link_to_folder_resolves() {
     let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     assert!(
-        diagnostics.iter().all(|d| d.code != DiagnosticCode::DNL002),
+        diagnostics.iter().all(|d| d.code != DiagnosticCode::LinkBroken),
         "wiki link to existing folder should resolve"
     );
 }
@@ -849,7 +849,7 @@ fn folder_link_with_anchor_is_unresolved() {
 
     let broken: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .filter(|d| d.code == DiagnosticCode::LinkBroken)
         .collect();
     assert_eq!(broken.len(), 1, "folder link with anchor should be unresolved");
 }
@@ -886,7 +886,7 @@ fn folder_link_in_extra_folder_resolves() {
     let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     assert!(
-        diagnostics.iter().all(|d| d.code != DiagnosticCode::DNL002),
+        diagnostics.iter().all(|d| d.code != DiagnosticCode::LinkBroken),
         "folder link to directory in extra folder should resolve"
     );
 }
@@ -956,7 +956,7 @@ fn obsidian_prefix_unique_resolves() {
 }
 
 #[test]
-fn obsidian_prefix_ambiguous_dnl001() {
+fn obsidian_prefix_ambiguous_link_ambiguous() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     let target_x = write_document(
@@ -1024,20 +1024,20 @@ fn obsidian_prefix_off_with_hint() {
 
     // Check the diagnostic message contains the hint line.
     let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
-    let dnl002: Vec<_> = diagnostics
+    let link_broken: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .filter(|d| d.code == DiagnosticCode::LinkBroken)
         .collect();
-    assert_eq!(dnl002.len(), 1);
+    assert_eq!(link_broken.len(), 1);
     assert!(
-        dnl002[0].message.contains("Hint: enable 'wiki.obsidian_prefix'"),
-        "expected hint in DNL002 message, got: {}",
-        dnl002[0].message
+        link_broken[0].message.contains("Hint: enable 'wiki.obsidian_prefix'"),
+        "expected hint in link/broken message, got: {}",
+        link_broken[0].message
     );
     assert!(
-        dnl002[0].message.contains("20260801-topic-a-sub-x.md"),
+        link_broken[0].message.contains("20260801-topic-a-sub-x.md"),
         "expected candidate filename in hint, got: {}",
-        dnl002[0].message
+        link_broken[0].message
     );
 }
 
@@ -1067,11 +1067,11 @@ fn obsidian_prefix_hint_caps_at_five() {
     assert_eq!(payload.len(), 6);
 
     let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
-    let dnl002 = diagnostics
+    let link_broken = diagnostics
         .iter()
-        .find(|d| d.code == DiagnosticCode::DNL002)
+        .find(|d| d.code == DiagnosticCode::LinkBroken)
         .unwrap();
-    assert!(dnl002.message.contains("(+1 more)"));
+    assert!(link_broken.message.contains("(+1 more)"));
 }
 
 /// Regression test: wiki-link targets that contain an internal `.` (e.g. version
@@ -1420,8 +1420,8 @@ fn obsidian_prefix_does_not_resolve_folder_link() {
     );
     let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
     assert!(
-        diagnostics.iter().all(|d| d.code != DiagnosticCode::DNL002),
-        "folder-link must not emit DNL002"
+        diagnostics.iter().all(|d| d.code != DiagnosticCode::LinkBroken),
+        "folder-link must not emit link/broken"
     );
 }
 
@@ -1430,8 +1430,8 @@ fn obsidian_prefix_does_not_resolve_folder_link() {
 //
 // Markdown `[text](#anchor)` and `[[#anchor]]` links are in-page anchor
 // references, not file references. The diagnostic for an unresolved anchor
-// must use a distinct code (`DNL005 BrokenAnchor`) and message, not the
-// generic `DNL002 Broken link` message that is reserved for missing files.
+// must use a distinct code (`link/broken-anchor BrokenAnchor`) and message, not the
+// generic `link/broken Broken link` message that is reserved for missing files.
 // Tolerant matching (collapsing consecutive `-`) lets near-miss anchors still
 // resolve.
 // ============================================================================
@@ -1464,14 +1464,14 @@ fn inline_anchor_to_existing_heading_resolves() {
     assert!(
         diagnostics
             .iter()
-            .all(|d| d.code != DiagnosticCode::DNL002 && d.code != DiagnosticCode::DNL005),
+            .all(|d| d.code != DiagnosticCode::LinkBroken && d.code != DiagnosticCode::LinkBrokenAnchor),
         "expected no broken-link or broken-anchor diagnostics, got: {:?}",
         diagnostics.iter().map(|d| (&d.code, d.message.as_str())).collect::<Vec<_>>()
     );
 }
 
 #[test]
-fn inline_anchor_to_missing_heading_emits_dnl005_not_dnl002() {
+fn inline_anchor_to_missing_heading_emits_link_broken_anchor_not_link_broken() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
 
@@ -1490,35 +1490,35 @@ fn inline_anchor_to_missing_heading_emits_dnl005_not_dnl002() {
     assert_eq!(graph.resolved_references.len(), 0);
     assert_eq!(graph.unresolved_references.len(), 1);
 
-    let dnl002: Vec<_> = diagnostics
+    let link_broken: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .filter(|d| d.code == DiagnosticCode::LinkBroken)
         .collect();
-    let dnl005: Vec<_> = diagnostics
+    let link_broken_anchor: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL005)
+        .filter(|d| d.code == DiagnosticCode::LinkBrokenAnchor)
         .collect();
 
     assert!(
-        dnl002.is_empty(),
-        "inline anchor miss must NOT emit DNL002 (broken file link), got: {:?}",
-        dnl002.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+        link_broken.is_empty(),
+        "inline anchor miss must NOT emit link/broken (broken file link), got: {:?}",
+        link_broken.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
     );
-    assert_eq!(dnl005.len(), 1, "expected exactly one DNL005 diagnostic");
+    assert_eq!(link_broken_anchor.len(), 1, "expected exactly one link/broken-anchor diagnostic");
     assert!(
-        dnl005[0].message.starts_with("Broken anchor:"),
+        link_broken_anchor[0].message.starts_with("Broken anchor:"),
         "expected message to start with 'Broken anchor:', got: {:?}",
-        dnl005[0].message
+        link_broken_anchor[0].message
     );
     assert!(
-        dnl005[0].message.contains("appendix-a2"),
+        link_broken_anchor[0].message.contains("appendix-a2"),
         "expected message to contain the anchor, got: {:?}",
-        dnl005[0].message
+        link_broken_anchor[0].message
     );
 }
 
 #[test]
-fn wiki_anchor_to_missing_heading_emits_dnl005_not_dnl002() {
+fn wiki_anchor_to_missing_heading_emits_link_broken_anchor_not_link_broken() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
 
@@ -1534,22 +1534,22 @@ fn wiki_anchor_to_missing_heading_emits_dnl005_not_dnl002() {
     let graph = resolve_graph(root, vec![doc]);
     let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
-    let dnl002: Vec<_> = diagnostics
+    let link_broken: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .filter(|d| d.code == DiagnosticCode::LinkBroken)
         .collect();
-    let dnl005: Vec<_> = diagnostics
+    let link_broken_anchor: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL005)
+        .filter(|d| d.code == DiagnosticCode::LinkBrokenAnchor)
         .collect();
 
     assert!(
-        dnl002.is_empty(),
-        "wiki anchor miss must NOT emit DNL002, got: {:?}",
-        dnl002.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+        link_broken.is_empty(),
+        "wiki anchor miss must NOT emit link/broken, got: {:?}",
+        link_broken.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
     );
-    assert_eq!(dnl005.len(), 1);
-    assert!(dnl005[0].message.starts_with("Broken anchor:"));
+    assert_eq!(link_broken_anchor.len(), 1);
+    assert!(link_broken_anchor[0].message.starts_with("Broken anchor:"));
 }
 
 /// Regression test: the original bug from `~/projects2/wang-lei`. The link
@@ -1583,7 +1583,7 @@ some text [Appendix A2](#a2-cuga-bimetallic-for-c₂-at-high-rates-nat-commun-15
         "expected tolerant matching to resolve the em-dash heading anchor"
     );
     // The link resolves via tolerant matching. With strict matching only, this
-    // would still emit a DNL005. With tolerant matching, we resolve cleanly.
+    // would still emit a link/broken-anchor. With tolerant matching, we resolve cleanly.
     // We don't assert anything about the resolved destination kind here — the
     // existing convention is to accept either Document or Heading; the key is
     // that the link is no longer reported as broken.
@@ -1592,20 +1592,20 @@ some text [Appendix A2](#a2-cuga-bimetallic-for-c₂-at-high-rates-nat-commun-15
         "tolerant matching should have resolved the anchor; unresolved: {:?}",
         graph.unresolved_references
     );
-    let dnl002: Vec<_> = diagnostics
+    let link_broken: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .filter(|d| d.code == DiagnosticCode::LinkBroken)
         .collect();
-    let dnl005: Vec<_> = diagnostics
+    let link_broken_anchor: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL005)
+        .filter(|d| d.code == DiagnosticCode::LinkBrokenAnchor)
         .collect();
-    assert!(dnl002.is_empty(), "must not emit DNL002 for a resolved anchor");
-    assert!(dnl005.is_empty(), "must not emit DNL005 for a resolved anchor");
+    assert!(link_broken.is_empty(), "must not emit link/broken for a resolved anchor");
+    assert!(link_broken_anchor.is_empty(), "must not emit link/broken-anchor for a resolved anchor");
 }
 
 #[test]
-fn inline_anchor_tolerant_miss_still_emits_dnl005() {
+fn inline_anchor_tolerant_miss_still_emits_link_broken_anchor() {
     // Tolerant matching only rescues near-misses where folding dashes matches
     // a real heading. A genuinely unknown anchor must still be flagged.
     let temp = TempDir::new().unwrap();
@@ -1624,23 +1624,23 @@ fn inline_anchor_tolerant_miss_still_emits_dnl005() {
     let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
     assert_eq!(graph.unresolved_references.len(), 1);
-    let dnl005: Vec<_> = diagnostics
+    let link_broken_anchor: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL005)
+        .filter(|d| d.code == DiagnosticCode::LinkBrokenAnchor)
         .collect();
-    assert_eq!(dnl005.len(), 1, "a truly unknown anchor must still emit DNL005");
+    assert_eq!(link_broken_anchor.len(), 1, "a truly unknown anchor must still emit link/broken-anchor");
     assert!(
-        dnl005[0]
+        link_broken_anchor[0]
             .message
             .contains("nope-this-heading-does-not-exist"),
-        "DNL005 message should contain the anchor text"
+        "link/broken-anchor message should contain the anchor text"
     );
 }
 
 #[test]
-fn inline_anchor_cross_document_miss_emits_dnl005() {
+fn inline_anchor_cross_document_miss_emits_link_broken_anchor() {
     // Cross-doc anchor: file resolves, but the heading within it doesn't.
-    // Must use DNL005 (anchor), not DNL002 (file).
+    // Must use link/broken-anchor (anchor), not link/broken (file).
     let temp = TempDir::new().unwrap();
     let root = temp.path();
 
@@ -1661,20 +1661,20 @@ some content
     let graph = resolve_graph(root, vec![target, source]);
     let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
 
-    let dnl002: Vec<_> = diagnostics
+    let link_broken: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL002)
+        .filter(|d| d.code == DiagnosticCode::LinkBroken)
         .collect();
-    let dnl005: Vec<_> = diagnostics
+    let link_broken_anchor: Vec<_> = diagnostics
         .iter()
-        .filter(|d| d.code == DiagnosticCode::DNL005)
+        .filter(|d| d.code == DiagnosticCode::LinkBrokenAnchor)
         .collect();
 
     assert!(
-        dnl002.is_empty(),
-        "cross-doc anchor miss must NOT emit DNL002, got: {:?}",
-        dnl002.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
+        link_broken.is_empty(),
+        "cross-doc anchor miss must NOT emit link/broken, got: {:?}",
+        link_broken.iter().map(|d| d.message.as_str()).collect::<Vec<_>>()
     );
-    assert_eq!(dnl005.len(), 1);
-    assert!(dnl005[0].message.starts_with("Broken anchor:"));
+    assert_eq!(link_broken_anchor.len(), 1);
+    assert!(link_broken_anchor[0].message.starts_with("Broken anchor:"));
 }

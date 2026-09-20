@@ -174,7 +174,7 @@ fn onedrive_missing_file_yields_broken_link() {
     let opts = UriOptions::default();
     let diagnostics = run_diagnostics(&graph, tmp.path(), &config, &opts);
     let codes: Vec<DiagnosticCode> = diagnostics.iter().map(|d| d.code).collect();
-    assert!(codes.contains(&DiagnosticCode::DNL002));
+    assert!(codes.contains(&DiagnosticCode::LinkBroken));
 }
 
 #[test]
@@ -195,10 +195,10 @@ fn no_mapping_emits_hint_when_uri_configured() {
     let opts = UriOptions::default();
     let diagnostics = run_diagnostics(&graph, tmp.path(), &diag_config, &opts);
     let codes: Vec<DiagnosticCode> = diagnostics.iter().map(|d| d.code).collect();
-    assert!(codes.contains(&DiagnosticCode::DNL002));
+    assert!(codes.contains(&DiagnosticCode::LinkBroken));
     assert!(
-        codes.contains(&DiagnosticCode::DNL006),
-        "expected DNL006 hint, got {codes:?}"
+        codes.contains(&DiagnosticCode::UriNoMapping),
+        "expected uri/no-mapping hint, got {codes:?}"
     );
 }
 
@@ -213,7 +213,7 @@ fn no_mapping_emits_no_hint_when_uri_unconfigured() {
 
     assert_eq!(graph.unresolved_references.len(), 1);
     // The hint flag is *set* in the unresolved ref only when mappings exist.
-    // Without mappings, no-mapping hint should be off, so no DNL006.
+    // Without mappings, no-mapping hint should be off, so no uri/no-mapping.
     let diag_config = DiagnosticConfig {
         min_severity: DiagnosticSeverity::Info,
     };
@@ -221,13 +221,13 @@ fn no_mapping_emits_no_hint_when_uri_unconfigured() {
     let diagnostics = run_diagnostics(&graph, tmp.path(), &diag_config, &opts);
     let codes: Vec<DiagnosticCode> = diagnostics.iter().map(|d| d.code).collect();
     assert!(
-        !codes.contains(&DiagnosticCode::DNL006),
-        "DNL006 must not fire without [uri]"
+        !codes.contains(&DiagnosticCode::UriNoMapping),
+        "uri/no-mapping must not fire without [uri]"
     );
 }
 
 #[test]
-fn no_uri_hints_flag_suppresses_dnl006_but_keeps_dnl002() {
+fn no_uri_hints_flag_suppresses_uri_no_mapping_but_keeps_link_broken() {
     let tmp = TempDir::new().unwrap();
     let config =
         config_with_mapping("onedrive://work/", tmp.path().to_str().unwrap(), None, false, 30);
@@ -253,12 +253,12 @@ fn no_uri_hints_flag_suppresses_dnl006_but_keeps_dnl002() {
     let diagnostics = run_diagnostics(&graph, tmp.path(), &diag_config, &opts);
     let codes: Vec<DiagnosticCode> = diagnostics.iter().map(|d| d.code).collect();
     assert!(
-        codes.contains(&DiagnosticCode::DNL002),
-        "DNL002 must remain"
+        codes.contains(&DiagnosticCode::LinkBroken),
+        "link/broken must remain"
     );
     assert!(
-        !codes.contains(&DiagnosticCode::DNL006),
-        "DNL006 must be suppressed with --no-uri-hints"
+        !codes.contains(&DiagnosticCode::UriNoMapping),
+        "uri/no-mapping must be suppressed with --no-uri-hints"
     );
 }
 
@@ -335,8 +335,8 @@ fn no_uri_sync_mapping_means_skipped_diagnostic() {
         downlint::diagnostics::check_diagnostics(&graph, &diag_config, &workspace, &opts);
     let codes: Vec<DiagnosticCode> = diagnostics.iter().map(|d| d.code).collect();
     assert!(
-        codes.contains(&DiagnosticCode::DNL007),
-        "DNL007 must fire when warm_cmd is configured but flag is off"
+        codes.contains(&DiagnosticCode::UriSyncSkipped),
+        "uri/sync-skipped must fire when warm_cmd is configured but flag is off"
     );
 }
 
@@ -500,9 +500,9 @@ fn sync_cache_is_shared_across_resolve_links_calls() {
 
 #[cfg(unix)]
 #[test]
-fn soft_sync_failure_emits_dnl008_alongside_dnl002() {
-    // `warm_required = false` + sync ran + sync failed → DNL002 broken AND
-    // DNL008 SyncFailureWarning. Both should be visible at min-severity=info.
+fn soft_sync_failure_emits_uri_sync_failed_alongside_link_broken() {
+    // `warm_required = false` + sync ran + sync failed → link/broken broken AND
+    // uri/sync-failed SyncFailureWarning. Both should be visible at min-severity=info.
     let tmp = TempDir::new().unwrap();
     let config = config_with_mapping(
         "scheme://",
@@ -521,19 +521,19 @@ fn soft_sync_failure_emits_dnl008_alongside_dnl002() {
     let diagnostics = run_diagnostics(&graph, tmp.path(), &diag_config, &opts);
     let codes: Vec<DiagnosticCode> = diagnostics.iter().map(|d| d.code).collect();
     assert!(
-        codes.contains(&DiagnosticCode::DNL002),
-        "DNL002 must fire (broken link): {codes:?}"
+        codes.contains(&DiagnosticCode::LinkBroken),
+        "link/broken must fire (broken link): {codes:?}"
     );
     assert!(
-        codes.contains(&DiagnosticCode::DNL008),
-        "DNL008 must fire for soft sync failure: {codes:?}"
+        codes.contains(&DiagnosticCode::UriSyncFailed),
+        "uri/sync-failed must fire for soft sync failure: {codes:?}"
     );
 }
 
 #[cfg(unix)]
 #[test]
-fn hard_sync_failure_does_not_emit_dnl008() {
-    // `warm_required = true` + sync failed → DNL002 broken ONLY. DNL008 is
+fn hard_sync_failure_does_not_emit_uri_sync_failed() {
+    // `warm_required = true` + sync failed → link/broken broken ONLY. uri/sync-failed is
     // reserved for soft failures.
     let tmp = TempDir::new().unwrap();
     let config = config_with_mapping(
@@ -552,16 +552,16 @@ fn hard_sync_failure_does_not_emit_dnl008() {
     let opts = UriOptions::default();
     let diagnostics = run_diagnostics(&graph, tmp.path(), &diag_config, &opts);
     let codes: Vec<DiagnosticCode> = diagnostics.iter().map(|d| d.code).collect();
-    assert!(codes.contains(&DiagnosticCode::DNL002));
+    assert!(codes.contains(&DiagnosticCode::LinkBroken));
     assert!(
-        !codes.contains(&DiagnosticCode::DNL008),
-        "DNL008 must NOT fire for warm_required=true: {codes:?}"
+        !codes.contains(&DiagnosticCode::UriSyncFailed),
+        "uri/sync-failed must NOT fire for warm_required=true: {codes:?}"
     );
 }
 
 #[test]
-fn missing_file_without_sync_does_not_emit_dnl008() {
-    // File is missing, no sync configured → DNL002 only (no soft failure
+fn missing_file_without_sync_does_not_emit_uri_sync_failed() {
+    // File is missing, no sync configured → link/broken only (no soft failure
     // because sync did not run).
     let tmp = TempDir::new().unwrap();
     let config =
@@ -575,16 +575,16 @@ fn missing_file_without_sync_does_not_emit_dnl008() {
     let opts = UriOptions::default();
     let diagnostics = run_diagnostics(&graph, tmp.path(), &diag_config, &opts);
     let codes: Vec<DiagnosticCode> = diagnostics.iter().map(|d| d.code).collect();
-    assert!(codes.contains(&DiagnosticCode::DNL002));
+    assert!(codes.contains(&DiagnosticCode::LinkBroken));
     assert!(
-        !codes.contains(&DiagnosticCode::DNL008),
-        "DNL008 must NOT fire when sync did not run: {codes:?}"
+        !codes.contains(&DiagnosticCode::UriSyncFailed),
+        "uri/sync-failed must NOT fire when sync did not run: {codes:?}"
     );
 }
 
 #[test]
-fn dnl008_suppressed_at_warning_severity() {
-    // DNL008 is info-level; should not appear at min-severity=warning.
+fn uri_sync_failed_suppressed_at_warning_severity() {
+    // uri/sync-failed is info-level; should not appear at min-severity=warning.
     let tmp = TempDir::new().unwrap();
     let config = config_with_mapping(
         "scheme://",
@@ -602,10 +602,10 @@ fn dnl008_suppressed_at_warning_severity() {
     let opts = UriOptions::default();
     let diagnostics = run_diagnostics(&graph, tmp.path(), &diag_config, &opts);
     let codes: Vec<DiagnosticCode> = diagnostics.iter().map(|d| d.code).collect();
-    assert!(codes.contains(&DiagnosticCode::DNL002));
+    assert!(codes.contains(&DiagnosticCode::LinkBroken));
     assert!(
-        !codes.contains(&DiagnosticCode::DNL008),
-        "DNL008 must be suppressed at warning severity: {codes:?}"
+        !codes.contains(&DiagnosticCode::UriSyncFailed),
+        "uri/sync-failed must be suppressed at warning severity: {codes:?}"
     );
 }
 

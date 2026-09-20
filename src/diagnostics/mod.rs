@@ -19,35 +19,63 @@ pub enum DiagnosticSeverity {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum DiagnosticCode {
-    DNL001,
-    DNL002,
-    DNL003,
+    /// Ambiguous link: a reference resolves to more than one destination.
+    #[serde(rename = "link/ambiguous")]
+    LinkAmbiguous,
+    /// Broken link: a reference resolves to no destination (target missing).
+    #[serde(rename = "link/broken")]
+    LinkBroken,
+    /// Non-breaking whitespace (U+00A0) immediately after a heading marker.
+    #[serde(rename = "heading/nbsp")]
+    HeadingNbsp,
     /// Broken anchor: an in-page anchor (e.g. `[label](#foo)`) or wiki anchor
     /// (`[[#foo]]`) referenced a heading that does not exist in the target
-    /// document. Distinct from `DNL002` (broken file link) because the link
-    /// target was unambiguously an anchor, not a file reference.
-    DNL005,
+    /// document. Distinct from `link/broken` (broken file link) because the
+    /// link target was unambiguously an anchor, not a file reference.
+    #[serde(rename = "link/broken-anchor")]
+    LinkBrokenAnchor,
     /// Info-level: a URI-scheme link (`scheme://...`) resolved via the
     /// configured `[uri.mappings]` resolver but no matching prefix was
     /// configured. The diagnostic includes a hint pointing the user at
     /// `.downlint.toml`. Suppressed with `--no-uri-hints`.
-    DNL006,
+    #[serde(rename = "uri/no-mapping")]
+    UriNoMapping,
     /// Info-level: a `[uri.mappings]` entry has a `warm_cmd` configured but
     /// the run did not pass `--allow-uri-sync`. The diagnostic is emitted at
     /// most once per mapping per run; it is purely informational and is also
     /// suppressed when the user has set `--min-severity` to exclude Info.
-    DNL007,
+    #[serde(rename = "uri/sync-skipped")]
+    UriSyncSkipped,
     /// Info-level: a URI mapping's `warm_cmd` ran but failed (or timed out)
     /// and the file is still missing. Only emitted for mappings with
     /// `warm_required = false` (mappings with `warm_required = true` already
-    /// produce a hard DNL002 broken link). Lets users distinguish a
+    /// produce a hard `link/broken` broken link). Lets users distinguish a
     /// "soft" sync failure from a real missing file.
-    DNL008,
+    #[serde(rename = "uri/sync-failed")]
+    UriSyncFailed,
     /// Info-level: a URI mapping's `warm_cmd` would have produced an arg list
     /// exceeding the per-batch byte cap (default 128 KiB). The runner fell
     /// back to per-file spawning for that mapping. Emitted at most once per
-    /// mapping per run, similar to DNL007.
-    DNL009,
+    /// mapping per run, similar to `uri/sync-skipped`.
+    #[serde(rename = "uri/batch-clamped")]
+    UriBatchClamped,
+}
+
+impl DiagnosticCode {
+    /// The stable, user-facing rule id (e.g. `link/broken`). This is the
+    /// string emitted in CLI/LSP output and cited in the spec.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::LinkAmbiguous => "link/ambiguous",
+            Self::LinkBroken => "link/broken",
+            Self::HeadingNbsp => "heading/nbsp",
+            Self::LinkBrokenAnchor => "link/broken-anchor",
+            Self::UriNoMapping => "uri/no-mapping",
+            Self::UriSyncSkipped => "uri/sync-skipped",
+            Self::UriSyncFailed => "uri/sync-failed",
+            Self::UriBatchClamped => "uri/batch-clamped",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]

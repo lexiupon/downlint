@@ -28,7 +28,7 @@ pub fn broken_link(reference: &UnresolvedReference) -> Option<Diagnostic> {
             path: reference.source_path.clone(),
             range: reference.name_range.unwrap_or(reference.full_range),
             severity: DiagnosticSeverity::Warning,
-            code: DiagnosticCode::DNL005,
+            code: DiagnosticCode::LinkBrokenAnchor,
             message: format!("Broken anchor: '{display}' could not be resolved"),
             related: Vec::new(),
         });
@@ -67,7 +67,7 @@ pub fn broken_link(reference: &UnresolvedReference) -> Option<Diagnostic> {
         path: reference.source_path.clone(),
         range: reference.name_range.unwrap_or(reference.full_range),
         severity: severity_for_ref(&reference.reference),
-        code: DiagnosticCode::DNL002,
+        code: DiagnosticCode::LinkBroken,
         message,
         related: Vec::new(),
     })
@@ -78,7 +78,7 @@ pub fn ambiguous_link(reference: &AmbiguousReference) -> Option<Diagnostic> {
         path: reference.source_path.clone(),
         range: reference.name_range.unwrap_or(reference.full_range),
         severity: severity_for_ref(&reference.reference),
-        code: DiagnosticCode::DNL001,
+        code: DiagnosticCode::LinkAmbiguous,
         message: format!(
             "Ambiguous link: '{}' resolves to multiple destinations",
             reference.target
@@ -105,7 +105,7 @@ pub fn uri_no_mapping_hint(unresolved: &[UnresolvedReference]) -> Option<Diagnos
         path: first.source_path.clone(),
         range: first.name_range.unwrap_or(first.full_range),
         severity: DiagnosticSeverity::Info,
-        code: DiagnosticCode::DNL006,
+        code: DiagnosticCode::UriNoMapping,
         message: format!(
             "No URI mapping found for '{}'. Configure [[uri.mappings]] in .downlint.toml, e.g.:\n\
              \n  [[uri.mappings]]\n  \
@@ -142,7 +142,7 @@ pub fn uri_sync_skipped(source_path: &Path, mapping_count: usize, targets: &[&st
         path: source_path.to_path_buf(),
         range: ByteRange::new(0, 0),
         severity: DiagnosticSeverity::Info,
-        code: DiagnosticCode::DNL007,
+        code: DiagnosticCode::UriSyncSkipped,
         message: format!(
             "URI mappings skipped: {mapping_count} {entry_word} {have_word} a `warm_cmd` but --allow-uri-sync was not passed. Affected prefixes: {listed}{more}.\n\
              Run 'downlint warm-uri-mappings --allow-uri-sync' to warm them.",
@@ -163,7 +163,7 @@ pub fn sync_failure_warning(unresolved: &[UnresolvedReference]) -> Option<Diagno
         path: first.source_path.clone(),
         range: first.name_range.unwrap_or(first.full_range),
         severity: DiagnosticSeverity::Info,
-        code: DiagnosticCode::DNL008,
+        code: DiagnosticCode::UriSyncFailed,
         message: format!(
             "Sync completed but '{}' is still missing on disk. The link is reported as broken; with `warm_required = false`, this is a soft warning rather than a hard failure.",
             first.target,
@@ -184,7 +184,7 @@ pub fn non_breaking_space(path: &Path, input: &str) -> Vec<Diagnostic> {
                 path: path.to_path_buf(),
                 range: ByteRange::new(start, start + '\u{00a0}'.len_utf8()),
                 severity: DiagnosticSeverity::Warning,
-                code: DiagnosticCode::DNL003,
+                code: DiagnosticCode::HeadingNbsp,
                 message: "Non-breaking whitespace after heading marker".into(),
                 related: Vec::new(),
             });
