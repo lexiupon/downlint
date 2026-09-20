@@ -10,7 +10,7 @@ In knowledge bases and documentation projects, it is common to organize related 
 directories and reference those directories as logical units. For example:
 
 ```markdown
-See the [example audit case](projects/example/cases/20250911-example-audit/)
+See the [example audit case](/projects/example/cases/20250911-example-audit/)
 for details.
 ```
 
@@ -29,7 +29,7 @@ exists and contains valid content.
 In `~/kb-work`, for example:
 
 ```markdown
-[case](../../..projects/example/cases/20250911-example-audit/)
+[case](../../../projects/example/cases/20250911-example-audit/)
 ```
 
 This link targets a real directory but is flagged as broken because downlint has no concept of
@@ -57,7 +57,7 @@ A link is considered a **folder link** when its target path ends with `/`:
 
 ```markdown
 [link text](./cases/20250911-audit/)          → relative folder
-[link text](projects/example/cases/20250911-audit/)  → absolute folder (from root)
+[link text](/projects/example/cases/20250911-audit/)  → absolute folder (from root)
 [link text](cases/20250911-audit/)             → relative folder (no trailing /, not a folder link)
 ```
 

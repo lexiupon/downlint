@@ -571,7 +571,7 @@ fn resolve_folder_link(
                 });
             }
             // Try matching the first path component against the extra folder name
-            // e.g. /example/cases/ -> extra_root ~projects/example -> ~projects/example/cases/
+            // e.g. /example/cases/ -> extra_root ~/projects/example -> ~/projects/example/cases/
             if let Some(first) = rel.split('/').next() {
                 if let Some(name) = extra_root.file_name().and_then(|n| n.to_str()) {
                     if first == name {

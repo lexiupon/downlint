@@ -7,3 +7,6 @@ target/
 .project
 .settings
 .classpath
+
+# Local agent session data (contains private task details)
+.pi/tasks/
