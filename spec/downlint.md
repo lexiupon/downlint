@@ -96,7 +96,8 @@ surface:
 - **Lifecycle**: `initialize`, `initialized`, `shutdown`, `exit`.
 - **Text sync**: `didOpen`, `didChange`, `didClose` (full-text semantics).
 - **Diagnostics**: push via `publishDiagnostics` on open/change/close and after
-  `didRenameFiles`.
+  `didRenameFiles`; each diagnostic carries `source: "downlint"` so editors can
+  attribute it alongside other servers (e.g. Marksman).
 - **Completion**: wiki document (`[[foo`), wiki heading (`[[#`), and tag (`#`) prompts;
   trigger characters `[`, `#`, `(`; case-insensitive subsequence matching.
 - **Code intelligence**: `hover`, `definition`, `references`, `documentSymbol`.

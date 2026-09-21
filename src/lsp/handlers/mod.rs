@@ -167,6 +167,7 @@ pub fn diagnostics(
                     DiagnosticSeverity::Info => 3,
                 },
                 "code": diagnostic.code.as_str(),
+                "source": "downlint",
                 "message": diagnostic.message,
                 "relatedInformation": diagnostic.related.into_iter().filter_map(|related| {
                     Some(json!({

@@ -94,6 +94,8 @@ tracked in `ServerState::indexing` and the `is_indexing()` helper.
   `DNL009`→`uri/batch-clamped`. Emitted `code` strings in CLI text/JSON and LSP
   `publishDiagnostics` change accordingly; severity is unchanged (still a separate
   field). Full mapping in `spec/linting.md` §8.
+- LSP diagnostics now carry `source: "downlint"` so editors attribute them to
+  downlint (matching how other servers, e.g. Marksman, label their diagnostics).
 
 ### Notes
 
