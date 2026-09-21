@@ -53,6 +53,8 @@ pub async fn run_check(options: CheckOptions) -> i32 {
                 }
             }
 
+            print_workspace_hints(&options, &result.workspace);
+
             if !options.quiet {
                 emit_diagnostics(&result.diagnostics, &options.format, &result.workspace);
             }
@@ -67,6 +69,34 @@ pub async fn run_check(options: CheckOptions) -> i32 {
             eprintln!("downlint: error: {error}");
             2
         }
+    }
+}
+
+/// Friendly, non-error hints for directory-based checks: surface that no
+/// `.downlint.toml` was found (and suggest `downlint init`) and/or that the
+/// workspace contains no markdown. Suppressed in `--quiet`/`--stdin` mode and
+/// for a single explicit file (where "no files" is not meaningful).
+fn print_workspace_hints(options: &CheckOptions, workspace: &Workspace) {
+    if options.quiet || options.stdin {
+        return;
+    }
+    let dir_based = options.path.as_deref().map(|p| p.is_dir()).unwrap_or(true);
+    if !dir_based {
+        return;
+    }
+    let root = &workspace.folder.root;
+    if workspace.folder.config_path.is_none() {
+        eprintln!(
+            "downlint: no .downlint.toml found in {}; using default config.",
+            root.display()
+        );
+        eprintln!("downlint: run `downlint init` to create one.");
+    }
+    if workspace.folder.documents.is_empty() {
+        eprintln!(
+            "downlint: no markdown files found in {}.",
+            root.display()
+        );
     }
 }
 

@@ -1,4 +1,5 @@
 pub mod check;
+pub mod init;
 pub mod rename;
 pub mod sync;
 
@@ -30,6 +31,8 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Command {
     Check(CheckArgs),
+    #[command(name = "init", about = "Create a .downlint.toml config file in the workspace root")]
+    Init(InitArgs),
     Server(ServerArgs),
     /// Move a markdown file or attachment on disk and rewrite every link
     /// that points at it. Kind-class (markdown vs attachment) is inferred
@@ -115,6 +118,16 @@ struct ServerArgs {
     /// written to `.downlint/.server.pid`).
     #[arg(long = "port", default_value_t = 0)]
     port: u16,
+}
+
+#[derive(Args, Clone, Debug, Default)]
+struct InitArgs {
+    /// Workspace root in which to create .downlint.toml (default: current directory).
+    #[arg(long)]
+    root: Option<PathBuf>,
+    /// Overwrite an existing .downlint.toml.
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -223,6 +236,12 @@ pub async fn run() -> i32 {
         Some(Command::Check(args)) => {
             init_tracing(args.verbose);
             check::run_check(map_check_args(args, cli.quiet)).await
+        }
+        Some(Command::Init(args)) => {
+            init::run_init(init::InitOptions {
+                root: args.root,
+                force: args.force,
+            })
         }
         Some(Command::WarmUri(args)) => {
             init_tracing(args.verbose);

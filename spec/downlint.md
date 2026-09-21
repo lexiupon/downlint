@@ -32,11 +32,12 @@ document does not restate them.
 
 ### 3.1 CLI
 
-Five subcommands. `downlint` with no subcommand runs the check.
+Six subcommands. `downlint` with no subcommand runs the check.
 
 | Command | Purpose |
 |---|---|
 | `downlint [PATH]` (alias `check`) | Check a file or directory; print diagnostics; exit by severity. |
+| `downlint init` | Scaffold a `.downlint.toml` in the workspace root (refuses to overwrite without `--force`). |
 | `downlint server` | Run the LSP server over stdio. |
 | `downlint rename-file` | Move a markdown file or attachment on disk and rewrite every link pointing at it. |
 | `downlint rename-link` | Rewrite a logical link-target identifier workspace-wide (no disk move). |
@@ -62,6 +63,16 @@ Five subcommands. `downlint` with no subcommand runs the check.
   (bad path, config parse failure, failed `--fix` write).
 - **Text output**: `{rel_path}:{line}:{col}: {severity}: {message} [{CODE}]`.
 - **JSON output**: array of `{path, range, severity, code, message, related}`.
+- **No-config / no-files hints**: a directory-based `check` (not `--stdin`, not a single
+  explicit file) prints an informational stderr hint when no `.downlint.toml` is found —
+  suggesting `downlint init` — and/or when the workspace contains no markdown. Suppressed
+  by `--quiet`. These never affect the exit code.
+
+**`init`** — scaffold a `.downlint.toml` in the workspace root (cwd, or `--root <DIR>`).
+Common options are written active (at their defaults) so the file doubles as a reference;
+advanced options are commented out for opt-in. Refuses to overwrite an existing
+`.downlint.toml` unless `--force`. Exit `0` created · `2` already exists (no `--force`) or
+not a directory.
 
 **`rename-file` / `rename-link`** — required `--from` / `--to`; `--dry-run` prints the plan
 without applying; `--root` as above.

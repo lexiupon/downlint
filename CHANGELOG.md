@@ -74,6 +74,17 @@ message: "Indexing in progress — try again in a moment." The LSP
 returns `MethodFailed`; the CLI exits with code 3. The indexing state is
 tracked in `ServerState::indexing` and the `is_indexing()` helper.
 
+#### Config scaffolding and friendlier empty runs
+
+- `downlint init` — scaffolds a `.downlint.toml` in the workspace root (cwd, or
+  `--root <DIR>`). Common options are written active (at their defaults) so the file
+  doubles as a reference; advanced options are commented out for opt-in. Refuses to
+  overwrite an existing `.downlint.toml` unless `--force`. Exit `0` created · `2`
+  already exists (no `--force`) or not a directory.
+- A directory-based `check` now prints an informational stderr hint when no
+  `.downlint.toml` is found (suggesting `downlint init`) and/or when the workspace
+  contains no markdown. Suppressed by `--quiet`; never affects the exit code.
+
 ### Changed
 
 - **Diagnostic codes re-based to semantic slugs** (breaking, wire format). The opaque

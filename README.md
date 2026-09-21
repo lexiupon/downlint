@@ -5,7 +5,9 @@ Rust implementation of a Markdown checker and LSP inspired by Marksman.
 ## Configuration
 
 Downlint reads a `.downlint.toml` at the workspace root. All sections are optional;
-unspecified keys fall back to defaults.
+unspecified keys fall back to defaults. Run `downlint init` to scaffold one — common
+options are written active (at their defaults) and advanced options are commented out
+for opt-in.
 
 ### `[wiki]`
 
