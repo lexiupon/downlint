@@ -96,6 +96,13 @@ Wiki-link parsing rules:
 - Empty heading: `[[T#]]` records a zero-length heading and resolves to the document.
 - Malformed or unterminated wiki-links are ignored by the link layer.
 
+Markdown-link destination rules:
+
+- The destination is the text between `(` and the matching unescaped `)`, trimmed.
+- A trailing quoted title ("…", '…', or `(...)`) is stripped; pointy brackets (`<…>`) are
+  removed. Otherwise the **whole** destination is kept, including spaces (e.g.
+  cloud-storage filenames like `Messaging BOM - 21May26.pdf`).
+
 Masking — never scanned for links or tags:
 
 - YAML front matter (leading `---` block)

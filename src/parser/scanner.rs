@@ -293,19 +293,18 @@ fn try_scan_markdown_link(
 
     if *next == b'(' {
         let dest_end = find_unescaped(input, label_end + 2, ')')?;
-        let dest_text = input[label_end + 2..dest_end].trim();
+        let dest_raw = &input[label_end + 2..dest_end];
+        let dest_text = dest_raw.trim();
         if dest_text.is_empty() {
             return None;
         }
-        let dest_token = dest_text
-            .split_whitespace()
-            .next()
-            .unwrap_or(dest_text)
-            .trim_matches(['<', '>']);
-        let dest_start = input[label_end + 2..dest_end]
-            .find(dest_token)
-            .map(|offset| label_end + 2 + offset)
-            .unwrap_or(label_end + 2);
+        // Determine the destination token and its byte offset within
+        // `dest_text`. Handles pointy destinations (`<...>`), a trailing
+        // quoted title, and destinations that contain spaces (e.g.
+        // cloud-storage filenames like `Messaging BOM - 21May26.pdf`).
+        let (dest_token, offset_in_text) = split_destination(dest_text);
+        let leading_ws = dest_raw.len() - dest_raw.trim_start().len();
+        let dest_start = label_end + 2 + leading_ws + offset_in_text;
         let dest_range = ByteRange::new(dest_start, dest_start + dest_token.len());
         let anchor_range = dest_token
             .find('#')
@@ -559,6 +558,40 @@ fn decode_component(input: &str) -> String {
     String::from_utf8_lossy(&decoded).into_owned()
 }
 
+/// Split a raw markdown link destination into the destination token and its
+/// byte offset within `dest_text`. Handles:
+/// - Pointy destinations: `<url with spaces>` -> (`url with spaces`, 1)
+/// - A trailing quoted title: `url "title"` -> (`url`, 0)
+/// - Plain (possibly with spaces): `url with spaces` -> (`url with spaces`, 0)
+fn split_destination(dest_text: &str) -> (&str, usize) {
+    // Pointy destination: `<...>`
+    if let Some(stripped) = dest_text.strip_prefix('<') {
+        if let Some(end) = stripped.find('>') {
+            let inner = &stripped[..end];
+            let inner_trim_start = inner.len() - inner.trim_start().len();
+            return (inner.trim(), 1 + inner_trim_start);
+        }
+    }
+    // A trailing quoted title: the destination is the part before the space.
+    if let Some(space_pos) = dest_text.find(' ') {
+        let after = dest_text[space_pos + 1..].trim_start();
+        if is_quoted_title(after) {
+            return (dest_text[..space_pos].trim_end(), 0);
+        }
+    }
+    // No title: the whole `dest_text` is the destination (may contain spaces).
+    (dest_text, 0)
+}
+
+/// Returns true if `s` looks like a quoted markdown link title: `"..."`,
+/// `'...'`, or `(...)`.
+fn is_quoted_title(s: &str) -> bool {
+    s.len() >= 2
+        && ((s.starts_with('"') && s.ends_with('"'))
+            || (s.starts_with('\'') && s.ends_with('\''))
+            || (s.starts_with('(') && s.ends_with(')')))
+}
+
 fn find_unescaped(input: &str, start: usize, needle: char) -> Option<usize> {
     let mut escaped = false;
     for (offset, ch) in input[start..].char_indices() {
@@ -614,6 +647,27 @@ fn take_id(next_id: &mut OccurrenceId) -> OccurrenceId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_destination_handles_spaces_titles_and_pointy() {
+        // Plain destination with spaces is kept whole (the bug fix).
+        assert_eq!(
+            split_destination("onedrive://x/Messaging BOM - 21May26.pdf"),
+            ("onedrive://x/Messaging BOM - 21May26.pdf", 0)
+        );
+        // A trailing double-quoted title is stripped.
+        assert_eq!(split_destination("url \"My Title\""), ("url", 0));
+        // A trailing single-quoted title is stripped.
+        assert_eq!(split_destination("url 'My Title'"), ("url", 0));
+        // A trailing parenthesized title is stripped.
+        assert_eq!(split_destination("url (My Title)"), ("url", 0));
+        // Pointy destination with spaces.
+        assert_eq!(split_destination("<url with spaces>"), ("url with spaces", 1));
+        // Plain single token (no spaces) is unchanged.
+        assert_eq!(split_destination("notes/a.md"), ("notes/a.md", 0));
+        // A space followed by a non-quoted word is NOT a title -> kept whole.
+        assert_eq!(split_destination("url with spaces"), ("url with spaces", 0));
+    }
 
     #[test]
     fn scans_basic_wikilink_and_tag() {

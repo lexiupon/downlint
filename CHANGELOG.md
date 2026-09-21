@@ -7,6 +7,14 @@ Pre-1.0 versions may include breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Markdown link destinations containing spaces** (e.g. cloud-storage filenames
+  like `Messaging BOM - 21May26.pdf`) are no longer truncated at the first space. The
+  parser now keeps the whole destination unless a trailing *quoted* title (or pointy
+  `<…>` brackets) is present. Previously such links resolved to the fragment before the
+  space and were reported as `link/broken`.
+
 ## [0.4.0] — Fine-Grained Mount Conflicts
 
 RFC 0011 refines `mount/conflict` detection from a coarse top-level-name check to a

@@ -106,6 +106,32 @@ fn present_file_resolves_as_attachment() {
     assert_eq!(graph.resolved_references[0].destinations[0].path, asset);
 }
 
+/// A markdown inline link whose URI destination contains spaces (e.g. a
+/// cloud-storage filename) resolves to the file with the space in its name.
+/// Regression test for the parser truncating the destination at the first
+/// space (which used to yield a `link/broken` for `.../Messaging`).
+#[test]
+fn markdown_link_uri_with_space_in_filename_resolves() {
+    let tmp = TempDir::new().unwrap();
+    let assets = tmp.path().join("assets");
+    fs::create_dir_all(&assets).unwrap();
+    let asset = assets.join("Messaging BOM - 21May26.pdf");
+    fs::write(&asset, "fake").unwrap();
+
+    let config = config_with_schema("onedrive://work/assets", assets.to_str().unwrap(), None);
+    // Markdown inline link (not a wiki link) with a space in the URI dest.
+    let body = "[Messaging BOM - 21May26.pdf](onedrive://work/assets/Messaging BOM - 21May26.pdf)\n";
+    let graph = build_graph(tmp.path(), "notes.md", body, config, false);
+
+    assert!(
+        graph.unresolved_references.is_empty(),
+        "expected no unresolved refs, got {:#?}",
+        graph.unresolved_references
+    );
+    assert_eq!(graph.resolved_references.len(), 1);
+    assert_eq!(graph.resolved_references[0].destinations[0].path, asset);
+}
+
 #[test]
 fn missing_file_yields_broken_link() {
     let tmp = TempDir::new().unwrap();
