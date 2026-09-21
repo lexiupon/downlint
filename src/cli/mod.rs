@@ -1,7 +1,6 @@
 pub mod check;
 pub mod init;
 pub mod rename;
-pub mod sync;
 
 use crate::diagnostics::DiagnosticSeverity;
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
@@ -42,8 +41,6 @@ enum Command {
     /// Rewrite a logical link identifier across the workspace. No disk move.
     #[command(name = "rename-link", about = "Rewrite a link-target identifier across the workspace")]
     RenameLink(RenameLinkArgs),
-    #[command(name = "warm-uri-mappings", visible_alias = "warm-uri", about = "Warm local copies of files referenced by [uri.mappings] without running validation")]
-    WarmUri(SyncArgs),
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -64,22 +61,15 @@ struct CheckArgs {
     watch: bool,
     #[arg(long)]
     stdin: bool,
-    /// Permit subprocess execution of `warm_cmd` entries defined under
-    /// `[uri.mappings]`. Without this flag, warming is skipped and a one-time
-    /// info diagnostic is emitted per configured mapping. Note: enabling this
-    /// flag means `.downlint.toml` controls which commands run.
+    /// Permit subprocess execution of a `[[schemas]]` `verify_cmd`. Without
+    /// this flag, `verify_cmd` is skipped. Note: enabling this flag means
+    /// `.downlint.toml` controls which commands run.
     #[arg(long = "allow-uri-sync", action = ArgAction::SetTrue)]
     allow_uri_sync: bool,
     /// Suppress the "no URI mapping found" hint diagnostic. The broken-link
     /// diagnostic itself is still emitted.
     #[arg(long = "no-uri-hints", action = ArgAction::SetTrue)]
     no_uri_hints: bool,
-    /// Batch size for per-file `warm_cmd` invocations across external
-    /// mappings. Controls how many `{path}` placeholders are fanned out per
-    /// spawned subprocess. Lower values reduce memory; higher values reduce
-    /// fork overhead.
-    #[arg(long = "uri-sync-batch-size", default_value_t = 50)]
-    uri_sync_batch_size: usize,
     path: Option<PathBuf>,
 }
 
@@ -89,20 +79,15 @@ struct ServerArgs {
     verbose: u8,
     #[arg(long)]
     wait_for_debugger: bool,
-    /// Permit subprocess execution of `warm_cmd` entries defined under
-    /// `[uri.mappings]`. Without this flag, warming is skipped and a one-time
-    /// info diagnostic is emitted per configured mapping. Note: enabling this
-    /// flag means `.downlint.toml` controls which commands run.
+    /// Permit subprocess execution of a `[[schemas]]` `verify_cmd`. Without
+    /// this flag, `verify_cmd` is skipped. Note: enabling this flag means
+    /// `.downlint.toml` controls which commands run.
     #[arg(long = "allow-uri-sync", action = ArgAction::SetTrue)]
     allow_uri_sync: bool,
     /// Suppress the "no URI mapping found" hint diagnostic. The broken-link
     /// diagnostic itself is still emitted.
     #[arg(long = "no-uri-hints", action = ArgAction::SetTrue)]
     no_uri_hints: bool,
-    /// Batch size for per-file `warm_cmd` invocations across external
-    /// mappings.
-    #[arg(long = "uri-sync-batch-size", default_value_t = 50)]
-    uri_sync_batch_size: usize,
     /// Start the server in the background and exit immediately. Used by
     /// agent workflows that perform many renames in sequence. The server
     /// runs as a planning service — CLI `rename-file` / `rename-link` with
@@ -175,22 +160,6 @@ struct RenameLinkArgs {
     server: bool,
 }
 
-#[derive(Args, Clone, Debug, Default)]
-struct SyncArgs {
-    #[arg(long)]
-    root: Option<PathBuf>,
-    #[arg(long, short = 'v', default_value_t = 2)]
-    verbose: u8,
-    /// REQUIRED for warming. Without this flag, the subcommand exits 2
-    /// with a clear error message. Same safety gate as
-    /// `downlint check --allow-uri-sync`.
-    #[arg(long = "allow-uri-sync", action = ArgAction::SetTrue)]
-    allow_uri_sync: bool,
-    /// Batch size for per-file `warm_cmd` invocations across external mappings.
-    #[arg(long = "uri-sync-batch-size", default_value_t = 50)]
-    uri_sync_batch_size: usize,
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 enum FormatArg {
     #[default]
@@ -229,7 +198,6 @@ pub async fn run() -> i32 {
             let uri_opts = crate::resolution::UriOptions {
                 allow_sync: args.allow_uri_sync,
                 no_hints: args.no_uri_hints,
-                batch_size: args.uri_sync_batch_size.max(1),
             };
             crate::lsp::run_server(args.verbose, args.wait_for_debugger, uri_opts).await
         }
@@ -242,10 +210,6 @@ pub async fn run() -> i32 {
                 root: args.root,
                 force: args.force,
             })
-        }
-        Some(Command::WarmUri(args)) => {
-            init_tracing(args.verbose);
-            sync::run_sync(map_sync_args(args, cli.quiet)).await
         }
         Some(Command::RenameFile(args)) => {
             init_tracing(args.verbose);
@@ -297,7 +261,6 @@ fn map_check_args(args: CheckArgs, quiet: bool) -> check::CheckOptions {
         path: args.path,
         allow_uri_sync: args.allow_uri_sync,
         no_uri_hints: args.no_uri_hints,
-        uri_sync_batch_size: args.uri_sync_batch_size.max(1),
     }
 }
 
@@ -315,17 +278,6 @@ fn init_tracing(verbose: u8) {
         .try_init();
 }
 
-/// Map clap's `SyncArgs` into the runtime `sync::SyncOptions`.
-fn map_sync_args(args: SyncArgs, quiet: bool) -> sync::SyncOptions {
-    sync::SyncOptions {
-        root: args.root,
-        verbose: args.verbose,
-        quiet,
-        allow_uri_sync: args.allow_uri_sync,
-        uri_sync_batch_size: args.uri_sync_batch_size.max(1),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,15 +293,12 @@ mod tests {
             "server",
             "--allow-uri-sync",
             "--no-uri-hints",
-            "--uri-sync-batch-size",
-            "10",
         ])
         .unwrap();
         match cli.command {
             Some(Command::Server(args)) => {
                 assert!(args.allow_uri_sync);
                 assert!(args.no_uri_hints);
-                assert_eq!(args.uri_sync_batch_size, 10);
             }
             other => panic!("expected Server subcommand, got {other:?}"),
         }
@@ -363,7 +312,6 @@ mod tests {
             Some(Command::Server(args)) => {
                 assert!(!args.allow_uri_sync);
                 assert!(!args.no_uri_hints);
-                assert_eq!(args.uri_sync_batch_size, 50);
             }
             other => panic!("expected Server subcommand, got {other:?}"),
         }

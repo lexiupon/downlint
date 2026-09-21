@@ -41,7 +41,6 @@ Six subcommands. `downlint` with no subcommand runs the check.
 | `downlint server` | Run the LSP server over stdio. |
 | `downlint rename-file` | Move a markdown file or attachment on disk and rewrite every link pointing at it. |
 | `downlint rename-link` | Rewrite a logical link-target identifier workspace-wide (no disk move). |
-| `downlint warm-uri-mappings` | Prepare local copies of mapped external assets so they can be validated. |
 
 **`check`** — key flags (defaults in parentheses):
 
@@ -55,9 +54,8 @@ Six subcommands. `downlint` with no subcommand runs the check.
 | `--fix` | off | Apply safe fixes in place (v1: `heading/nbsp` NBSP→space), then re-run. |
 | `-w / --watch` | off | Re-run after debounced file changes. |
 | `--stdin` (or `-`) | off | Check one document from stdin (single-file mode). |
-| `--allow-uri-sync` | off | Permit `warm_cmd` subprocess execution (safety gate). |
+| `--allow-uri-sync` | off | Permit a `[[schemas]]` `verify_cmd` subprocess execution (safety gate). |
 | `--no-uri-hints` | off | Suppress `uri/no-mapping`. |
-| `--uri-sync-batch-size <N>` | `50` | Warm batch fan-out (min 1). |
 
 - **Exit codes**: `0` clean at the chosen severity · `1` issues found · `2` error
   (bad path, config parse failure, failed `--fix` write).
@@ -82,11 +80,6 @@ without applying; `--root` as above.
   arguments / config error / source not found.
 - `rename-file` infers markdown-vs-attachment from the source extension — the user never
   picks. `rename-link` rewrites a bare identifier and moves nothing.
-
-**`warm-uri-mappings`** — requires `--allow-uri-sync` (exit `2` without it); walks every
-URI-scheme link target, groups by mapping, runs `warm_cmd` in batches. It does **no
-validation** — run `check` afterwards. Exit `0` all synced · `1` any failure · `2` missing
-gate / config error.
 
 ### 3.2 LSP
 
@@ -160,16 +153,16 @@ New paths are computed relative to each referencing document (cross-subtree move
   references, string-only F2 rename; `didRenameFiles` keeps indexes consistent.
 - **KB maintenance**: `rename-file` / `rename-link` to evolve the base; `--dry-run` to
   preview; the blocking rule forces cleanup of pre-existing diagnostics first.
-- **Cloud assets**: declare `[[uri.mappings]]`, run `warm-uri-mappings --allow-uri-sync`
-  to hydrate locally, then `check`.
+- **Cloud assets**: declare `[[schemas]]` to map a scheme prefix to a local folder;
+  `check` stats the resolved path and (per `auto_verify`) flags evicted placeholders.
 - **Quick single-doc check**: `echo '# Title' | downlint -`.
 
 ## 6. What downlint is not
 
 - **Not a formatter or general style linter** — checks are link-centric (plus `heading/nbsp`).
   `textDocument/formatting` is never implemented (markdown is whitespace-sensitive).
-- **Not a sync tool** — "warm" is deliberately one-way; `warm-uri-mappings` prepares local
-  copies for validation only.
+- **Not a sync tool** — downlint only *validates* external assets (stat + verify); it never
+  downloads or hydrates them. A missing or evicted cloud file is reported as `link/broken`.
 - **Rename non-goals**: no `willRenameFiles`; no reference-label rename; no
   extension-class-changing renames; no frontmatter path references; no CLI heading-rename
   subcommand (LSP-only by decision); no combined heading+document rename.

@@ -49,19 +49,13 @@ pub struct UnresolvedReference {
     /// resolution layer when an opt-in prefix index is available; rendered as a
     /// discoverability hint in the link/broken diagnostic.
     pub hint_payload: Option<Vec<PathBuf>>,
-    /// True when the link target has a URI scheme but no `[uri.mappings]`
+    /// True when the link target has a URI scheme but no `[[schemas]]`
     /// entry matched it. The diagnostics layer renders a one-time hint
-    /// pointing the user at `.downlint.toml`'s `[uri]` section. Suppressed
-    /// entirely when `[uri]` is not configured (so we never change behavior
-    /// for users who haven't opted in) and when `UriOptions::no_hints` is true.
+    /// pointing the user at `.downlint.toml`'s `[[schemas]]` section. Suppressed
+    /// entirely when `[[schemas]]` is not configured (so we never change
+    /// behavior for users who haven't opted in) and when `UriOptions::no_hints`
+    /// is true.
     pub uri_no_mapping_hint: bool,
-    /// True when the unresolved reference was a URI target whose mapping had
-    /// `sync_required = false`. The diagnostics layer pairs this with a
-    /// `uri/sync-failed` info diagnostic (in addition to the regular
-    /// `link/broken`) so users see that the broken-link is
-    /// "soft" — the sync was attempted but did not produce a usable file.
-    /// Always false for non-URI broken links.
-    pub sync_was_soft_failure: bool,
 }
 
 #[derive(Clone, Debug)]

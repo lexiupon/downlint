@@ -4,7 +4,6 @@ pub mod path;
 pub mod prefix;
 pub mod slug;
 pub mod uri;
-pub mod uri_sync;
 
 use crate::config::Config;
 use crate::parser::{Def, LinkLabel, Ref, Structure, SymKind};
@@ -15,7 +14,6 @@ use crate::resolution::conn::{
 use crate::resolution::path::{has_scheme, is_external_web_scheme, is_folder_link_target, path_without_extension, resolve_explicit_path, scheme_of};
 use crate::resolution::prefix::PrefixIndex;
 use crate::resolution::uri::{UriOutcome, UriResolver};
-use crate::resolution::uri_sync::SyncRunner;
 use crate::utils::{MountConflict, MountConflictKind, ResolvedMount, Workspace, WorkspaceMode};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -71,12 +69,13 @@ impl ResolveDocument {
 
 /// Per-run options for URI mapping behavior. The CLI layer sets these from
 /// `--allow-uri-sync`, `--no-uri-hints`, and `--uri-sync-batch-size`. Defaults
-/// are conservative: no sync, hints on, batch size 50.
+/// are conservative: no sync, hints on.
 #[derive(Clone, Debug)]
 pub struct UriOptions {
+    /// Safety gate for subprocess execution (a schema's `verify_cmd`). A
+    /// committed config with a `verify_cmd` MUST NOT run it without this flag.
     pub allow_sync: bool,
     pub no_hints: bool,
-    pub batch_size: usize,
 }
 
 impl Default for UriOptions {
@@ -84,14 +83,9 @@ impl Default for UriOptions {
         Self {
             allow_sync: false,
             no_hints: false,
-            batch_size: 50,
         }
     }
 }
-
-// re-export for callers that want to wire sync state without taking a
-// dependency on `crate::resolution::uri_sync` directly.
-pub use uri_sync::UriSyncCache;
 
 #[derive(Clone, Debug)]
 pub struct ResolveInput {
@@ -110,18 +104,14 @@ pub struct ResolveInput {
     /// Case-insensitive prefix index over the stems of `documents` and `extra_documents`.
     /// Built eagerly in `from_workspace` (and constructed manually by tests).
     pub prefix_index: PrefixIndex,
-    /// Resolver built from `[uri.mappings]` in `.downlint.toml`. Empty when no
-    /// URI section is configured. Used by `resolve_wiki_ref` and
+    /// Resolver built from `[[schemas]]` in `.downlint.toml`. Empty when no
+    /// schemas are configured. Used by `resolve_wiki_ref` and
     /// `resolve_inline_ref` to validate `scheme://...` targets.
     pub uri_resolver: UriResolver,
-    /// Per-run toggles (sync gating, hint suppression, batch size). Modified
-    /// after construction by the CLI layer; resolution reads them lazily.
+    /// Per-run toggles (hint suppression). Modified after construction by the
+    /// CLI layer; resolution reads them lazily.
     pub uri_opts: UriOptions,
-    /// Shared cache for sync results. The CLI constructs a fresh cache each
-    /// run; the LSP layer (task #8) reuses one cache across document-change
-    /// events to avoid re-forking sync subprocesses on every keystroke.
-    pub uri_sync_cache: UriSyncCache,
-    /// Set when URI mapping expansion failed at startup (e.g. missing env
+    /// Set when schema mapping expansion failed at startup (e.g. missing env
     /// var). Resolution still proceeds with an empty resolver; the CLI
     /// surfaces the error before diagnostics are emitted.
     pub uri_error: Option<String>,
@@ -256,7 +246,7 @@ impl ResolveInput {
 
         let mounts = workspace.folder.mounts.clone();
 
-        let uri_resolver = match UriResolver::new(&workspace.config.uri, &workspace.folder.root)
+        let uri_resolver = match UriResolver::new(&workspace.config.schemas, &workspace.folder.root)
         {
             Ok(resolver) => resolver,
             Err(error) => {
@@ -272,7 +262,6 @@ impl ResolveInput {
                     prefix_index,
                     uri_resolver: UriResolver::empty(),
                     uri_opts: UriOptions::default(),
-                    uri_sync_cache: UriSyncCache::new(),
                     uri_error: Some(error.to_string()),
                 };
             }
@@ -288,7 +277,6 @@ impl ResolveInput {
             prefix_index,
             uri_resolver,
             uri_opts: UriOptions::default(),
-            uri_sync_cache: UriSyncCache::new(),
             uri_error: None,
         }
     }
@@ -466,7 +454,6 @@ fn resolve_document(
                         is_anchor: false,
                         hint_payload: None,
                         uri_no_mapping_hint: false,
-                        sync_was_soft_failure: false,
                     });
                 }
             }
@@ -485,19 +472,18 @@ struct ResolveRefContext<'a> {
 
 
 /// Resolve a URI-scheme target (`scheme://...`) using the configured
-/// `[uri.mappings]`. Behavior depends on the `UriOutcome` returned by the
+/// `[[schemas]]`. Behavior depends on the `UriOutcome` returned by the
 /// resolver:
 ///
 /// - `NotApplicable` — no URI scheme in target; caller should fall through.
 ///   In practice we never get here because the entry points check
 ///   `has_scheme()` first.
 /// - `NoMapping` — emit a broken-link diagnostic; mark it so the diagnostics
-///   layer renders a one-time hint pointing to `[uri.mappings]`. Suppressed
-///   when `[uri]` is unconfigured or `--no-uri-hints` is set.
-/// - `Resolved` — run sync (if configured + allowed), then either resolve
-///   (file present) or emit a broken-link diagnostic. Sync failure with
-///   `warm_required = true` also produces a broken diagnostic; otherwise it
-///   produces a warning-level status and validation continues.
+///   layer renders a one-time hint pointing to `[[schemas]]`. Suppressed
+///   when `[[schemas]]` is unconfigured or `--no-uri-hints` is set.
+/// - `Resolved` — stat the resolved path; if present and not an evicted
+///   placeholder (per the schema's `auto_verify` / `verify_cmd`), resolve it
+///   as an attachment; otherwise emit a broken-link diagnostic.
 ///
 /// `anchor` is the heading/anchor portion of the link (e.g. `#section`).
 /// URI-scheme links with non-empty anchors are reported as broken —
@@ -526,7 +512,6 @@ fn resolve_uri_target(
                 is_anchor: false,
                 hint_payload: None,
                 uri_no_mapping_hint: false,
-                sync_was_soft_failure: false,
             });
         }
         UriOutcome::NoMapping { target: raw } => {
@@ -539,8 +524,8 @@ fn resolve_uri_target(
                     return;
                 }
             }
-            // Only suggest configuring [uri.mappings] when the user has
-            // actually opted in. An empty resolver means no mappings are
+            // Only suggest configuring [[schemas]] when the user has
+            // actually opted in. An empty resolver means no schemas are
             // configured; hinting there would add noise with no fix path.
             let hint = !resolver.is_empty() && !ctx.input.uri_opts.no_hints;
             ctx.graph.unresolved_references.push(UnresolvedReference {
@@ -553,7 +538,6 @@ fn resolve_uri_target(
                 is_anchor: anchor.is_some(),
                 hint_payload: None,
                 uri_no_mapping_hint: hint,
-                sync_was_soft_failure: false,
             });
         }
         UriOutcome::Resolved {
@@ -576,25 +560,37 @@ fn resolve_uri_target(
                     is_anchor: true,
                     hint_payload: None,
                     uri_no_mapping_hint: false,
-                    sync_was_soft_failure: false,
                 });
                 return;
             }
 
-            let runner = SyncRunner::with_cache(
-                resolver,
-                ctx.input.uri_opts.allow_sync,
-                ctx.input.uri_opts.batch_size,
-                ctx.input.uri_sync_cache.clone(),
-            );
-            let result = runner.run_for(mapping_index, resolved_path.clone());
+            // Stat the resolved path. If it doesn't exist, the link is broken.
+            let exists = resolved_path.is_file();
+            // Verify (placeholder detection): a custom verify_cmd is
+            // authoritative (gated by --allow-uri-sync, since it is a
+            // subprocess); otherwise the built-in vendor-specific heuristics
+            // (when the schema has auto_verify enabled — pure fs checks, no
+            // gate needed).
+            let is_placeholder = if exists {
+                if let Some(cmd) = resolver.verify_cmd_for(mapping_index) {
+                    if ctx.input.uri_opts.allow_sync {
+                        !run_verify_cmd(cmd, &resolved_path)
+                    } else {
+                        // verify_cmd configured but --allow-uri-sync not
+                        // passed: treat as inconclusive (not a placeholder).
+                        false
+                    }
+                } else {
+                    crate::resolution::auto_verify::classify(
+                        &resolved_path,
+                        resolver.auto_verify_for(mapping_index),
+                    ) == crate::resolution::auto_verify::AutoVerifyOutcome::Placeholder
+                }
+            } else {
+                false
+            };
 
-            let present = matches!(
-                result.status,
-                crate::resolution::uri_sync::PathStatus::Present
-            );
-
-            if present {
+            if exists && !is_placeholder {
                 ctx.graph.resolved_references.push(ResolvedReference {
                     source_path: doc.path.clone(),
                     occurrence_id: symbol.id,
@@ -609,27 +605,8 @@ fn resolve_uri_target(
                     }],
                 });
             } else {
-                // Sync ran (or would have, if `--allow-uri-sync` had been
-                // passed) and the file is still missing, or sync itself
-                // failed/timed out. The link is reported as broken in all
-                // cases. When the mapping has `warm_required = false`, we
-                // additionally flag this as a soft failure so the
-                // diagnostics layer can emit uri/sync-failed alongside the
-                // regular link/broken.
-                let warm_required = resolver
-                    .sync_config(mapping_index)
-                    .map(|sync| sync.required)
-                    .unwrap_or(false);
-                let sync_ran = matches!(
-                    result.decision,
-                    crate::resolution::uri_sync::SyncDecision::Ran
-                );
-                let sync_failed = matches!(
-                    result.status,
-                    crate::resolution::uri_sync::PathStatus::SyncFailed
-                        | crate::resolution::uri_sync::PathStatus::SyncTimedOut
-                );
-                let soft_failure = !warm_required && sync_ran && sync_failed;
+                // The file is missing, or it's an evicted cloud placeholder.
+                // The link is broken in both cases.
                 ctx.graph.unresolved_references.push(UnresolvedReference {
                     source_path: doc.path.clone(),
                     occurrence_id: symbol.id,
@@ -640,9 +617,50 @@ fn resolve_uri_target(
                     is_anchor: false,
                     hint_payload: None,
                     uri_no_mapping_hint: false,
-                    sync_was_soft_failure: soft_failure,
                 });
             }
+        }
+    }
+}
+
+/// Run a schema's `verify_cmd` against `path`. `{path}` is substituted with
+/// the resolved absolute file path. Returns `true` when the command exits 0
+/// (real file); `false` on non-zero exit, spawn failure, or timeout
+/// (placeholder). This is the advanced escape hatch for vendor-specific
+/// verification that the built-in heuristics don't cover.
+fn run_verify_cmd(cmd: &[String], path: &Path) -> bool {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let args: Vec<String> = cmd
+        .iter()
+        .map(|arg| arg.replace("{path}", &path.to_string_lossy()))
+        .collect();
+    let Some(first) = args.first() else {
+        return false;
+    };
+    let Ok(mut child) = Command::new(first)
+        .args(&args[1..])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => return false,
         }
     }
 }
@@ -758,7 +776,6 @@ fn resolve_wiki_ref(
                 is_anchor: true,
                 hint_payload: hint_payload_for(ctx, anchor),
                 uri_no_mapping_hint: false,
-                sync_was_soft_failure: false,
             });
         }
         return;
@@ -778,7 +795,6 @@ fn resolve_wiki_ref(
                 is_anchor: false,
                 hint_payload: None,
                 uri_no_mapping_hint: false,
-                sync_was_soft_failure: false,
             });
             return;
         }
@@ -802,7 +818,6 @@ fn resolve_wiki_ref(
                 is_anchor: false,
                 hint_payload: None,
                 uri_no_mapping_hint: false,
-                sync_was_soft_failure: false,
             });
         }
         return;
@@ -931,7 +946,6 @@ fn resolve_inline_ref(
                 is_anchor: true,
                 hint_payload: None,
                 uri_no_mapping_hint: false,
-                sync_was_soft_failure: false,
             });
         }
         return;
@@ -951,7 +965,6 @@ fn resolve_inline_ref(
                 is_anchor: false,
                 hint_payload: None,
                 uri_no_mapping_hint: false,
-                sync_was_soft_failure: false,
             });
             return;
         }
@@ -975,7 +988,6 @@ fn resolve_inline_ref(
                 is_anchor: false,
                 hint_payload: None,
                 uri_no_mapping_hint: false,
-                sync_was_soft_failure: false,
             });
         }
         return;
@@ -1068,7 +1080,6 @@ fn finalize_doc_or_attachment(
             is_anchor: true,
             hint_payload: hint_payload_for(ctx, target),
             uri_no_mapping_hint: false,
-            sync_was_soft_failure: false,
         });
         return;
     }
@@ -1087,7 +1098,6 @@ fn finalize_doc_or_attachment(
             is_anchor: false,
             hint_payload: hint_payload_for(ctx, target),
             uri_no_mapping_hint: false,
-            sync_was_soft_failure: false,
         });
     } else {
         ctx.graph.resolved_references.push(ResolvedReference {

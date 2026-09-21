@@ -313,76 +313,64 @@ Tests: `explicit_file_like_targets_resolve_as_attachments_without_config`,
 `explicit_markdown_document_paths_resolve_as_documents_and_headings`,
 `parse_rejects_removed_attachment_extensions_key`.
 
-### 3.7 RES-07 — External URI Mapping
+### 3.7 RES-07 — Schemes (External URI Mapping)
+
+A **scheme** (`[[schemas]]`) maps an external URI scheme prefix to a local folder.
+Resolution is **rewrite + stat + verify** — no warming, no caching. Each schema has a
+`prefix` (required, e.g. `icloud://assets/`), a `root` (required), an optional
+`auto_verify` (default `true`), and an optional `verify_cmd`. Schemes are **not indexed**
+— a link must carry the full scheme prefix.
 
 **Detection.** A target has a URI scheme when the part before the first `:` is non-empty
 and consists of scheme characters `[A-Za-z0-9+-.]`. Web schemes (LNK-03) are handled
-first; all other scheme targets enter URI resolution.
+first; all other scheme targets enter scheme resolution.
 
-**Mapping match.** Each `[[uri.mappings]]` prefix is normalized with a trailing slash. A
-target matches when it equals the prefix (slash-less) or starts with the normalized
-prefix. The **most specific** (longest) matching prefix wins; only the first match is used.
+**Prefix match.** Each `[[schemas]]` prefix is normalized with a trailing slash. A target
+matches when it equals the prefix (slash-less) or starts with the normalized prefix. The
+**most specific** (longest) matching prefix wins; only the first match is used.
 
 **Path computation.** The resolved local path is `root + percent-decoded remainder`, where
 the remainder is the target minus the prefix (leading `/` trimmed). An empty remainder
 resolves to the root itself.
 
-**Root expansion** (per mapping, at startup):
+**Root expansion** (per schema, at startup):
 
 1. `$VAR` / `${VAR}` are expanded; a missing variable is a startup configuration error.
 2. Leading `~` expands to the user's home directory.
 3. A still-relative path resolves against the directory containing the config file.
 
-**Warming.** `warm_cmd` runs **only** when `--allow-uri-sync` is passed — committing a
-config with arbitrary commands MUST NOT cause subprocess execution by itself.
+**Stat + verify.** The resolved path is stat'd; if it does not exist, the link is broken.
+If it exists, placeholder detection runs:
 
-- `{path}` occurrences in arguments are replaced with the resolved absolute file path.
-- If any argument contains `{paths}`, the command runs in **stdin mode**: one path per line
-  on stdin, `{path}` substituted empty.
-- The command runs with a deadline of `warm_timeout` seconds; on timeout the child is
-  killed and the outcome is *timed out*.
-- Outcome: exit 0 + file exists → *present*; exit 0 + missing → *missing*; non-zero exit
-  or spawn failure → *failed*.
-- **Verification** (placeholder detection), in order: if `verify_cmd` is set, it runs
-  after a successful warm (exit 0 = real file; non-zero/timeout/spawn failure = missing).
-  Otherwise the `uri.auto_verify` heuristics apply: OneDrive zero-byte `._<name>` resource
-  fork (or any `._*` sibling under a OneDrive path), iCloud `Mobile Documents` path with a
-  sibling `.<name>.icloud`, or generic 0-byte file with recent mtime under a known
-  cloud-storage path. An inconclusive heuristic passes.
+- If `verify_cmd` is set, it runs **only** when `--allow-uri-sync` is passed — committing a
+  config with arbitrary commands MUST NOT cause subprocess execution by itself. `{path}` is
+  substituted with the resolved absolute file path; exit 0 → real file, non-zero/timeout/
+  spawn failure → placeholder. Without `--allow-uri-sync`, `verify_cmd` is skipped (treated
+  as inconclusive).
+- Otherwise, when `auto_verify` is enabled (default), the built-in **vendor-specific**
+  heuristics run: an iCloud `Mobile Documents` path with a sibling `.<name>.icloud`, or a
+  OneDrive path with a zero-byte `._<name>` resource fork. An inconclusive heuristic
+  passes. *(The old generic 0-byte + recent-mtime heuristic was dropped: it had a
+  false-positive window for genuinely empty cloud files.)*
 
 **Outcomes.**
 
-- *Present* → the link resolves as an attachment.
-- *Missing* → `link/broken`. Additionally `uri/sync-failed` iff `warm_required = false` AND warming ran AND
-  the outcome was *failed* or *timed out*. With `warm_required = true`, only `link/broken` is
-  emitted (hard failure).
-- **No mapping** → `link/broken`, plus `uri/no-mapping` hint when at least one mapping is configured and
-  `--no-uri-hints` was not passed.
-- **Anchor on a URI target** (`scheme://…#anchor`) → always `link/broken-anchor`: anchors on external
-  assets are not supported.
+- *Present* (exists, not a placeholder) → the link resolves as an attachment.
+- *Missing or evicted placeholder* → `link/broken`.
+- **No mapping** → `link/broken`, plus `uri/no-mapping` hint when at least one schema is
+  configured and `--no-uri-hints` was not passed.
+- **Anchor on a scheme target** (`scheme://…#anchor`) → always `link/broken-anchor`:
+  anchors on external assets are not supported.
 
-**Batching.** Warming is batched, never per-link: paths are fanned out per subprocess in
-chunks of `--uri-sync-batch-size` (default 50, minimum 1). When a chunk's constructed
-argv would exceed 128 KiB, the runner falls back to per-file spawning; the `{paths}`
-stdin tier is exempt from the cap. *(Non-normative status: the fallback currently occurs
-silently — see `uri/batch-clamped`.)*
-
-**Caching.** Within one LSP server, warm results are cached per (mapping, path) and shared
-across requests; each CLI run starts fresh.
-
-Tests: `onedrive_present_file_resolves`, `onedrive_missing_file_yields_broken_link`,
-`no_mapping_emits_hint_when_uri_configured`, `no_mapping_emits_no_hint_when_uri_unconfigured`,
+Tests: `present_file_resolves_as_attachment`, `missing_file_yields_broken_link`,
+`no_mapping_emits_hint_when_schemas_configured`,
+`no_mapping_emits_no_hint_when_schemas_unconfigured`,
 `no_uri_hints_flag_suppresses_uri_no_mapping_but_keeps_link_broken`,
-`allow_uri_sync_with_mock_cmd_marks_present_after_run`,
-`no_uri_sync_mapping_means_skipped_diagnostic`,
-`warm_required_with_failing_cmd_marks_broken`,
-`soft_sync_failure_emits_uri_sync_failed_alongside_link_broken`,
 `trailing_slash_normalization_matches_both_forms`, `env_var_expansion_in_root`,
 `relative_root_resolves_against_config_dir`, `more_specific_prefix_wins`,
-`verify_cmd_pass_marks_present_after_sync`,
-`verify_cmd_failure_marks_broken_even_when_file_exists`,
-`auto_verify_off_skips_heuristics`, `batch_size_three_fans_out_into_one_spawn`,
-`batch_clamps_to_per_file_when_argv_exceeds_limit`.
+`verify_cmd_pass_marks_present`, `verify_cmd_failure_marks_broken_even_when_file_exists`,
+`verify_cmd_gated_by_allow_sync`, `icloud_evicted_placeholder_is_broken`,
+`auto_verify_off_skips_heuristics`.
 
 ### 3.8 RES-08 — Mounts (Co-Equal Resolution Roots)
 
@@ -478,14 +466,11 @@ Tests: `ignore_project_overrides_user`, `ignore_negation_pattern_parses`.
 | `heading/nbsp` | Non-breaking space after heading | Warning | U+00A0 after heading marker |
 | `link/broken-anchor` | Broken anchor | Warning (all link forms) | anchor did not resolve |
 | `mount/conflict` | Mount conflict | Error | mount `prefix` or top-level folder collides with the primary (RES-08) |
-| `uri/no-mapping` | No URI mapping | Info | unmapped URI target, mappings configured |
-| `uri/sync-skipped` | URI sync skipped | Info | warm mappings present, sync not allowed |
-| `uri/sync-failed` | URI sync failed | Info | soft warm failure |
-| `uri/batch-clamped` | URI batch clamped | Info | declared; **not emitted** (see 4.8) |
+| `uri/no-mapping` | No scheme mapping | Info | unmapped scheme target, `[[schemas]]` configured |
 
 **Severity rule.** Wiki links and embeds receive **Error** for `link/ambiguous` and `link/broken` on local
 targets; markdown links, images, and reference links receive **Warning**. `link/broken-anchor` and
-`heading/nbsp` are always Warning; the four `uri/*` rules are always Info. `--min-severity` filters
+`heading/nbsp` are always Warning; `uri/no-mapping` is always Info. `--min-severity` filters
 output only; it never changes assigned severity. The CLI default is `warning`; the LSP
 always reports at `info`.
 
@@ -561,70 +546,29 @@ Tests: `inline_anchor_to_existing_heading_resolves`,
 `inline_anchor_cross_document_miss_emits_dnl005`,
 `inline_anchor_tolerant_miss_still_emits_dnl005`.
 
-### 4.5 `uri/no-mapping` — No URI mapping
+### 4.5 `uri/no-mapping` — No scheme mapping
 
-- **Condition**: a non-web URI-scheme target matched no `[[uri.mappings]]` prefix, at
-  least one mapping is configured, and `--no-uri-hints` was not passed.
+- **Condition**: a non-web URI-scheme target matched no `[[schemas]]` prefix, at
+  least one schema is configured, and `--no-uri-hints` was not passed.
 - **Multiplicity**: at most **one per run**, attached to the first hint-eligible link.
 - **Severity**: Info. The underlying `link/broken` for the same link is still emitted; `uri/no-mapping` is
   additive.
 - **Message** (verbatim):
-  `No URI mapping found for '{target}'. Configure [[uri.mappings]] in .downlint.toml, e.g.:`
-  followed by an example `[[uri.mappings]]` block and
+  `No scheme mapping found for '{target}'. Configure [[schemas]] in .downlint.toml, e.g.:`
+  followed by an example `[[schemas]]` block and
   `Suppress this hint with --no-uri-hints.`
-- **Suppressed** when `[uri]` is unconfigured (repos without the feature see zero change).
+- **Suppressed** when `[[schemas]]` is unconfigured (repos without the feature see zero change).
 
-Tests: `no_mapping_emits_hint_when_uri_configured`,
-`no_mapping_emits_no_hint_when_uri_unconfigured`,
+Tests: `no_mapping_emits_hint_when_schemas_configured`,
+`no_mapping_emits_no_hint_when_schemas_unconfigured`,
 `no_uri_hints_flag_suppresses_uri_no_mapping_but_keeps_link_broken`.
 
-### 4.6 `uri/sync-skipped` — URI sync skipped
-
-- **Condition**: at least one `[[uri.mappings]]` entry has `warm_cmd` and the run did not
-  pass `--allow-uri-sync`.
-- **Multiplicity**: one aggregated diagnostic per run, listing all affected mappings.
-- **Location**: workspace root (path `.`), range `(0, 0)` — no source position is
-  meaningful for a global configuration warning.
-- **Severity**: Info.
-- **Message** (verbatim template):
-  `URI mappings skipped: {N} {entry|entries} {has|have} a 'warm_cmd' but --allow-uri-sync was not passed. Affected prefixes: {list}{more}.`
-  followed by `Run 'downlint warm-uri-mappings --allow-uri-sync' to warm them.` — prefix
-  list capped at 3, then ` (+N more)`.
-
-Tests: `no_uri_sync_mapping_means_skipped_diagnostic`.
-
-### 4.7 `uri/sync-failed` — URI sync failed
-
-- **Condition**: warming ran (with `--allow-uri-sync`), the outcome was *failed* or
-  *timed out*, the file is still missing on disk, and `warm_required = false`.
-- **Multiplicity**: at most **one per run**, attached to the first soft-failure link.
-- **Severity**: Info. Emitted **alongside** the `link/broken` for the same link — it distinguishes
-  a soft failure from a hard one. Mappings with `warm_required = true` produce only `link/broken`.
-- **Message** (verbatim):
-  `Sync completed but '{target}' is still missing on disk. The link is reported as broken; with 'warm_required = false', this is a soft warning rather than a hard failure.`
-- The failed command is never echoed in any diagnostic (secrets).
-
-Tests: `soft_sync_failure_emits_uri_sync_failed_alongside_link_broken`,
-`warm_required_with_failing_cmd_marks_broken`.
-
-### 4.8 `uri/batch-clamped` — URI batch clamped *(declared, not emitted)*
-
-- **Intended condition**: a warm batch's constructed argv exceeds the 128 KiB cap and the
-  runner falls back to per-file spawning.
-- **Current status**: the code is declared and the fallback mechanism exists, but **no
-  diagnostic is emitted** — the fallback occurs silently. This clause records the reserved
-  code and intended behavior; emission is unimplemented.
-- The code MUST NOT be reused for any other purpose.
-
-Tests: `batch_clamps_to_per_file_when_argv_exceeds_limit` (asserts the fallback flag only,
-no diagnostic).
-
-### 4.9 Computation
+### 4.6 Computation
 
 - **Per occurrence**: each unresolved or ambiguous occurrence produces its own diagnostic;
   there is no deduplication across occurrences.
 - **Order** (per folder): broken links (`link/broken`, `link/broken-anchor`) → ambiguous links (`link/ambiguous`) →
-  `uri/no-mapping` → `uri/sync-failed` → `uri/sync-skipped` → `heading/nbsp` (per document).
+  `uri/no-mapping` → `mount/conflict` → `heading/nbsp` (per document).
 - **Filtering**: after computation, diagnostics below `--min-severity` are dropped from
   output. CLI exit code reflects the filtered set.
 - **Single-file mode**: cross-file diagnostics are disabled. Unresolved non-empty,
@@ -647,8 +591,8 @@ Tests: `obsidian_prefix_single_file_mode`, `no_uri_sync_mapping_means_skipped_di
   `$XDG_CONFIG_HOME/downlint/config.toml` or `~/.config/downlint/config.toml` (other).
 - **Precedence**: project > user > built-in defaults. Merge is field-level: a key present
   in the project config wins; absent keys fall through to the user value, then the
-  default. Exception: `uri.mappings` — when the project config defines the list, it
-  **replaces** the user's list wholesale (no per-entry merge).
+  default. Exception: `[[schemas]]` and `[[mounts]]` — when the project config defines
+  the list, it **replaces** the user's list wholesale (no per-entry merge).
 
 ### 5.2 Validation
 
@@ -656,19 +600,16 @@ Tests: `obsidian_prefix_single_file_mode`, `no_uri_sync_mapping_means_skipped_di
   exit code 2 with an error message; there is no partial loading.
 - Unknown keys are a parse error (`deny_unknown_fields` on every section). Removing a key
   from the schema is therefore a breaking change: e.g. the legacy keys
-  `core.attachment_file_extensions_add` and `[[uri.mappings]] sync_cmd` (renamed to
-  `warm_cmd`) fail parsing.
+  `core.attachment_file_extensions_add`, `[uri]`, and `[[uri.mappings]]` fail parsing.
 - Specific validations:
   - `core.file_extensions` must be non-empty.
   - `code_action.toc.include` must be non-empty and contain only levels 1–6.
   - `completion.candidates` is floored to 1.
-  - `uri.mappings[*].prefix` and `.root` are required and non-empty.
-  - `uri.mappings[*].warm_timeout` must be > 0.
-  - `uri.auto_verify` must be one of `on | off | onedrive-only | icloud-only`.
+  - `[[schemas]][*].prefix` and `.root` are required and non-empty.
   - A `root` that fails expansion (missing `$VAR`, no home directory) is a startup error.
 
-Tests: `parse_rejects_removed_attachment_extensions_key`, `uri_missing_prefix_yields_indexed_error`,
-`uri_zero_timeout_errors`, `ignore_project_overrides_user`.
+Tests: `parse_rejects_removed_attachment_extensions_key`, `schema_missing_prefix_yields_indexed_error`,
+`ignore_project_overrides_user`.
 
 ### 5.3 Per-Key Clauses
 
@@ -685,13 +626,7 @@ Tests: `parse_rejects_removed_attachment_extensions_key`, `uri_missing_prefix_yi
 | `code_action.create_missing_file.enable` | `true` | Non-linting (code action). |
 | `completion.candidates` | `50` | Non-linting. |
 | `completion.wiki.style` | `"title-slug"` (`"title-slug" \| "title" \| "file-stem" \| "file-path-stem"`) | Non-linting. |
-| `uri.auto_verify` | `"on"` (`"on" \| "off" \| "onedrive-only" \| "icloud-only"`) | RES-07 placeholder heuristics. |
-| `uri.mappings[*].prefix` | required | RES-07 prefix match. |
-| `uri.mappings[*].root` | required | RES-07 root expansion. |
-| `uri.mappings[*].warm_cmd` | absent | RES-07 warming; drives `uri/sync-skipped` count. |
-| `uri.mappings[*].warm_required` | `false` | RES-07 hard vs soft failure (`uri/sync-failed`). |
-| `uri.mappings[*].warm_timeout` | `30` (seconds) | RES-07 warm deadline; also the verify deadline. |
-| `uri.mappings[*].verify_cmd` | absent | RES-07 authoritative placeholder check. |
+| `[[schemas]]` | `[]` | RES-07. Each entry: `prefix` (required, e.g. `icloud://assets/`), `root` (required), `auto_verify` (optional, default `true`), `verify_cmd` (optional). `root` is relative to the config file's directory. |
 
 CLI flags that affect linting behavior: `--min-severity` (default `warning`),
 `--allow-uri-sync`, `--no-uri-hints`, `--uri-sync-batch-size` (default 50, min 1),
@@ -741,8 +676,6 @@ produced.
   `did*` notifications suffice for v1 indexing.
 - Wiki-link ↔ markdown-link conversion — **not implemented**; the known
   future direction for publishing wiki-based notes (see `TODO.md`).
-- `uri/batch-clamped` emission (4.8) — mechanism present, diagnostic unimplemented.
-
 ---
 
 ## 7. Non-Normative Appendix
@@ -756,8 +689,8 @@ produced.
    - Only one file exists, flag on → resolves to it.
 2. `[report](./data/report.xlsx)` with the file present → resolved attachment, no
    diagnostic. File missing → `link/broken` (Warning).
-3. `[x](onedrive://work/big.pdf)` with a matching mapping, file present after warm →
-   resolved attachment. No mapping configured at all → `link/broken` (no `uri/no-mapping` hint).
+3. `[x](icloud://assets/big.pdf)` with a matching schema, file present → resolved
+   attachment. No schema configured at all → `link/broken` (no `uri/no-mapping` hint).
 
 ---
 
@@ -769,6 +702,7 @@ produced.
 | 2026-09-20 | — | Bootstrap `spec.md` and `rfc/0001`–`0009` removed from the working tree (folded in; git history is the record). Open issues moved to `TODO.md`. |
 | 2026-09-21 | — | Diagnostic codes re-based from opaque `DNLnnn` to namespaced semantic slugs. Old→new: `DNL001`→`link/ambiguous`, `DNL002`→`link/broken`, `DNL003`→`heading/nbsp`, `DNL005`→`link/broken-anchor`, `DNL006`→`uri/no-mapping`, `DNL007`→`uri/sync-skipped`, `DNL008`→`uri/sync-failed`, `DNL009`→`uri/batch-clamped`. `DNL004` was never assigned and is retired with the numeric scheme. Severity is unchanged (still a separate axis). Wire-format breaking change: emitted `code` strings changed. |
 | 2026-09-21 | 0010 (Phase 1) | RES-08 re-scoped from “Cross-Folder Resolution” (fallback) to “Mounts” (co-equal, indexed resolution roots): `core.extra_folders` replaced by `[[mounts]]` (`root`, optional `prefix`, optional `lint`); mounted documents indexed co-equal with primary (no primary-wins tiering); relative links do not cross mounts; workspace-absolute links reach a mount via its `prefix`; bare stem/title resolve across the whole namespace; `lint` controls whether a mounted doc is a source; diagnostics from mounted docs carry mount attribution. New diagnostic `mount/conflict` (Error) for structural prefix/folder collisions, with suspend behavior. `link/ambiguous` condition updated (co-equal namespace). |
+| 2026-09-21 | 0010 (Phase 2) | RES-07 re-scoped from “External URI Mapping” (warming) to “Schemes” (rewrite + stat + verify): `[uri]` / `[[uri.mappings]]` replaced by `[[schemas]]` (`prefix`, `root`, optional `auto_verify` bool default `true`, optional `verify_cmd`); warming removed (`warm_cmd` / `warm_required` / `warm_timeout` dropped); no caching; the `warm-uri-mappings` subcommand removed; `auto_verify` is now a per-schema bool running vendor-specific heuristics only (the generic 0-byte + recent-mtime heuristic dropped); `verify_cmd` gated by `--allow-uri-sync`. Diagnostics `uri/sync-skipped`, `uri/sync-failed`, `uri/batch-clamped` tombstoned; `uri/no-mapping` kept (re-scoped to schemes). |
 
-**Known coverage gaps** (clauses without tests yet): `heading/nbsp`; `uri/batch-clamped` (by design, until
-emission lands); single-file-mode `link/broken` suppression; URI-target + anchor → `link/broken-anchor`.
+**Known coverage gaps** (clauses without tests yet): `heading/nbsp`; single-file-mode `link/broken`
+suppression; scheme-target + anchor → `link/broken-anchor`.

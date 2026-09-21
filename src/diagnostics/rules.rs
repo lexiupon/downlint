@@ -98,8 +98,8 @@ pub fn ambiguous_link(reference: &AmbiguousReference) -> Option<Diagnostic> {
 }
 
 /// Hint diagnostic: emitted once per run if any unresolved reference was a
-/// URI-scheme link (`scheme://...`) that did not match any `[uri.mappings]`
-/// prefix. Surfaces the example config so the user can find the `[uri]`
+/// URI-scheme link (`scheme://...`) that did not match any `[[schemas]]`
+/// prefix. Surfaces the example config so the user can find the `[[schemas]]`
 /// section without reading the RFC. Returns `None` if no such unresolved
 /// reference exists.
 pub fn uri_no_mapping_hint(unresolved: &[UnresolvedReference]) -> Option<Diagnostic> {
@@ -110,67 +110,11 @@ pub fn uri_no_mapping_hint(unresolved: &[UnresolvedReference]) -> Option<Diagnos
         severity: DiagnosticSeverity::Info,
         code: DiagnosticCode::UriNoMapping,
         message: format!(
-            "No URI mapping found for '{}'. Configure [[uri.mappings]] in .downlint.toml, e.g.:\n\
-             \n  [[uri.mappings]]\n  \
-             prefix = \"onedrive://work/\"\n  \
-             root = \"~/Library/CloudStorage/OneDrive/assets\"\n\
+            "No scheme mapping found for '{}'. Configure [[schemas]] in .downlint.toml, e.g.:\n\
+             \n  [[schemas]]\n  \
+             prefix = \"icloud://assets/\"\n  \
+             root = \"~/icloud/assets\"\n\
              \nSuppress this hint with --no-uri-hints.",
-            first.target,
-        ),
-        related: Vec::new(),
-        mount: None,
-    })
-}
-
-/// One-time info diagnostic: emitted at most once per run when there are
-/// `[uri.mappings]` entries with `warm_cmd` configured but the CLI flag
-/// `--allow-uri-sync` was not passed. Note this is advisory — the per-link
-/// behavior is decided in the resolution layer; this just informs the user
-/// why cloud-synced assets may not appear locally.
-pub fn uri_sync_skipped(source_path: &Path, mapping_count: usize, targets: &[&str]) -> Option<Diagnostic> {
-    if mapping_count == 0 {
-        return None;
-    }
-    let preview: Vec<String> = targets
-        .iter()
-        .take(3)
-        .map(|value| value.to_string())
-        .collect();
-    let listed = preview.join(", ");
-    let more = if targets.len() > 3 {
-        format!(" (+{} more)", targets.len() - 3)
-    } else {
-        String::new()
-    };
-    Some(Diagnostic {
-        path: source_path.to_path_buf(),
-        range: ByteRange::new(0, 0),
-        severity: DiagnosticSeverity::Info,
-        code: DiagnosticCode::UriSyncSkipped,
-        message: format!(
-            "URI mappings skipped: {mapping_count} {entry_word} {have_word} a `warm_cmd` but --allow-uri-sync was not passed. Affected prefixes: {listed}{more}.\n\
-             Run 'downlint warm-uri-mappings --allow-uri-sync' to warm them.",
-            entry_word = if mapping_count == 1 { "entry" } else { "entries" },
-            have_word = if mapping_count == 1 { "has" } else { "have" },
-        ),
-        related: Vec::new(),
-        mount: None,
-    })
-}
-
-/// Info-level: emitted once per source file when at least one of its URI
-/// references ended up as a "soft" sync failure (`warm_required = false` +
-/// sync ran but did not produce a usable file). Capped at 5 mappings per
-/// file to mirror the obsidian-prefix hint pattern.
-pub fn sync_failure_warning(unresolved: &[UnresolvedReference]) -> Option<Diagnostic> {
-    let first = unresolved.iter().find(|reference| reference.sync_was_soft_failure)?;
-    Some(Diagnostic {
-        path: first.source_path.clone(),
-        range: first.name_range.unwrap_or(first.full_range),
-        severity: DiagnosticSeverity::Info,
-        code: DiagnosticCode::UriSyncFailed,
-        message: format!(
-            "Sync completed but '{}' is still missing on disk. The link is reported as broken; with `warm_required = false`, this is a soft warning rather than a hard failure.",
             first.target,
         ),
         related: Vec::new(),

@@ -1,6 +1,6 @@
 pub mod mount;
 pub mod project;
-pub mod uri;
+pub mod schema;
 pub mod user;
 
 use serde::Deserialize;
@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 pub use mount::{Mount, MountConfigError, PartialMount, finalize_mounts, merge_mounts};
 pub use project::project_config_path;
-pub use uri::{UriConfig, UriConfigError, UriMapping, finalize_uri, merge_uri};
+pub use schema::{Schema, SchemaConfig, SchemaConfigError, finalize_schemas, merge_schemas};
 pub use user::user_config_path;
 
 #[derive(Clone, Debug, Default)]
@@ -19,7 +19,7 @@ pub struct Config {
     pub code_action: CodeActionConfig,
     pub completion: CompletionConfig,
     pub wiki: WikiConfig,
-    pub uri: UriConfig,
+    pub schemas: SchemaConfig,
     pub mounts: Vec<Mount>,
 }
 
@@ -169,7 +169,7 @@ pub struct PartialConfig {
     pub code_action: Option<PartialCodeActionConfig>,
     pub completion: Option<PartialCompletionConfig>,
     pub wiki: Option<PartialWikiConfig>,
-    pub uri: Option<uri::PartialUriConfig>,
+    pub schemas: Option<Vec<schema::PartialSchema>>,
     pub mounts: Option<Vec<PartialMount>>,
 }
 
@@ -252,7 +252,7 @@ pub fn finalize_config(partial: PartialConfig) -> Result<Config, ConfigError> {
     let code_action = partial.code_action.unwrap_or_default();
     let completion = partial.completion.unwrap_or_default();
     let wiki = partial.wiki.unwrap_or_default();
-    let uri = finalize_uri(partial.uri.unwrap_or_default())
+    let schemas = finalize_schemas(partial.schemas.unwrap_or_default())
         .map_err(|error| ConfigError::Validation(error.to_string()))?;
     let mounts = finalize_mounts(partial.mounts.unwrap_or_default())
         .map_err(|error| ConfigError::Validation(error.to_string()))?;
@@ -325,7 +325,7 @@ pub fn finalize_config(partial: PartialConfig) -> Result<Config, ConfigError> {
                 .obsidian_prefix
                 .unwrap_or(defaults.wiki.obsidian_prefix),
         },
-        uri,
+        schemas,
         mounts,
     })
 }
@@ -348,10 +348,7 @@ pub fn merge_partial(high: PartialConfig, low: PartialConfig) -> PartialConfig {
             high.wiki.unwrap_or_default(),
             low.wiki.unwrap_or_default(),
         )),
-        uri: Some(merge_uri(
-            high.uri.unwrap_or_default(),
-            low.uri.unwrap_or_default(),
-        )),
+        schemas: merge_schemas(high.schemas, low.schemas),
         mounts: merge_mounts(high.mounts, low.mounts),
     }
 }
@@ -560,60 +557,46 @@ mod tests {
     }
 
     #[test]
-    fn parse_accepts_uri_mappings() {
+    fn parse_accepts_schemas() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join(".downlint.toml");
         fs::write(
             &path,
             r#"
-[[uri.mappings]]
-prefix = "onedrive://work/"
-root = "~/Library/CloudStorage/OneDrive-Work/assets"
-warm_cmd = ["mdutil", "--enforce-locals", "{path}"]
-warm_required = true
-warm_timeout = 45
+[[schemas]]
+prefix = "icloud://assets/"
+root = "~/icloud/assets"
+auto_verify = false
 "#,
         )
         .unwrap();
 
         let partial = parse_partial_config(&path).unwrap();
         let config = finalize_config(partial).unwrap();
-        assert_eq!(config.uri.mappings.len(), 1);
-        let mapping = &config.uri.mappings[0];
-        assert_eq!(mapping.prefix, "onedrive://work/");
-        assert_eq!(mapping.root, "~/Library/CloudStorage/OneDrive-Work/assets");
-        assert!(mapping.warm_required);
-        assert_eq!(mapping.warm_timeout, 45);
-        assert_eq!(
-            mapping.warm_cmd.as_deref(),
-            Some(
-                [
-                    "mdutil".to_string(),
-                    "--enforce-locals".to_string(),
-                    "{path}".to_string(),
-                ]
-                .as_slice()
-            )
-        );
+        assert_eq!(config.schemas.schemas.len(), 1);
+        let schema = &config.schemas.schemas[0];
+        assert_eq!(schema.prefix, "icloud://assets/");
+        assert_eq!(schema.root, "~/icloud/assets");
+        assert!(!schema.auto_verify);
     }
 
     #[test]
-    fn uri_mappings_default_when_absent() {
+    fn schemas_default_when_absent() {
         let partial = PartialConfig::default();
         let config = finalize_config(partial).unwrap();
-        assert!(config.uri.mappings.is_empty());
+        assert!(config.schemas.schemas.is_empty());
     }
 
     #[test]
-    fn uri_missing_prefix_yields_indexed_error() {
+    fn schema_missing_prefix_yields_indexed_error() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join(".downlint.toml");
         fs::write(
             &path,
             r#"
-[[uri.mappings]]
+[[schemas]]
 root = "./foo"
-[[uri.mappings]]
+[[schemas]]
 prefix = "scheme://"
 root = "./bar"
 "#,
@@ -623,7 +606,7 @@ root = "./bar"
         let error = finalize_config(parse_partial_config(&path).unwrap()).unwrap_err();
         match error {
             ConfigError::Validation(message) => {
-                assert!(message.contains("uri.mappings[0]"));
+                assert!(message.contains("schemas[0]"));
                 assert!(message.contains("prefix"));
             }
             other => panic!("expected validation error, got {other:?}"),
@@ -631,32 +614,13 @@ root = "./bar"
     }
 
     #[test]
-    fn uri_zero_timeout_errors() {
+    fn parse_rejects_unknown_schema_key() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join(".downlint.toml");
         fs::write(
             &path,
             r#"
-[[uri.mappings]]
-prefix = "scheme://"
-root = "./foo"
-warm_timeout = 0
-"#,
-        )
-        .unwrap();
-
-        let error = finalize_config(parse_partial_config(&path).unwrap()).unwrap_err();
-        assert!(matches!(error, ConfigError::Validation(_)));
-    }
-
-    #[test]
-    fn parse_rejects_unknown_uri_key() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join(".downlint.toml");
-        fs::write(
-            &path,
-            r#"
-[[uri.mappings]]
+[[schemas]]
 prefix = "scheme://"
 root = "./foo"
 bogus = true

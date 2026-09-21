@@ -7,6 +7,16 @@ Pre-1.0 versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.3.0] — Mounts, Schemes & Rename
+
+RFC 0010 lands in full: **Mounts** (co-equal resolution roots) and **Schemes**
+(external URI mapping via rewrite + stat + verify), alongside the Rename & Link
+Refactor and the re-base of diagnostic codes to semantic slugs. This is a
+breaking release: `core.extra_folders`, `[uri]`/`[[uri.mappings]]`, and the URI
+warming machinery are removed (no aliases, no deprecation window). Normative
+behavior is in `spec/linting.md` (§3.7 RES-07, §3.8 RES-08) and
+`spec/downlint.md`.
+
 ### Added
 
 **Rename & Link Refactor** — downlint can now rename files,
@@ -100,17 +110,40 @@ tracked in `ServerState::indexing` and the `is_indexing()` helper.
   with suspend behavior (conflicting prefix not applied / conflicting folder not
   linted).
 
+#### Schemes (external URI mapping)
+
+- `[[schemas]]` replaces `[uri]` / `[[uri.mappings]]` (the old keys are removed, not
+  aliased). Each entry has a `prefix` (e.g. `icloud://assets/`) and a `root` (both
+  required), plus optional `auto_verify` (default `true`) and `verify_cmd`.
+- Resolution is **rewrite + stat + verify**: downlint maps the URI to a local path,
+  stats it, and (per `auto_verify`) checks for evicted cloud placeholders. It never
+  downloads or hydrates files.
+- `auto_verify` is now a per-schema bool (was a global string enum) and runs
+  vendor-specific heuristics only (iCloud `.icloud` sibling, OneDrive `._<name>`
+  resource fork); the generic 0-byte + recent-mtime heuristic is dropped.
+- `verify_cmd` is an advanced per-schema escape hatch, gated by `--allow-uri-sync`.
+
 ### Changed
 
 - **Diagnostic codes re-based to semantic slugs** (breaking, wire format). The opaque
   `DNLnnn` codes are now namespaced slugs: `DNL001`→`link/ambiguous`,
   `DNL002`→`link/broken`, `DNL003`→`heading/nbsp`, `DNL005`→`link/broken-anchor`,
-  `DNL006`→`uri/no-mapping`, `DNL007`→`uri/sync-skipped`, `DNL008`→`uri/sync-failed`,
-  `DNL009`→`uri/batch-clamped`. Emitted `code` strings in CLI text/JSON and LSP
+  `DNL006`→`uri/no-mapping`. Emitted `code` strings in CLI text/JSON and LSP
   `publishDiagnostics` change accordingly; severity is unchanged (still a separate
   field). Full mapping in `spec/linting.md` §8.
 - LSP diagnostics now carry `source: "downlint"` so editors attribute them to
   downlint (matching how other servers, e.g. Marksman, label their diagnostics).
+
+### Removed
+
+- **URI warming** (breaking). The `warm_cmd` / `warm_required` / `warm_timeout`
+  config keys, the `downlint warm-uri-mappings` subcommand, the
+  `--uri-sync-batch-size` flag, and the `uri/sync-skipped` / `uri/sync-failed` /
+  `uri/batch-clamped` diagnostics are all removed. downlint is read-only: it
+  validates external assets (stat + verify) but never downloads or hydrates them.
+  A missing or evicted cloud file is reported as `link/broken`.
+- `core.extra_folders` (replaced by `[[mounts]]`).
+- `[uri]` / `[[uri.mappings]]` (replaced by `[[schemas]]`).
 
 ### Notes
 
@@ -121,7 +154,6 @@ tracked in `ServerState::indexing` and the `is_indexing()` helper.
   implemented. The current apply path writes text edits first and then
   moves the file — partial failures leave a recoverable state (`link/broken`
   surfaces the gap) but no automatic rollback.
-- No new diagnostic codes; the feature reuses existing severity levels.
 
 ## [0.2.0] — External Asset URI Mapping
 

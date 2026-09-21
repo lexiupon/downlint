@@ -69,36 +69,18 @@ fn make_input(
         prefix_index,
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
         uri_opts: downlint::resolution::UriOptions::default(),
-        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
         uri_error: None,
     }
 }
 
 /// Adapter: tests don't construct a real `Workspace`, so we pass a synthetic
 /// one with an empty `DiscoveredFolder` and the default `Config` that comes
-/// from `resolve_links`. The diagnostics layer only reads `workspace.config`
-/// (for `[uri.mappings]`) and the root path; the empty folder is harmless for
-/// non-URI tests.
+/// from `resolve_links`.
 fn run_diagnostics(
     graph: &downlint::resolution::ConnectionGraph,
     config: &DiagnosticConfig,
 ) -> Vec<downlint::diagnostics::Diagnostic> {
-    let workspace = downlint::utils::Workspace {
-        folder: downlint::utils::DiscoveredFolder {
-            root: std::path::PathBuf::from("."),
-            config_path: None,
-            documents: Vec::new(),
-            mounts: Vec::new(),
-        },
-        mode: downlint::utils::WorkspaceMode::MultiFile,
-        config: downlint::config::Config::default(),
-    };
-    check_diagnostics(
-        graph,
-        config,
-        &workspace,
-        &downlint::resolution::UriOptions::default(),
-    )
+    check_diagnostics(graph, config)
 }
 
 #[test]
@@ -340,7 +322,6 @@ fn wiki_link_with_non_ascii_title_resolves_correctly() {
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
         uri_opts: downlint::resolution::UriOptions::default(),
-        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
         uri_error: None,
     };
 
@@ -398,7 +379,6 @@ fn wiki_link_with_non_ascii_heading_anchor_resolves_correctly() {
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
         uri_opts: downlint::resolution::UriOptions::default(),
-        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
         uri_error: None,
     };
 
@@ -460,7 +440,6 @@ fn wiki_link_with_mojibake_does_not_match_correct_title() {
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
         uri_opts: downlint::resolution::UriOptions::default(),
-        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
         uri_error: None,
     };
 
@@ -495,7 +474,8 @@ fn wiki_link_explicit_path_resolves_in_mount() {
     let root = tmp.path().to_path_buf();
 
     // Create the mounted project outside the main root
-    let ext_root = root.parent().unwrap().join("ext_project");
+    let ext_tmp = TempDir::new().unwrap();
+    let ext_root = ext_tmp.path().to_path_buf();
 
     // Target document in the mounted project
     let target_md = "# John Doe\n\nBio content.\n";
@@ -544,7 +524,6 @@ fn wiki_link_explicit_path_resolves_in_mount() {
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
         uri_opts: downlint::resolution::UriOptions::default(),
-        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
         uri_error: None,
     };
 
@@ -587,7 +566,8 @@ fn wiki_link_with_slash_in_target_resolves_via_title_slug_in_mount() {
     let root = tmp.path().to_path_buf();
 
     // Create the extra project outside the main root
-    let ext_root = root.parent().unwrap().join("ext_project");
+    let ext_tmp = TempDir::new().unwrap();
+    let ext_root = ext_tmp.path().to_path_buf();
 
     // Target document in the extra project with `/` in title
     let target_md = "# Team knowledge transfer (QA/DB)\n\nBio content.\n";
@@ -633,7 +613,6 @@ fn wiki_link_with_slash_in_target_resolves_via_title_slug_in_mount() {
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
         uri_opts: downlint::resolution::UriOptions::default(),
-        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
         uri_error: None,
     };
 
@@ -697,7 +676,6 @@ fn inline_link_with_non_ascii_filename_resolves_correctly() {
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
         uri_opts: downlint::resolution::UriOptions::default(),
-        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
         uri_error: None,
     };
 
@@ -869,7 +847,6 @@ fn folder_link_in_mount_resolves() {
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
         uri_opts: downlint::resolution::UriOptions::default(),
-        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
         uri_error: None,
     };
 
@@ -1372,7 +1349,6 @@ fn obsidian_prefix_single_file_mode() {
         prefix_index,
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
         uri_opts: downlint::resolution::UriOptions::default(),
-        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
         uri_error: None,
     };
     let graph = resolve_links(input);
@@ -1676,7 +1652,8 @@ some content
 fn mount_same_name_primary_and_mount_is_ambiguous() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
-    let ext_root = root.parent().unwrap().join("ext_project");
+    let ext_tmp = TempDir::new().unwrap();
+    let ext_root = ext_tmp.path().to_path_buf();
 
     let primary_foo = write_document(&root, "notes/foo.md", "# Foo\n\nPrimary.\n");
     let target_md = "# Foo\n\nMounted.\n";
@@ -1707,7 +1684,6 @@ fn mount_same_name_primary_and_mount_is_ambiguous() {
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
         uri_opts: downlint::resolution::UriOptions::default(),
-        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
         uri_error: None,
     };
 
@@ -1721,7 +1697,8 @@ fn mount_same_name_primary_and_mount_is_ambiguous() {
 fn mount_prefix_disambiguates() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
-    let ext_root = root.parent().unwrap().join("ext_project");
+    let ext_tmp = TempDir::new().unwrap();
+    let ext_root = ext_tmp.path().to_path_buf();
 
     let primary_foo = write_document(&root, "notes/foo.md", "# Foo\n\nPrimary.\n");
     let target_md = "# Foo\n\nMounted.\n";
@@ -1752,7 +1729,6 @@ fn mount_prefix_disambiguates() {
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
         uri_opts: downlint::resolution::UriOptions::default(),
-        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
         uri_error: None,
     };
 
@@ -1770,7 +1746,8 @@ fn mount_prefix_disambiguates() {
 fn mount_relative_markdown_link_does_not_cross() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
-    let ext_root = root.parent().unwrap().join("ext_project");
+    let ext_tmp = TempDir::new().unwrap();
+    let ext_root = ext_tmp.path().to_path_buf();
 
     let target_md = "# Foo\n\nMounted.\n";
     let target_path = ext_root.join("foo.md");
@@ -1801,7 +1778,6 @@ fn mount_relative_markdown_link_does_not_cross() {
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
         uri_opts: downlint::resolution::UriOptions::default(),
-        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
         uri_error: None,
     };
 
@@ -1819,7 +1795,8 @@ fn mount_relative_markdown_link_does_not_cross() {
 fn mount_lint_true_lints_and_attributes_internal_links() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
-    let ext_root = root.parent().unwrap().join("ext_project");
+    let ext_tmp = TempDir::new().unwrap();
+    let ext_root = ext_tmp.path().to_path_buf();
 
     let target_md = "# Foo\n\n[[does-not-exist]]\n";
     let target_path = ext_root.join("foo.md");
@@ -1848,7 +1825,6 @@ fn mount_lint_true_lints_and_attributes_internal_links() {
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
         uri_opts: downlint::resolution::UriOptions::default(),
-        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
         uri_error: None,
     };
 
@@ -1868,7 +1844,8 @@ fn mount_lint_true_lints_and_attributes_internal_links() {
 fn mount_lint_false_does_not_lint_internal_links() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
-    let ext_root = root.parent().unwrap().join("ext_project");
+    let ext_tmp = TempDir::new().unwrap();
+    let ext_root = ext_tmp.path().to_path_buf();
 
     let target_md = "# Foo\n\n[[does-not-exist]]\n";
     let target_path = ext_root.join("foo.md");
@@ -1897,7 +1874,6 @@ fn mount_lint_false_does_not_lint_internal_links() {
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
         uri_opts: downlint::resolution::UriOptions::default(),
-        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
         uri_error: None,
     };
 
@@ -1914,7 +1890,8 @@ fn mount_lint_false_does_not_lint_internal_links() {
 fn mount_prefix_conflict_suspends_prefix() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
-    let ext_root = root.parent().unwrap().join("ext_project");
+    let ext_tmp = TempDir::new().unwrap();
+    let ext_root = ext_tmp.path().to_path_buf();
     fs::create_dir_all(&ext_root).unwrap();
 
     // Primary has a `kb/` folder.
@@ -1978,7 +1955,8 @@ fn mount_prefix_conflict_suspends_prefix() {
 fn mount_folder_conflict_suspends_lint() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
-    let ext_root = root.parent().unwrap().join("ext_project");
+    let ext_tmp = TempDir::new().unwrap();
+    let ext_root = ext_tmp.path().to_path_buf();
     fs::create_dir_all(&ext_root).unwrap();
 
     // Primary has a `notes/` folder.

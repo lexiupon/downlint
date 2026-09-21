@@ -54,172 +54,74 @@ Relative links never cross into a mount; workspace-absolute links reach a mount 
 `prefix` or top-level folder collides with the primary project emits a `mount/conflict`
 (Error) diagnostic; the conflicting namespace is suspended until the config is corrected.
 
-### `[uri]` — External Asset URI Mapping
+### `[[schemas]]` — External Asset Scheme Mapping
 
-Maps URI-style wiki/markdown link targets (`onedrive://work/...`, `s3://...`) to
-local filesystem roots so external assets (large PDFs/XLSX in OneDrive, files
-mirrored from S3) can be validated like any other link.
+Maps URI-style wiki/markdown link targets (`icloud://assets/...`,
+`onedrive://work/...`) to local filesystem roots so external assets (large
+PDFs/XLSX in iCloud/OneDrive) can be validated like any other link. Resolution
+is **rewrite + stat + verify** — downlint never downloads or hydrates files; it
+only checks that the resolved path exists and isn't an evicted cloud placeholder.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `prefix` | string | *(required)* | URI prefix to match. Trailing `/` is optional and normalized automatically. |
+| `prefix` | string | *(required)* | Scheme prefix to match (e.g. `icloud://assets/`). Trailing `/` is optional and normalized automatically. |
 | `root` | string | *(required)* | Local filesystem path. Supports `~`, env vars (`$VAR`, `${VAR}`), and relative-to-config-dir paths. |
-| `warm_cmd` | string[] | `null` | Per-file warming command; `{path}` is replaced with the resolved absolute file. Requires `--allow-uri-sync`. |
-| `warm_required` | bool | `false` | If `true`, warming failure makes the link broken. |
-| `warm_timeout` | int | `30` | Seconds to wait for `warm_cmd` per invocation. |
+| `auto_verify` | bool | `true` | Run the built-in evicted-placeholder heuristics (vendor-specific: iCloud `.icloud` sibling, OneDrive `._<name>` resource fork). |
+| `verify_cmd` | string[] | `null` | Custom placeholder check (advanced). Exit 0 = real file, non-zero = placeholder. Honors `{path}` substitution. Requires `--allow-uri-sync`. |
 
-Mappings are checked in declaration order — put more-specific prefixes first.
+Schemas are checked in declaration order — put more-specific prefixes first.
 
 #### Examples
 
-OneDrive (macOS):
+iCloud (macOS):
 
 ```toml
-[[uri.mappings]]
+[[schemas]]
+prefix = "icloud://assets/"
+root = "~/icloud/assets"
+```
+
+OneDrive with a custom `verify_cmd`:
+
+```toml
+[[schemas]]
 prefix = "onedrive://work/"
 root = "~/Library/CloudStorage/OneDrive-Work/assets"
-warm_cmd = ["mdutil", "--enforce-locals", "{path}"]
-warm_required = false
-```
-
-S3 mirror (via NAS):
-
-```toml
-[[uri.mappings]]
-prefix = "s3://reports/"
-root = "/Volumes/NAS/s3-reports"
-warm_cmd = ["aws", "s3", "cp", "{path}", "/dev/null"]
-```
-
-Local-only, no warming:
-
-```toml
-[[uri.mappings]]
-prefix = "internal://docs/"
-root = "./internal-docs"
+# `file` exits 0 only when the file is fully downloaded.
+verify_cmd = ["file", "{path}"]
 ```
 
 #### CLI flags
 
 | Flag | Effect |
 |---|---|
-| `--allow-uri-sync` | Permit subprocess execution of `warm_cmd` entries. **Security-sensitive**: anyone who can commit `.downlint.toml` can configure a `warm_cmd` to run on your machine. Without this flag, warming is skipped and a `uri/sync-skipped` info diagnostic is emitted per mapping. |
-| `--no-uri-hints` | Suppress the `uri/no-mapping` "no URI mapping found" hint while keeping the broken-link diagnostic. |
-| `--uri-sync-batch-size` | Batch size for warming invocations (default 50). Lower reduces memory, higher reduces fork overhead. |
+| `--allow-uri-sync` | Permit subprocess execution of a `verify_cmd`. **Security-sensitive**: anyone who can commit `.downlint.toml` can configure a `verify_cmd` to run on your machine. Without this flag, `verify_cmd` is skipped (treated as inconclusive). |
+| `--no-uri-hints` | Suppress the `uri/no-mapping` "no scheme mapping found" hint while keeping the broken-link diagnostic. |
 
 #### Diagnostics
 
 | Code | Severity | Meaning |
 |---|---|---|
-| `link/broken` | error (wiki) / warning (inline) | Broken link — URI mapped to a missing file or `warm_cmd` failed with `warm_required = true`. |
-| `uri/no-mapping` | info | No `[uri.mappings]` prefix matched the URI target. Configure `[[uri.mappings]]` or set `--no-uri-hints`. |
-| `uri/sync-skipped` | info | `warm_cmd` is configured but `--allow-uri-sync` was not passed. The diagnostic message names `downlint warm-uri-mappings` so you can warm them explicitly. |
-| `uri/sync-failed` | info | Warming ran (`warm_required = false`) but the file is still missing — a soft warning alongside `link/broken`. |
-| `uri/batch-clamped` | info | A `warm_cmd` batch's argv exceeded 128 KiB and the runner fell back to per-file. Emitted once per mapping per run. |
+| `link/broken` | error (wiki) / warning (inline) | Broken link — scheme mapped to a missing file or an evicted placeholder. |
+| `uri/no-mapping` | info | No `[[schemas]]` prefix matched the scheme target. Configure `[[schemas]]` or set `--no-uri-hints`. |
 
-### `[uri]` Phase 2 — verify_cmd and heuristics
-
-`[uri.mappings]` gained two new keys and one section-level key:
-
-| Key | Scope | Default | Description |
-|---|---|---|---|
-| `verify_cmd` | per-mapping | absent | Post-warm placeholder check. Exit 0 = real file, non-zero = placeholder. Honors `{path}` substitution. |
-| `auto_verify` | `[uri]` | `"on"` | Toggles the built-in heuristics. Values: `"on"`, `"off"`, `"onedrive-only"`, `"icloud-only"`. |
-
-The heuristics detect OneDrive placeholders (resource forks on macOS),
-iCloud `.icloud` siblings under `Mobile Documents/`, and 0-byte files in
-cloud-storage paths. They run before `verify_cmd` so a confident "real"
-classification skips the configured command.
-
-OneDrive with `verify_cmd`:
-
-```toml
-[[uri.mappings]]
-prefix = "onedrive://work/"
-root = "~/Library/CloudStorage/OneDrive-Work/assets"
-warm_cmd = ["mdutil", "--enforce-locals", "{path}"]
-# `file` exits 0 only when the file is fully downloaded.
-verify_cmd = ["file", "{path}"]
-warm_required = false
-```
-
-`rclone` batch with stdin:
-
-```toml
-[[uri.mappings]]
-prefix = "s3://reports/"
-root = "/Volumes/NAS/s3-reports"
-# `{paths}` triggers stdin piping (one path per line).
-warm_cmd = ["rclone", "copy", ":http:/s3.example/reports/{path}", "{path}"]
-```
-
-Note: the simple `aws s3 cp` per-file pattern still works — batch fan-out
-is automatic when `batch_size > 1`. Only use `{paths}` for tools that
-natively read a list from stdin.
-
-### `downlint warm-uri-mappings` subcommand
-
-Cache warming without validation. Useful as a one-shot step before running
-`check` so that all external files are hydrated locally first:
-
-```
-$ downlint warm-uri-mappings --allow-uri-sync
-Sync summary (76ms):
-  mapping[0]: total=42 synced=42 failed=0 missing=0 timed_out=0
-$ echo $?
-0
-```
-
-The subcommand:
-
-- Always requires `--allow-uri-sync` (exits 2 with a clear error otherwise).
-- Walks every URI-scheme link target (both resolved and unresolved) in the
-  workspace.
-- Batches per mapping (positional or stdin, depending on `warm_cmd`).
-- Does **not** run validation, does **not** emit `link/broken` broken-link
-  diagnostics.
-- Exit code 0 on success, 1 on any per-path failure, 2 on gate / config.
-
-A short alias `downlint warm-uri` is also accepted.
+The built-in heuristics detect OneDrive placeholders (zero-byte `._<name>`
+resource fork on macOS) and iCloud `.icloud` siblings under `Mobile Documents/`.
+They run only when `auto_verify` is enabled (default) and only when no
+`verify_cmd` is set.
 
 ### LSP `--allow-uri-sync`
 
-The `downlint server` subcommand accepts the same three URI flags as
-`downlint check`:
+The `downlint server` subcommand accepts the same URI flags as `downlint check`:
 
 ```
-$ downlint server --allow-uri-sync --no-uri-hints --uri-sync-batch-size 10
+$ downlint server --allow-uri-sync --no-uri-hints
 ```
 
-These thread into `ServerState.uri_opts` at startup. Without
-`--allow-uri-sync`, the LSP never runs `warm_cmd`. To change flags you
-must restart the server (no `workspace/didChangeConfiguration` in Phase 2).
+These thread into `ServerState.uri_opts` at startup. Without `--allow-uri-sync`,
+the LSP never runs a `verify_cmd`. To change flags you must restart the server.
 
-### Naming history
-
-The config keys were originally `sync_cmd` / `sync_required` / `sync_timeout`
-and the subcommand was `downlint sync`. They were renamed because "sync" carries misleading two-way-sync connotations. The new vocabulary is "warm" — pulling files
-locally so subsequent validation is fast.
-
-Existing configs using `sync_cmd` etc. produce a clear parse error:
-
-```
-unknown field `sync_cmd`, expected one of `prefix`, `root`,
-`warm_cmd`, `warm_required`, `warm_timeout`, `verify_cmd`
-```
-
-Migration is a single `sed`:
-
-```sh
-sed -i.bak '
-  s/^sync_cmd = /warm_cmd = /
-  s/^sync_required = /warm_required = /
-  s/^sync_timeout = /warm_timeout = /
-' .downlint.toml
-```
-
-Normative behavior: [spec/linting.md](./spec/linting.md) §3.7 (RES-07) and
-§4.5–4.8.
+Normative behavior: [spec/linting.md](./spec/linting.md) §3.7 (RES-07) and §4.5.
 
 ## Rename
 

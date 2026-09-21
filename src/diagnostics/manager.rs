@@ -1,7 +1,5 @@
 use crate::diagnostics::{Diagnostic, DiagnosticConfig, check_diagnostics};
 use crate::resolution::ConnectionGraph;
-use crate::resolution::UriOptions;
-use crate::utils::Workspace;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -15,8 +13,6 @@ pub enum DiagnosticEvent {
 pub async fn run_diagnostics_manager(
     mut rx: mpsc::Receiver<DiagnosticEvent>,
     config: DiagnosticConfig,
-    workspace: Workspace,
-    uri_opts: UriOptions,
     tx: mpsc::Sender<HashMap<PathBuf, Vec<Diagnostic>>>,
 ) {
     let mut pending: Option<ConnectionGraph> = None;
@@ -40,8 +36,7 @@ pub async fn run_diagnostics_manager(
                 }
             }, if deadline.is_some() => {
                 if let Some(graph) = pending.take() {
-                    let diagnostics =
-                        check_diagnostics(&graph, &config, &workspace, &uri_opts);
+                    let diagnostics = check_diagnostics(&graph, &config);
                     let mut grouped = HashMap::new();
                     for diagnostic in diagnostics {
                         grouped.entry(diagnostic.path.clone()).or_insert_with(Vec::new).push(diagnostic);

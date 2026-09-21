@@ -260,7 +260,6 @@ mod tests {
             prefix_index: prefix,
             uri_resolver: crate::resolution::uri::UriResolver::empty(),
             uri_opts: crate::resolution::UriOptions::default(),
-            uri_sync_cache: crate::resolution::UriSyncCache::new(),
             uri_error: None,
         };
         (resolve_links(input), temp)

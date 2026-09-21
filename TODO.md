@@ -21,10 +21,6 @@ Things that are wrong, missing, or inconsistent relative to what should already 
 
 ### Diagnostics
 
-- [ ] **`uri/batch-clamped` is declared but never emitted** (`spec/linting.md` §4.8). The 128 KiB argv
-  batch fallback sets `BatchOutcome.fell_back_to_per_file`, but the only caller
-  (`warm-uri-mappings`) ignores it — the fallback is silent. Decide: emit the diagnostic
-  (per the spec's intended behavior) or drop the code and the clause.
 - [ ] **No test for `heading/nbsp`** (`spec/linting.md` §4.3). The NBSP-after-heading rule has no
   test pinning it.
 - [ ] **No test for single-file-mode `link/broken` suppression** (`spec/linting.md` §4.2/§4.9).
@@ -166,11 +162,10 @@ of the code** (ground truth):
 - `wiki.obsidian_prefix` belongs in the config schema (the bootstrap spec omitted the
   whole `[wiki]` section).
 - Defaults: `core.file_extensions = ["md","markdown"]` (no `mdx`);
-  `code_action.toc.include = [1..6]`; `uri.mappings[*].warm_timeout = 30`.
+  `code_action.toc.include = [1..6]`.
 - `heading/nbsp` message text: "Non-breaking whitespace after heading marker".
-- `uri/no-mapping`, `uri/sync-skipped`, `uri/sync-failed` multiplicity is **per-run**, not per-file.
+- `uri/no-mapping` multiplicity is **per-run**, not per-file.
 - Hidden files/directories are **excluded** by default (`hidden(false)`).
 - Exactly 9 silent web schemes: http, https, ftp, ftps, mailto, tel, sms, irc, xmpp.
 - `link/broken-anchor` is always Warning (even for wiki `[[#missing]]`).
 - Folder links resolve to the directory itself — no index-file lookup.
-- `uri/batch-clamped` is declared but not emitted (see Open Issues).

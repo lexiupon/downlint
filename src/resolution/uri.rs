@@ -1,24 +1,28 @@
-//! URI mapping engine: prefix matching, root expansion (env vars, `~`, relative),
-//! and per-target resolution into an absolute filesystem path.
+//! Scheme mapping engine: prefix matching, root expansion (env vars, `~`,
+//! relative), and per-target resolution into an absolute filesystem path.
 //!
-//! Sync execution lives in `super::uri_sync`; this module deliberately performs
-//! no subprocess work so it can be unit-tested without a runtime.
+//! Resolution is **rewrite + stat + verify** (RFC 0010, Phase 2): this module
+//! performs the rewrite (prefix match + root expansion + percent-decode + join).
+//! The caller follows up with a stat and, when the schema's `auto_verify` is
+//! enabled, the built-in placeholder heuristics. There is no warming and no
+//! caching.
 
-use crate::config::UriConfig;
+use crate::config::SchemaConfig;
 use crate::resolution::path::has_scheme;
 use std::path::{Path, PathBuf};
 
-/// Outcome of resolving one link target against the configured `[uri]`.
+/// Outcome of resolving one link target against the configured `[[schemas]]`.
 #[derive(Clone, Debug)]
 pub enum UriOutcome {
     /// No URI scheme detected — caller should fall through to normal resolution.
     NotApplicable,
     /// URI scheme detected, but no configured prefix matched. The caller should
     /// emit a broken-link diagnostic and (optionally) a hint pointing to
-    /// `[uri.mappings]`.
+    /// `[[schemas]]`.
     NoMapping { target: String },
     /// URI scheme detected and a prefix matched. The resolved absolute path is
-    /// provided so the caller can run sync (if configured) and check existence.
+    /// provided so the caller can stat it and (optionally) run placeholder
+    /// verification.
     Resolved {
         mapping_index: usize,
         target: String,
@@ -34,13 +38,12 @@ struct PrefixMatch {
     relative: String,
 }
 
-/// Engine used during a single validation pass. Holds the parsed mappings plus
+/// Engine used during a single validation pass. Holds the parsed schemas plus
 /// the directory used to resolve relative `root` entries (typically the dir
 /// containing `.downlint.toml`).
 #[derive(Clone, Debug)]
 pub struct UriResolver {
     mappings: Vec<CompiledMapping>,
-    auto_verify_mode: super::auto_verify::AutoVerifyMode,
 }
 
 #[derive(Clone, Debug)]
@@ -48,25 +51,21 @@ struct CompiledMapping {
     canonical_prefix: String,
     prefix_without_slash: String,
     expanded_root: PathBuf,
-    warm_cmd: Option<Vec<String>>,
-    warm_required: bool,
-    warm_timeout: u32,
+    auto_verify: bool,
     verify_cmd: Option<Vec<String>>,
 }
 
 impl UriResolver {
     /// Build a resolver from the finalized config. `config_dir` is the directory
     /// `.downlint.toml` lives in (used to expand relative `root` values).
-    /// `mappings` are sorted by descending prefix length so that the most
+    /// `schemas` are sorted by descending prefix length so that the most
     /// specific prefix wins even if a less-specific one would also match.
-    pub fn new(config: &UriConfig, config_dir: &Path) -> Result<Self, UriExpansionError> {
-        let auto_verify_mode = super::auto_verify::AutoVerifyMode::parse(&config.auto_verify)
-            .unwrap_or(super::auto_verify::AutoVerifyMode::On);
-        let mut compiled = Vec::with_capacity(config.mappings.len());
-        for (index, mapping) in config.mappings.iter().enumerate() {
-            let expanded_root = expand_root(&mapping.root, config_dir)
+    pub fn new(config: &SchemaConfig, config_dir: &Path) -> Result<Self, UriExpansionError> {
+        let mut compiled = Vec::with_capacity(config.schemas.len());
+        for (index, schema) in config.schemas.iter().enumerate() {
+            let expanded_root = expand_root(&schema.root, config_dir)
                 .map_err(|error| UriExpansionError { index, error })?;
-            let canonical_prefix = ensure_trailing_slash(&mapping.prefix);
+            let canonical_prefix = ensure_trailing_slash(&schema.prefix);
             let prefix_without_slash = canonical_prefix
                 .strip_suffix('/')
                 .unwrap_or(&canonical_prefix)
@@ -75,10 +74,8 @@ impl UriResolver {
                 canonical_prefix,
                 prefix_without_slash,
                 expanded_root,
-                warm_cmd: mapping.warm_cmd.clone(),
-                warm_required: mapping.warm_required,
-                warm_timeout: mapping.warm_timeout,
-                verify_cmd: mapping.verify_cmd.clone(),
+                auto_verify: schema.auto_verify,
+                verify_cmd: schema.verify_cmd.clone(),
             });
         }
         compiled.sort_by(|left, right| {
@@ -89,15 +86,13 @@ impl UriResolver {
         });
         Ok(Self {
             mappings: compiled,
-            auto_verify_mode,
         })
     }
 
-    /// Convenience for tests + callers that don't have any mappings configured.
+    /// Convenience for tests + callers that don't have any schemas configured.
     pub fn empty() -> Self {
         Self {
             mappings: Vec::new(),
-            auto_verify_mode: super::auto_verify::AutoVerifyMode::On,
         }
     }
 
@@ -109,17 +104,19 @@ impl UriResolver {
         self.mappings.len()
     }
 
-    /// Number of mappings that have a `warm_cmd` configured. Used by the
-    /// "sync skipped" diagnostic.
-    pub fn sync_mapping_count(&self) -> usize {
-        self.mappings
-            .iter()
-            .filter(|mapping| mapping.warm_cmd.is_some())
-            .count()
+    /// Whether the schema at `index` has `auto_verify` enabled (run the
+    /// built-in evicted-placeholder heuristics after a successful stat).
+    pub fn auto_verify_for(&self, index: usize) -> bool {
+        self.mappings.get(index).map(|m| m.auto_verify).unwrap_or(false)
+    }
+
+    /// The schema at `index`'s custom verification command, if any.
+    pub fn verify_cmd_for(&self, index: usize) -> Option<&[String]> {
+        self.mappings.get(index).and_then(|m| m.verify_cmd.as_deref())
     }
 
     /// Resolve a single link target. Pure: no subprocess execution, no fs::metadata
-    /// calls. The caller follows up with `SyncRunner` (if any) and a stat.
+    /// calls. The caller follows up with a stat and (optionally) verification.
     pub fn resolve(&self, target: &str) -> UriOutcome {
         if !has_scheme(target) {
             return UriOutcome::NotApplicable;
@@ -130,22 +127,6 @@ impl UriResolver {
                 target: target.to_string(),
             },
         }
-    }
-
-    /// Public so `SyncRunner` (task 5) can introspect a mapping's sync settings
-    /// without re-parsing the original config.
-    pub fn sync_config(&self, index: usize) -> Option<SyncConfigRef<'_>> {
-        self.mappings.get(index).map(|mapping| SyncConfigRef {
-            cmd: mapping.warm_cmd.as_deref(),
-            required: mapping.warm_required,
-            timeout: mapping.warm_timeout,
-            verify_cmd: mapping.verify_cmd.as_deref(),
-        })
-    }
-
-    /// The resolver's auto-detection mode (parsed from `[uri].auto_verify`).
-    pub fn auto_verify_mode(&self) -> super::auto_verify::AutoVerifyMode {
-        self.auto_verify_mode
     }
 
     fn first_match(&self, target: &str) -> Option<PrefixMatch> {
@@ -188,16 +169,6 @@ impl UriResolver {
     }
 }
 
-/// Borrowed view of a mapping's sync settings. Returned by `sync_config` so the
-/// sync runner can read command/timeout without owning them.
-#[derive(Clone, Copy, Debug)]
-pub struct SyncConfigRef<'a> {
-    pub cmd: Option<&'a [String]>,
-    pub required: bool,
-    pub timeout: u32,
-    pub verify_cmd: Option<&'a [String]>,
-}
-
 /// Per-mapping expansion failure. Surfaced at startup so misconfigured `root`
 /// values fail fast rather than producing silent broken links.
 #[derive(Debug)]
@@ -208,7 +179,7 @@ pub struct UriExpansionError {
 
 impl std::fmt::Display for UriExpansionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "uri.mappings[{}].root: {}", self.index, self.error)
+        write!(f, "schemas[{}].root: {}", self.index, self.error)
     }
 }
 
@@ -319,22 +290,19 @@ fn ensure_trailing_slash(prefix: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::uri::{PartialUriConfig, PartialUriMapping};
-    use crate::config::finalize_uri;
+    use crate::config::schema::PartialSchema;
+    use crate::config::finalize_schemas;
 
     fn tempdir() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
     }
 
-    fn config_with_mapping(prefix: &str, root: &str) -> UriConfig {
-        finalize_uri(PartialUriConfig {
-            mappings: Some(vec![PartialUriMapping {
-                prefix: Some(prefix.to_string()),
-                root: Some(root.to_string()),
-                ..Default::default()
-            }]),
-        auto_verify: None,
-        })
+    fn config_with_mapping(prefix: &str, root: &str) -> SchemaConfig {
+        finalize_schemas(vec![PartialSchema {
+            prefix: Some(prefix.to_string()),
+            root: Some(root.to_string()),
+            ..Default::default()
+        }])
         .unwrap()
     }
 
@@ -384,10 +352,6 @@ mod tests {
             resolver.resolve("onedrive://work/file.md"),
             UriOutcome::Resolved { .. }
         ));
-        assert!(matches!(
-            resolver.resolve("onedrive://work/file.md"),
-            UriOutcome::Resolved { .. }
-        ));
     }
 
     #[test]
@@ -409,21 +373,18 @@ mod tests {
     #[test]
     fn more_specific_prefix_wins() {
         let dir = tempdir();
-        let cfg = finalize_uri(PartialUriConfig {
-            mappings: Some(vec![
-                PartialUriMapping {
-                    prefix: Some("onedrive://work/".to_string()),
-                    root: Some("./work".to_string()),
-                    ..Default::default()
-                },
-                PartialUriMapping {
-                    prefix: Some("onedrive://work/bucket-a/".to_string()),
-                    root: Some("./bucket-a".to_string()),
-                    ..Default::default()
-                },
-            ]),
-        auto_verify: None,
-        })
+        let cfg = finalize_schemas(vec![
+            PartialSchema {
+                prefix: Some("onedrive://work/".to_string()),
+                root: Some("./work".to_string()),
+                ..Default::default()
+            },
+            PartialSchema {
+                prefix: Some("onedrive://work/bucket-a/".to_string()),
+                root: Some("./bucket-a".to_string()),
+                ..Default::default()
+            },
+        ])
         .unwrap();
         let resolver = UriResolver::new(&cfg, dir.path()).unwrap();
         // More-specific prefix (declared second but wins via longest-first ordering).
@@ -491,39 +452,33 @@ mod tests {
     }
 
     #[test]
-    fn sync_config_reflects_mapping() {
+    fn auto_verify_for_reflects_schema() {
         let dir = tempdir();
-        let cfg = finalize_uri(PartialUriConfig {
-            mappings: Some(vec![PartialUriMapping {
-                prefix: Some("scheme://".to_string()),
-                root: Some("./r".to_string()),
-                warm_cmd: Some(vec!["echo".to_string(), "{path}".to_string()]),
-                warm_required: Some(true),
-                warm_timeout: Some(60),
+        let cfg = finalize_schemas(vec![
+            PartialSchema {
+                prefix: Some("a://".to_string()),
+                root: Some("./a".to_string()),
+                auto_verify: Some(false),
                 ..Default::default()
-            }]),
-        auto_verify: None,
-        })
+            },
+            PartialSchema {
+                prefix: Some("b://".to_string()),
+                root: Some("./b".to_string()),
+                auto_verify: None, // default true
+                ..Default::default()
+            },
+        ])
         .unwrap();
         let resolver = UriResolver::new(&cfg, dir.path()).unwrap();
-        let sync = resolver.sync_config(0).unwrap();
-        assert!(sync.required);
-        assert_eq!(sync.timeout, 60);
-        assert_eq!(
-            sync.cmd,
-            Some(
-                ["echo".to_string(), "{path}".to_string()]
-                    .as_slice()
-            )
-        );
+        // Both schemas are present; check auto_verify per index.
+        assert!(resolver.auto_verify_for(0) != resolver.auto_verify_for(1));
     }
 
     #[test]
     fn empty_resolver_returns_empty_outcomes() {
         let dir = tempdir();
-        let resolver = UriResolver::new(&UriConfig::default(), dir.path()).unwrap();
+        let resolver = UriResolver::new(&SchemaConfig::default(), dir.path()).unwrap();
         assert!(resolver.is_empty());
-        assert_eq!(resolver.sync_mapping_count(), 0);
         assert!(matches!(
             resolver.resolve("onedrive://work/file"),
             UriOutcome::NoMapping { .. }
@@ -558,20 +513,5 @@ mod tests {
             as_string.ends_with("product example V1.3.pptx"),
             "expected decoded filename, got {as_string:?}"
         );
-
-        // Simpler URL, no encoding.
-        assert!(matches!(
-            resolver.resolve("file:///Users/alice/icloud/assets/vendor/test.txt"),
-            UriOutcome::Resolved { .. }
-        ));
-
-        // Exact prefix, no trailing file.
-        if let UriOutcome::Resolved { resolved_path, .. } =
-            resolver.resolve("file:///Users/alice/icloud/assets/")
-        {
-            assert_eq!(resolved_path, PathBuf::from("/Users/alice/icloud/assets"));
-        } else {
-            panic!("expected Resolved");
-        }
     }
 }

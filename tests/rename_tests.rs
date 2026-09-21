@@ -61,7 +61,6 @@ fn make_input(
         prefix_index,
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
         uri_opts: downlint::resolution::UriOptions::default(),
-        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
         uri_error: None,
     }
 }

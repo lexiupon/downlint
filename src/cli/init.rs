@@ -68,18 +68,13 @@ obsidian_prefix = false
 # toc = { enable = true, include = [1, 2, 3, 4, 5, 6] }
 # create_missing_file = { enable = true }
 
-[uri]
-# Verify externally-mapped files: "on" (default), "off", "onedrive-only", or
-# "icloud-only".
-# auto_verify = "on"
-
-# Map external-storage URIs to local folders. Repeat this block per mapping.
-# [[uri.mappings]]
-# prefix = "onedrive://work/"
-# root = "~/Library/CloudStorage/OneDrive-Work/assets"
-# warm_cmd = ["aws", "s3", "cp", "{path}", "."]
-# warm_required = false
-# warm_timeout = 30
+# Map external-storage URI schemes to local folders (rewrite + stat + verify).
+# Repeat this block per scheme. `auto_verify` (default true) runs the built-in
+# evicted-placeholder heuristics; `verify_cmd` is an advanced escape hatch.
+# [[schemas]]
+# prefix = "icloud://assets/"
+# root = "~/icloud/assets"
+# auto_verify = true
 # verify_cmd = []
 "#;
 
