@@ -402,15 +402,18 @@ resolve against the full namespace (primary + all mounts).
 **Attribution.** A diagnostic whose source is a mounted document is labeled with the
 mount's attribution (`prefix` when set, else `root`).
 
-**Structural conflicts** (`mount/conflict`, Error). Detected at startup, top-level only:
+**Structural conflicts** (`mount/conflict`, Error). Detected at startup, per mount. A
+conflict is a fine-grained **namespace-path collision** between the mount and the primary
+(RFC 0011) — sharing a top-level name alone is *not* a conflict:
 
-- *Prefix conflict*: the mount's `prefix` matches a path that already exists in the primary
-  project. While unresolved, the prefix is **not applied** (the mount's documents keep
-  their mount-root-relative namespace paths).
-- *Folder conflict*: a top-level folder in the mount has the same name as a top-level
-  folder in the primary project. While unresolved, files under the conflicting folder are
-  **not linted** (targets only). Deeper same-stem collisions are not conflicts; they
-  surface as per-link `link/ambiguous`.
+- *Same-path file collision*: a mount file's namespace path (`prefix/rel` when a `prefix`
+  is set, else `rel`) equals a primary file's namespace path.
+- *File/folder name collision*: a mount file and a primary folder (or a mount folder and a
+  primary file) share a name (stem, `Path::file_stem`) at the same namespace location.
+
+While unresolved, the conflicting mount file(s) are **targets only** (not linted). A
+per-link same-stem / same-title clash is *not* a mount conflict; it surfaces as
+`link/ambiguous`.
 
 Tests: `wiki_link_explicit_path_resolves_in_mount`,
 `wiki_link_with_slash_in_target_resolves_via_title_slug_in_mount`,
@@ -465,7 +468,7 @@ Tests: `ignore_project_overrides_user`, `ignore_negation_pattern_parses`.
 | `link/broken` | Broken link | Error (wiki/embed) / Warning (markdown) | no destination |
 | `heading/nbsp` | Non-breaking space after heading | Warning | U+00A0 after heading marker |
 | `link/broken-anchor` | Broken anchor | Warning (all link forms) | anchor did not resolve |
-| `mount/conflict` | Mount conflict | Error | mount `prefix` or top-level folder collides with the primary (RES-08) |
+| `mount/conflict` | Mount conflict | Error | a mount file/folder collides with a primary file/folder at the same namespace path or location (RES-08) |
 | `uri/no-mapping` | No scheme mapping | Info | unmapped scheme target, `[[schemas]]` configured |
 
 **Severity rule.** Wiki links and embeds receive **Error** for `link/ambiguous` and `link/broken` on local
@@ -703,6 +706,7 @@ produced.
 | 2026-09-21 | — | Diagnostic codes re-based from opaque `DNLnnn` to namespaced semantic slugs. Old→new: `DNL001`→`link/ambiguous`, `DNL002`→`link/broken`, `DNL003`→`heading/nbsp`, `DNL005`→`link/broken-anchor`, `DNL006`→`uri/no-mapping`, `DNL007`→`uri/sync-skipped`, `DNL008`→`uri/sync-failed`, `DNL009`→`uri/batch-clamped`. `DNL004` was never assigned and is retired with the numeric scheme. Severity is unchanged (still a separate axis). Wire-format breaking change: emitted `code` strings changed. |
 | 2026-09-21 | 0010 (Phase 1) | RES-08 re-scoped from “Cross-Folder Resolution” (fallback) to “Mounts” (co-equal, indexed resolution roots): `core.extra_folders` replaced by `[[mounts]]` (`root`, optional `prefix`, optional `lint`); mounted documents indexed co-equal with primary (no primary-wins tiering); relative links do not cross mounts; workspace-absolute links reach a mount via its `prefix`; bare stem/title resolve across the whole namespace; `lint` controls whether a mounted doc is a source; diagnostics from mounted docs carry mount attribution. New diagnostic `mount/conflict` (Error) for structural prefix/folder collisions, with suspend behavior. `link/ambiguous` condition updated (co-equal namespace). |
 | 2026-09-21 | 0010 (Phase 2) | RES-07 re-scoped from “External URI Mapping” (warming) to “Schemes” (rewrite + stat + verify): `[uri]` / `[[uri.mappings]]` replaced by `[[schemas]]` (`prefix`, `root`, optional `auto_verify` bool default `true`, optional `verify_cmd`); warming removed (`warm_cmd` / `warm_required` / `warm_timeout` dropped); no caching; the `warm-uri-mappings` subcommand removed; `auto_verify` is now a per-schema bool running vendor-specific heuristics only (the generic 0-byte + recent-mtime heuristic dropped); `verify_cmd` gated by `--allow-uri-sync`. Diagnostics `uri/sync-skipped`, `uri/sync-failed`, `uri/batch-clamped` tombstoned; `uri/no-mapping` kept (re-scoped to schemes). |
+| 2026-09-21 | 0011 | RES-08 `mount/conflict` re-scoped from a coarse top-level-entry check (prefix/folder name match) to a fine-grained **namespace-path collision**: a same-path file collision, or a file/folder sharing a name (stem) at the same location. Sharing a top-level name alone is no longer a conflict (a mount merges into an existing folder when no file collides). `MountConflictKind::{Prefix,Folder}` replaced by a single `PathCollision`. Conflicting mount file(s) are targets only (not linted). `link/ambiguous` is explicitly *not* a mount conflict. |
 
 **Known coverage gaps** (clauses without tests yet): `heading/nbsp`; single-file-mode `link/broken`
 suppression; scheme-target + anchor → `link/broken-anchor`.

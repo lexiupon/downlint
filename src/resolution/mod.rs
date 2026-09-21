@@ -142,98 +142,134 @@ impl ResolveInput {
             })
             .collect();
 
-        // The primary project's top-level entry names (folders and files),
-        // used for structural-conflict detection (RFC 0010).
-        let primary_top_level: HashSet<String> = workspace
+        // Primary namespace sets, used for fine-grained structural-conflict
+        // detection (RFC 0011). `primary_files` is the set of primary namespace
+        // paths; `primary_file_stems` is the set of (location, stem) for each
+        // primary file; `primary_folders` is the set of (location, name) folder
+        // entries implied by primary-file paths.
+        let primary_files: HashSet<PathBuf> = workspace
             .folder
             .documents
             .iter()
-            .filter_map(|doc| doc.rel_path.components().next())
-            .filter_map(|component| component.as_os_str().to_str())
-            .map(|name| name.to_string())
+            .map(|doc| doc.rel_path.clone())
             .collect();
+        let mut primary_file_stems: HashSet<(PathBuf, String)> = HashSet::new();
+        let mut primary_folders: HashSet<(PathBuf, String)> = HashSet::new();
+        for doc in &workspace.folder.documents {
+            if let Some(entry) = file_stem_entry(&doc.rel_path) {
+                primary_file_stems.insert(entry);
+            }
+            for entry in folder_entries(&doc.rel_path) {
+                primary_folders.insert(entry);
+            }
+        }
 
         let mut conflicts: Vec<MountConflict> = Vec::new();
 
         // Mounted docs: co-equal with primary (RFC 0010). Namespace path is
         // `prefix/rel` when a prefix is set, else `rel`. Sources only when the
-        // mount has `lint = true`. A prefix conflict suspends the prefix;
-        // a folder conflict suspends linting of the conflicting folder.
+        // mount has `lint = true`. A path collision (RFC 0011) suspends linting
+        // of the conflicting mount file(s).
         for mount in &workspace.folder.mounts {
             let loaded_docs = load_mount_documents(&mount.root, &workspace.config);
-            let mount_top_level_folders: HashSet<String> = loaded_docs
-                .iter()
-                .filter_map(|doc| doc.rel_path.components().next())
-                .filter_map(|component| component.as_os_str().to_str())
-                .map(|name| name.to_string())
-                .collect();
-
-            // Prefix conflict: the prefix's first component matches a primary
-            // top-level entry.
-            let prefix_first = mount
+            let prefix = mount
                 .prefix
                 .as_deref()
-                .map(|prefix| {
-                    prefix
-                        .trim_start_matches('/')
-                        .split('/')
-                        .next()
-                        .unwrap_or("")
-                        .to_string()
-                });
-            let prefix_conflict = prefix_first
-                .as_deref()
-                .filter(|first| !first.is_empty())
-                .is_some_and(|first| primary_top_level.contains(first));
+                .map(|p| p.trim_start_matches('/').to_string());
 
-            // Folder conflict: a top-level folder in the mount matches a
-            // primary top-level folder.
-            let conflicting_folders: HashSet<String> = mount_top_level_folders
+            // Each mount doc's namespace path (prefix applied when set).
+            let namespace_paths: Vec<PathBuf> = loaded_docs
                 .iter()
-                .filter(|folder| primary_top_level.contains(*folder))
-                .cloned()
+                .map(|doc| match &prefix {
+                    Some(p) => PathBuf::from(p).join(&doc.rel_path),
+                    None => doc.rel_path.clone(),
+                })
                 .collect();
 
-            if prefix_conflict
-                && let Some(first) = &prefix_first
-            {
-                let prefix = mount.prefix.as_deref().unwrap_or("");
-                conflicts.push(MountConflict {
-                    mount_attribution: mount.attribution.clone(),
-                    kind: MountConflictKind::Prefix,
-                    detail: format!("prefix `{prefix}` collides with primary path `{first}`"),
-                });
-            }
-            for folder in &conflicting_folders {
-                conflicts.push(MountConflict {
-                    mount_attribution: mount.attribution.clone(),
-                    kind: MountConflictKind::Folder,
-                    detail: format!("top-level folder `{folder}` collides with a primary folder"),
-                });
+            // Mount namespace set: (location, name) per implied folder. (The
+            // per-file (location, stem) is recomputed in case (b) below, since
+            // it must map back to the namespace path.)
+            let mut mount_folders: HashSet<(PathBuf, String)> = HashSet::new();
+            for ns in &namespace_paths {
+                for entry in folder_entries(ns) {
+                    mount_folders.insert(entry);
+                }
             }
 
-            let apply_prefix = !prefix_conflict;
-            for loaded in loaded_docs {
-                let namespace_rel_path = if apply_prefix
-                    && let Some(prefix) = &mount.prefix
+            // Conflicting mount namespace paths (drives the suspend behavior).
+            let mut conflicting_ns: HashSet<PathBuf> = HashSet::new();
+
+            // (a) Same-path file collision: a mount file occupies the same
+            //     namespace path as a primary file.
+            for ns in &namespace_paths {
+                if primary_files.contains(ns) {
+                    conflicts.push(MountConflict {
+                        mount_attribution: mount.attribution.clone(),
+                        kind: MountConflictKind::PathCollision,
+                        detail: format!(
+                            "file `{}` collides with a primary file at the same path",
+                            ns.display()
+                        ),
+                    });
+                    conflicting_ns.insert(ns.clone());
+                }
+            }
+
+            // (b) File/folder name collision: a mount file's (location, stem)
+            //     matches a primary folder.
+            for ns in &namespace_paths {
+                if let Some(entry) = file_stem_entry(ns)
+                    && primary_folders.contains(&entry)
+                    && !conflicting_ns.contains(ns)
                 {
-                    PathBuf::from(prefix.trim_start_matches('/')).join(&loaded.rel_path)
-                } else {
-                    loaded.rel_path.clone()
-                };
-                // A doc under a conflicting folder is a target only (not linted).
-                let under_conflict = loaded
-                    .rel_path
-                    .components()
-                    .next()
-                    .and_then(|component| component.as_os_str().to_str())
-                    .is_some_and(|first| conflicting_folders.contains(first));
-                let is_source = mount.lint && !under_conflict;
+                    conflicts.push(MountConflict {
+                        mount_attribution: mount.attribution.clone(),
+                        kind: MountConflictKind::PathCollision,
+                        detail: format!(
+                            "file `{}` collides with a primary folder of the same name",
+                            ns.display()
+                        ),
+                    });
+                    conflicting_ns.insert(ns.clone());
+                }
+            }
+
+            // (c) File/folder name collision: a mount folder's (location, name)
+            //     matches a primary file. Files under such a folder conflict too.
+            let mut conflicting_mount_folders: HashSet<(PathBuf, String)> = HashSet::new();
+            for entry in &mount_folders {
+                if primary_file_stems.contains(entry) {
+                    let (loc, name) = entry;
+                    conflicts.push(MountConflict {
+                        mount_attribution: mount.attribution.clone(),
+                        kind: MountConflictKind::PathCollision,
+                        detail: format!(
+                            "folder `{}/` collides with a primary file of the same name",
+                            loc.join(name).display()
+                        ),
+                    });
+                    conflicting_mount_folders.insert(entry.clone());
+                }
+            }
+            for ns in &namespace_paths {
+                if conflicting_ns.contains(ns) {
+                    continue;
+                }
+                for (loc, name) in &conflicting_mount_folders {
+                    if ns.starts_with(loc.join(name)) {
+                        conflicting_ns.insert(ns.clone());
+                        break;
+                    }
+                }
+            }
+
+            for (loaded, ns) in loaded_docs.iter().zip(&namespace_paths) {
+                let is_source = mount.lint && !conflicting_ns.contains(ns);
                 documents.push(ResolveDocument {
-                    path: loaded.path,
-                    rel_path: loaded.rel_path,
-                    structure: loaded.structure,
-                    namespace_rel_path,
+                    path: loaded.path.clone(),
+                    rel_path: loaded.rel_path.clone(),
+                    structure: loaded.structure.clone(),
+                    namespace_rel_path: ns.clone(),
                     mount: Some(mount.attribution.clone()),
                     is_source,
                 });
@@ -1216,6 +1252,31 @@ struct LoadedDoc {
     path: PathBuf,
     rel_path: PathBuf,
     structure: Structure,
+}
+
+/// The (location, stem) of a file: its parent directory and its file stem
+/// (`Path::file_stem`). Returns `None` if the path has no usable stem. Used for
+/// fine-grained mount conflict detection (RFC 0011).
+fn file_stem_entry(file_path: &Path) -> Option<(PathBuf, String)> {
+    let location = file_path.parent()?.to_path_buf();
+    let stem = file_path.file_stem()?.to_str()?;
+    Some((location, stem.to_string()))
+}
+
+/// The (location, name) folder entries implied by a file's path — every
+/// intermediate directory. For `notes/kb/a.md`, returns [(`notes`, `kb`),
+/// (``, `notes`)]. Used for fine-grained mount conflict detection (RFC 0011).
+fn folder_entries(file_path: &Path) -> Vec<(PathBuf, String)> {
+    let mut entries = Vec::new();
+    let mut current = file_path;
+    while let Some(dir) = current.parent() {
+        if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
+            let location = dir.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+            entries.push((location, name.to_string()));
+        }
+        current = dir;
+    }
+    entries
 }
 
 fn load_mount_documents(mount_root: &Path, config: &Config) -> Vec<LoadedDoc> {

@@ -42,16 +42,18 @@ pub struct ResolvedMount {
     pub attribution: String,
 }
 
-/// The kind of a namespace-level mount conflict (RFC 0010).
+/// The kind of a namespace-level mount conflict (RFC 0011).
+///
+/// A single kind: a fine-grained namespace-path collision. Either a mount file
+/// occupies the same namespace path as a primary file, or a file and a folder
+/// share a name (stem) at the same location. The specific case is carried in
+/// `MountConflict::detail`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MountConflictKind {
-    /// The mount's `prefix` collides with a path that exists in the primary
-    /// project. While unresolved, the prefix is not applied.
-    Prefix,
-    /// A top-level folder in the mount has the same name as a top-level folder
-    /// in the primary project. While unresolved, files under that folder are
-    /// not linted.
-    Folder,
+    /// A mount file/folder collides with a primary file/folder at the same
+    /// namespace path (or same location + name). While unresolved, the
+    /// conflicting mount file(s) are targets only (not linted).
+    PathCollision,
 }
 
 /// A namespace-level conflict between a mount and the primary project

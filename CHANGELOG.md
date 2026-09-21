@@ -7,6 +7,16 @@ Pre-1.0 versions may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Mount conflict detection is now fine-grained** (RFC 0011, behavior change, no config
+  change). `mount/conflict` no longer fires on a shared *top-level name*; it fires only on
+  an actual namespace-path collision — a mount file at the same path as a primary file, or a
+  file/folder sharing a name (stem) at the same location. A mount now **merges** into an
+  existing folder (e.g. `kb/`) when no file collides, instead of erroring. A conflicting
+  mount file is a target only (not linted). `link/ambiguous` is unchanged and is not a mount
+  conflict.
+
 ## [0.3.0] — Mounts, Schemes & Rename
 
 RFC 0010 lands in full: **Mounts** (co-equal resolution roots) and **Schemes**

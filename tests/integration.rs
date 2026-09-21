@@ -1884,22 +1884,77 @@ fn mount_lint_false_does_not_lint_internal_links() {
     );
 }
 
-/// A mount whose `prefix` collides with a primary path is a structural error
-/// (`mount/conflict`), and the prefix is suspended (RFC 0010).
+/// Distinct files under a shared folder do NOT conflict (RFC 0011): a mount
+/// merges into the namespace, and only an actual path collision errors. A
+/// non-conflicting mount doc with `lint = true` is still linted.
 #[test]
-fn mount_prefix_conflict_suspends_prefix() {
+fn mount_distinct_files_under_shared_folder_no_conflict() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
     let ext_tmp = TempDir::new().unwrap();
     let ext_root = ext_tmp.path().to_path_buf();
     fs::create_dir_all(&ext_root).unwrap();
 
-    // Primary has a `kb/` folder.
+    // Primary has `notes/a.md`; mount has `notes/b.md` (distinct files).
+    let primary_notes = root.join("notes");
+    fs::create_dir_all(&primary_notes).unwrap();
+    fs::write(primary_notes.join("a.md"), "# A\n").unwrap();
+    let mount_notes = ext_root.join("notes");
+    fs::create_dir_all(&mount_notes).unwrap();
+    fs::write(mount_notes.join("b.md"), "# B\n\n[[does-not-exist]]\n").unwrap();
+
+    let workspace = downlint::utils::Workspace {
+        folder: downlint::utils::DiscoveredFolder {
+            root: root.clone(),
+            config_path: None,
+            documents: vec![downlint::utils::WorkspaceDocument {
+                path: root.join("notes/a.md"),
+                rel_path: PathBuf::from("notes/a.md"),
+                text: downlint::utils::Text::new("# A\n"),
+                source: downlint::utils::DocumentSource::Disk,
+            }],
+            mounts: vec![downlint::utils::ResolvedMount {
+                root: ext_root.clone(),
+                prefix: None,
+                lint: true,
+                attribution: "ext_project".to_string(),
+            }],
+        },
+        mode: downlint::utils::WorkspaceMode::MultiFile,
+        config: Config::default(),
+    };
+
+    let input = ResolveInput::from_workspace(&workspace);
+    assert!(input.conflicts.is_empty(), "distinct files must not conflict");
+
+    let graph = resolve_links(input);
+    // No conflict -> the mount doc is linted (lint=true), so its broken link
+    // is diagnosed.
+    let b_doc = graph
+        .documents
+        .iter()
+        .find(|d| d.rel_path == PathBuf::from("notes/b.md"))
+        .unwrap();
+    assert!(b_doc.is_source, "non-conflicting mount doc must be a source");
+    assert_eq!(graph.unresolved_references.len(), 1);
+}
+
+/// A prefix that shares a folder name with the primary is NOT a conflict when
+/// the files are distinct (RFC 0011): the prefix is applied and the mount
+/// merges into the folder.
+#[test]
+fn mount_prefix_distinct_files_no_conflict() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let ext_tmp = TempDir::new().unwrap();
+    let ext_root = ext_tmp.path().to_path_buf();
+    fs::create_dir_all(&ext_root).unwrap();
+
+    // Primary has `kb/a.md`; mount has prefix `/kb` and doc `b.md`
+    // (namespace path `kb/b.md`, distinct from `kb/a.md`).
     let primary_kb = root.join("kb");
     fs::create_dir_all(&primary_kb).unwrap();
     fs::write(primary_kb.join("a.md"), "# A\n").unwrap();
-
-    // Mount has prefix `/kb` (collides) and a doc.
     fs::write(ext_root.join("b.md"), "# B\n").unwrap();
 
     let workspace = downlint::utils::Workspace {
@@ -1924,50 +1979,35 @@ fn mount_prefix_conflict_suspends_prefix() {
     };
 
     let input = ResolveInput::from_workspace(&workspace);
-    assert_eq!(input.conflicts.len(), 1);
-    assert_eq!(input.conflicts[0].kind, downlint::utils::MountConflictKind::Prefix);
+    assert!(input.conflicts.is_empty(), "distinct files must not conflict");
 
     let graph = resolve_links(input);
-    // The prefix is suspended: the mount's doc's namespace path is its
-    // mount-root-relative path (`b.md`), NOT `kb/b.md`.
+    // The prefix is applied: the mount doc's namespace path is `kb/b.md`.
     let b_doc = graph
         .documents
         .iter()
         .find(|d| d.rel_path == PathBuf::from("b.md"))
         .unwrap();
-    assert_eq!(b_doc.namespace_rel_path, PathBuf::from("b.md"));
-
-    // The conflict is reported as an error diagnostic.
-    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
-    let conflict_diags: Vec<_> = diagnostics
-        .iter()
-        .filter(|d| d.code == DiagnosticCode::MountConflict)
-        .collect();
-    assert_eq!(conflict_diags.len(), 1);
-    assert_eq!(conflict_diags[0].severity, DiagnosticSeverity::Error);
-    assert_eq!(conflict_diags[0].mount.as_deref(), Some("kb"));
+    assert_eq!(b_doc.namespace_rel_path, PathBuf::from("kb/b.md"));
 }
 
-/// A mount whose top-level folder collides with a primary folder is a
-/// structural error (`mount/conflict`), and files under that folder are not
-/// linted (RFC 0010).
+/// A mount file at the same namespace path as a primary file is a
+/// `mount/conflict` (RFC 0011).
 #[test]
-fn mount_folder_conflict_suspends_lint() {
+fn mount_same_path_file_conflict() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
     let ext_tmp = TempDir::new().unwrap();
     let ext_root = ext_tmp.path().to_path_buf();
     fs::create_dir_all(&ext_root).unwrap();
 
-    // Primary has a `notes/` folder.
+    // Primary and mount both have `notes/a.md`.
     let primary_notes = root.join("notes");
     fs::create_dir_all(&primary_notes).unwrap();
     fs::write(primary_notes.join("a.md"), "# A\n").unwrap();
-
-    // Mount has a `notes/` folder (collides) with a doc that has a broken link.
     let mount_notes = ext_root.join("notes");
     fs::create_dir_all(&mount_notes).unwrap();
-    fs::write(mount_notes.join("b.md"), "# B\n\n[[does-not-exist]]\n").unwrap();
+    fs::write(mount_notes.join("a.md"), "# A2\n").unwrap();
 
     let workspace = downlint::utils::Workspace {
         folder: downlint::utils::DiscoveredFolder {
@@ -1982,7 +2022,7 @@ fn mount_folder_conflict_suspends_lint() {
             mounts: vec![downlint::utils::ResolvedMount {
                 root: ext_root.clone(),
                 prefix: None,
-                lint: true, // would normally lint
+                lint: true,
                 attribution: "ext_project".to_string(),
             }],
         },
@@ -1992,15 +2032,215 @@ fn mount_folder_conflict_suspends_lint() {
 
     let input = ResolveInput::from_workspace(&workspace);
     assert_eq!(input.conflicts.len(), 1);
-    assert_eq!(input.conflicts[0].kind, downlint::utils::MountConflictKind::Folder);
+    assert_eq!(
+        input.conflicts[0].kind,
+        downlint::utils::MountConflictKind::PathCollision
+    );
+    assert!(input.conflicts[0].detail.contains("notes/a.md"));
+}
+
+/// A mount file whose stem matches a primary folder name (same location) is a
+/// `mount/conflict` (RFC 0011) — protects from file-vs-folder edge cases.
+#[test]
+fn mount_file_vs_folder_name_conflict() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let ext_tmp = TempDir::new().unwrap();
+    let ext_root = ext_tmp.path().to_path_buf();
+    fs::create_dir_all(&ext_root).unwrap();
+
+    // Primary has a `kb/` folder (via `kb/a.md`); mount has a file `kb.md`
+    // (stem `kb`) at the root.
+    let primary_kb = root.join("kb");
+    fs::create_dir_all(&primary_kb).unwrap();
+    fs::write(primary_kb.join("a.md"), "# A\n").unwrap();
+    fs::write(ext_root.join("kb.md"), "# KB\n").unwrap();
+
+    let workspace = downlint::utils::Workspace {
+        folder: downlint::utils::DiscoveredFolder {
+            root: root.clone(),
+            config_path: None,
+            documents: vec![downlint::utils::WorkspaceDocument {
+                path: root.join("kb/a.md"),
+                rel_path: PathBuf::from("kb/a.md"),
+                text: downlint::utils::Text::new("# A\n"),
+                source: downlint::utils::DocumentSource::Disk,
+            }],
+            mounts: vec![downlint::utils::ResolvedMount {
+                root: ext_root.clone(),
+                prefix: None,
+                lint: false,
+                attribution: "ext_project".to_string(),
+            }],
+        },
+        mode: downlint::utils::WorkspaceMode::MultiFile,
+        config: Config::default(),
+    };
+
+    let input = ResolveInput::from_workspace(&workspace);
+    assert_eq!(input.conflicts.len(), 1);
+    assert_eq!(
+        input.conflicts[0].kind,
+        downlint::utils::MountConflictKind::PathCollision
+    );
+    assert!(input.conflicts[0].detail.contains("kb.md"));
+}
+
+/// A mount folder whose name matches a primary file (same location) is a
+/// `mount/conflict` (RFC 0011); files under that folder are targets only.
+#[test]
+fn mount_folder_vs_file_name_conflict() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let ext_tmp = TempDir::new().unwrap();
+    let ext_root = ext_tmp.path().to_path_buf();
+    fs::create_dir_all(&ext_root).unwrap();
+
+    // Primary has a file `kb.md` (at root); mount has a `kb/` folder (via
+    // `kb/a.md`) with a broken link.
+    fs::write(root.join("kb.md"), "# KB\n").unwrap();
+    let mount_kb = ext_root.join("kb");
+    fs::create_dir_all(&mount_kb).unwrap();
+    fs::write(mount_kb.join("a.md"), "# A\n\n[[does-not-exist]]\n").unwrap();
+
+    let workspace = downlint::utils::Workspace {
+        folder: downlint::utils::DiscoveredFolder {
+            root: root.clone(),
+            config_path: None,
+            documents: vec![downlint::utils::WorkspaceDocument {
+                path: root.join("kb.md"),
+                rel_path: PathBuf::from("kb.md"),
+                text: downlint::utils::Text::new("# KB\n"),
+                source: downlint::utils::DocumentSource::Disk,
+            }],
+            mounts: vec![downlint::utils::ResolvedMount {
+                root: ext_root.clone(),
+                prefix: None,
+                lint: true,
+                attribution: "ext_project".to_string(),
+            }],
+        },
+        mode: downlint::utils::WorkspaceMode::MultiFile,
+        config: Config::default(),
+    };
+
+    let input = ResolveInput::from_workspace(&workspace);
+    assert_eq!(input.conflicts.len(), 1);
+    assert_eq!(
+        input.conflicts[0].kind,
+        downlint::utils::MountConflictKind::PathCollision
+    );
 
     let graph = resolve_links(input);
-    // The doc under the conflicting folder is a target only (not linted).
-    let b_doc = graph
+    // The file under the conflicting folder is a target only (not linted).
+    let a_doc = graph
         .documents
         .iter()
-        .find(|d| d.rel_path == PathBuf::from("notes/b.md"))
+        .find(|d| d.rel_path == PathBuf::from("kb/a.md"))
         .unwrap();
-    assert!(!b_doc.is_source, "doc under conflicting folder must not be a source");
+    assert!(!a_doc.is_source, "file under conflicting folder must not be a source");
+    // Its broken link is not diagnosed.
+    assert!(graph.unresolved_references.is_empty());
+}
+
+/// A prefix that places a mount file at the same namespace path as a primary
+/// file is a `mount/conflict` (RFC 0011).
+#[test]
+fn mount_prefix_same_path_conflict() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let ext_tmp = TempDir::new().unwrap();
+    let ext_root = ext_tmp.path().to_path_buf();
+    fs::create_dir_all(&ext_root).unwrap();
+
+    // Primary has `kb/b.md`; mount has prefix `/kb` and doc `b.md`
+    // (namespace path `kb/b.md`, same as the primary).
+    let primary_kb = root.join("kb");
+    fs::create_dir_all(&primary_kb).unwrap();
+    fs::write(primary_kb.join("b.md"), "# B\n").unwrap();
+    fs::write(ext_root.join("b.md"), "# B2\n").unwrap();
+
+    let workspace = downlint::utils::Workspace {
+        folder: downlint::utils::DiscoveredFolder {
+            root: root.clone(),
+            config_path: None,
+            documents: vec![downlint::utils::WorkspaceDocument {
+                path: root.join("kb/b.md"),
+                rel_path: PathBuf::from("kb/b.md"),
+                text: downlint::utils::Text::new("# B\n"),
+                source: downlint::utils::DocumentSource::Disk,
+            }],
+            mounts: vec![downlint::utils::ResolvedMount {
+                root: ext_root.clone(),
+                prefix: Some("/kb".to_string()),
+                lint: false,
+                attribution: "kb".to_string(),
+            }],
+        },
+        mode: downlint::utils::WorkspaceMode::MultiFile,
+        config: Config::default(),
+    };
+
+    let input = ResolveInput::from_workspace(&workspace);
+    assert_eq!(input.conflicts.len(), 1);
+    assert_eq!(
+        input.conflicts[0].kind,
+        downlint::utils::MountConflictKind::PathCollision
+    );
+    assert!(input.conflicts[0].detail.contains("kb/b.md"));
+}
+
+/// A conflicting mount file is a target only (not linted) — its own broken
+/// links are not diagnosed while the config is wrong (RFC 0011).
+#[test]
+fn mount_conflict_suspends_lint_of_conflicting_file() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let ext_tmp = TempDir::new().unwrap();
+    let ext_root = ext_tmp.path().to_path_buf();
+    fs::create_dir_all(&ext_root).unwrap();
+
+    // Primary and mount both have `notes/a.md`; the mount's copy has a broken
+    // link.
+    let primary_notes = root.join("notes");
+    fs::create_dir_all(&primary_notes).unwrap();
+    fs::write(primary_notes.join("a.md"), "# A\n").unwrap();
+    let mount_notes = ext_root.join("notes");
+    fs::create_dir_all(&mount_notes).unwrap();
+    fs::write(mount_notes.join("a.md"), "# A2\n\n[[does-not-exist]]\n").unwrap();
+
+    let workspace = downlint::utils::Workspace {
+        folder: downlint::utils::DiscoveredFolder {
+            root: root.clone(),
+            config_path: None,
+            documents: vec![downlint::utils::WorkspaceDocument {
+                path: root.join("notes/a.md"),
+                rel_path: PathBuf::from("notes/a.md"),
+                text: downlint::utils::Text::new("# A\n"),
+                source: downlint::utils::DocumentSource::Disk,
+            }],
+            mounts: vec![downlint::utils::ResolvedMount {
+                root: ext_root.clone(),
+                prefix: None,
+                lint: true,
+                attribution: "ext_project".to_string(),
+            }],
+        },
+        mode: downlint::utils::WorkspaceMode::MultiFile,
+        config: Config::default(),
+    };
+
+    let input = ResolveInput::from_workspace(&workspace);
+    assert_eq!(input.conflicts.len(), 1);
+
+    let graph = resolve_links(input);
+    // The conflicting mount file is a target only (not linted).
+    let mount_doc = graph
+        .documents
+        .iter()
+        .find(|d| d.rel_path == PathBuf::from("notes/a.md") && d.mount.is_some())
+        .unwrap();
+    assert!(!mount_doc.is_source, "conflicting mount file must not be a source");
+    // Its broken link is not diagnosed.
     assert!(graph.unresolved_references.is_empty());
 }
