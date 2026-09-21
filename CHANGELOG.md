@@ -7,6 +7,11 @@ Pre-1.0 versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.4.0] — Fine-Grained Mount Conflicts
+
+RFC 0011 refines `mount/conflict` detection from a coarse top-level-name check to a
+fine-grained namespace-path collision. No config change.
+
 ### Changed
 
 - **Mount conflict detection is now fine-grained** (RFC 0011, behavior change, no config
