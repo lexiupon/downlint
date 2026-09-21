@@ -241,11 +241,11 @@ mod tests {
             std::fs::write(&path, content).unwrap();
             let structure = parse_document(content, ParseOptions::default());
             let rel_path = PathBuf::from(rel);
-            documents.push(ResolveDocument {
-                path: path.clone(),
+            documents.push(ResolveDocument::primary(
+                path.clone(),
                 rel_path,
                 structure,
-            });
+            ));
         }
         let prefix = PrefixIndex::from_entries(
             documents.iter().map(|d| (d.stem(), d.path.clone())),
@@ -253,9 +253,9 @@ mod tests {
         let input = ResolveInput {
             root: root.clone(),
             documents,
-            extra_documents: vec![],
+            mounts: vec![],
+            conflicts: vec![],
             config: Default::default(),
-            extra_folder_roots: vec![],
             single_file: false,
             prefix_index: prefix,
             uri_resolver: crate::resolution::uri::UriResolver::empty(),

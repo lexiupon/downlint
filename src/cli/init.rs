@@ -41,8 +41,14 @@ title_from_heading = true
 # How much of each document is analyzed: "full" or "incremental".
 # text_sync = "full"
 #
-# Extra directories (relative to the root) to include in the workspace.
-# extra_folders = []
+# --- mounts ------------------------------------------------------------
+# Mount an external local markdown folder into the namespace. Its documents are
+# indexed and co-equal with this workspace's (a same-name link is
+# link/ambiguous). Repeat this block per mount.
+# [[mounts]]
+# root = "~/another_project/kb"
+# prefix = "/another_project_kb"   # optional exact-path alias (starts with /)
+# lint = false                     # also lint links within the mounted docs
 
 [wiki]
 # Obsidian-style prefix matching for [[links]]: match any file whose path ends

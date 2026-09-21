@@ -59,6 +59,11 @@ pub enum DiagnosticCode {
     /// mapping per run, similar to `uri/sync-skipped`.
     #[serde(rename = "uri/batch-clamped")]
     UriBatchClamped,
+    /// Error: a mount's `prefix` or top-level folder collides with the primary
+    /// project (RFC 0010). The conflicting namespace is suspended until the
+    /// config is corrected.
+    #[serde(rename = "mount/conflict")]
+    MountConflict,
 }
 
 impl DiagnosticCode {
@@ -74,6 +79,7 @@ impl DiagnosticCode {
             Self::UriSyncSkipped => "uri/sync-skipped",
             Self::UriSyncFailed => "uri/sync-failed",
             Self::UriBatchClamped => "uri/batch-clamped",
+            Self::MountConflict => "mount/conflict",
         }
     }
 }
@@ -107,6 +113,10 @@ pub struct Diagnostic {
     pub message: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub related: Vec<RelatedInformation>,
+    /// The mount this diagnostic was emitted from (its `prefix`, or `root`
+    /// when there is no prefix). `None` for primary docs (RFC 0010).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mount: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -184,6 +194,30 @@ pub fn check_diagnostics(
             &document.path,
             document.structure.text.as_str(),
         ));
+    }
+
+    // Namespace-level mount conflicts (RFC 0010): each is a config-level error
+    // pointing at the offending mount.
+    for conflict in &graph.conflicts {
+        diagnostics.push(Diagnostic {
+            path: PathBuf::from("."),
+            range: ByteRange::new(0, 0),
+            severity: DiagnosticSeverity::Error,
+            code: DiagnosticCode::MountConflict,
+            message: format!("Mount conflict: {}", conflict.detail),
+            related: Vec::new(),
+            mount: Some(conflict.mount_attribution.clone()),
+        });
+    }
+
+    // Attribute each diagnostic to its mount (RFC 0010): a diagnostic whose
+    // source path is a mounted doc is labeled with that mount's attribution.
+    for diagnostic in &mut diagnostics {
+        if diagnostic.mount.is_none() {
+            diagnostic.mount = graph
+                .document_for_path(&diagnostic.path)
+                .and_then(|doc| doc.mount.clone());
+        }
     }
 
     diagnostics

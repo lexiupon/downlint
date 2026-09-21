@@ -32,11 +32,7 @@ fn write_document(root: &Path, rel: &str, content: &str) -> ResolveDocument {
     fs::write(&path, content).unwrap();
     let structure = parse_document(content, ParseOptions::default());
     let rel_path = path.strip_prefix(root).unwrap().to_path_buf();
-    ResolveDocument {
-        path,
-        rel_path,
-        structure,
-    }
+    ResolveDocument::primary(path, rel_path, structure)
 }
 
 /// Build a `PrefixIndex` from the stems of `docs`. Same helper as
@@ -58,9 +54,9 @@ fn make_input(
     ResolveInput {
         root: root.to_path_buf(),
         documents,
-        extra_documents: Vec::new(),
+        mounts: Vec::new(),
+        conflicts: vec![],
         config,
-        extra_folder_roots: Vec::new(),
         single_file: false,
         prefix_index,
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),

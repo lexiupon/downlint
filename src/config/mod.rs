@@ -1,3 +1,4 @@
+pub mod mount;
 pub mod project;
 pub mod uri;
 pub mod user;
@@ -7,6 +8,7 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub use mount::{Mount, MountConfigError, PartialMount, finalize_mounts, merge_mounts};
 pub use project::project_config_path;
 pub use uri::{UriConfig, UriConfigError, UriMapping, finalize_uri, merge_uri};
 pub use user::user_config_path;
@@ -18,6 +20,7 @@ pub struct Config {
     pub completion: CompletionConfig,
     pub wiki: WikiConfig,
     pub uri: UriConfig,
+    pub mounts: Vec<Mount>,
 }
 
 #[derive(Clone, Debug)]
@@ -39,7 +42,6 @@ pub struct CoreConfig {
     pub heading_ids: HeadingIdsConfig,
     pub text_sync: TextSyncKind,
     pub title_from_heading: bool,
-    pub extra_folders: Vec<String>,
     pub ignore: Vec<String>,
 }
 
@@ -50,7 +52,6 @@ impl Default for CoreConfig {
             heading_ids: HeadingIdsConfig { enable: true },
             text_sync: TextSyncKind::Full,
             title_from_heading: true,
-            extra_folders: Vec::new(),
             ignore: Vec::new(),
         }
     }
@@ -169,6 +170,7 @@ pub struct PartialConfig {
     pub completion: Option<PartialCompletionConfig>,
     pub wiki: Option<PartialWikiConfig>,
     pub uri: Option<uri::PartialUriConfig>,
+    pub mounts: Option<Vec<PartialMount>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -184,7 +186,6 @@ pub struct PartialCoreConfig {
     pub heading_ids: Option<PartialHeadingIdsConfig>,
     pub text_sync: Option<TextSyncKind>,
     pub title_from_heading: Option<bool>,
-    pub extra_folders: Option<Vec<String>>,
     pub ignore: Option<Vec<String>>,
 }
 
@@ -253,6 +254,8 @@ pub fn finalize_config(partial: PartialConfig) -> Result<Config, ConfigError> {
     let wiki = partial.wiki.unwrap_or_default();
     let uri = finalize_uri(partial.uri.unwrap_or_default())
         .map_err(|error| ConfigError::Validation(error.to_string()))?;
+    let mounts = finalize_mounts(partial.mounts.unwrap_or_default())
+        .map_err(|error| ConfigError::Validation(error.to_string()))?;
 
     let file_extensions = core
         .file_extensions
@@ -287,7 +290,6 @@ pub fn finalize_config(partial: PartialConfig) -> Result<Config, ConfigError> {
             title_from_heading: core
                 .title_from_heading
                 .unwrap_or(defaults.core.title_from_heading),
-            extra_folders: core.extra_folders.unwrap_or_default(),
             ignore: core.ignore.unwrap_or_default(),
         },
         code_action: CodeActionConfig {
@@ -324,6 +326,7 @@ pub fn finalize_config(partial: PartialConfig) -> Result<Config, ConfigError> {
                 .unwrap_or(defaults.wiki.obsidian_prefix),
         },
         uri,
+        mounts,
     })
 }
 
@@ -349,6 +352,7 @@ pub fn merge_partial(high: PartialConfig, low: PartialConfig) -> PartialConfig {
             high.uri.unwrap_or_default(),
             low.uri.unwrap_or_default(),
         )),
+        mounts: merge_mounts(high.mounts, low.mounts),
     }
 }
 
@@ -363,7 +367,6 @@ fn merge_core(high: PartialCoreConfig, low: PartialCoreConfig) -> PartialCoreCon
         }),
         text_sync: high.text_sync.or(low.text_sync),
         title_from_heading: high.title_from_heading.or(low.title_from_heading),
-        extra_folders: high.extra_folders.or(low.extra_folders),
         ignore: high.ignore.or(low.ignore),
     }
 }

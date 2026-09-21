@@ -1,11 +1,14 @@
 use downlint::config::Config;
-use downlint::diagnostics::{DiagnosticCode, DiagnosticConfig, check_diagnostics};
+use downlint::diagnostics::{
+    DiagnosticCode, DiagnosticConfig, DiagnosticSeverity, check_diagnostics,
+};
 use downlint::parser::{ParseOptions, Ref, parse_document};
 use downlint::resolution::{
     ResolveDestinationKind, ResolveDocument, ResolveInput, Slug, prefix::PrefixIndex,
     resolve_links,
 };
 use std::fs;
+use std::path::PathBuf;
 use tempfile::TempDir;
 
 /// Helper to create a document file and return a ResolveDocument.
@@ -15,11 +18,7 @@ fn write_document(root: &std::path::Path, rel: &str, content: &str) -> ResolveDo
     fs::write(&path, content).unwrap();
     let structure = parse_document(content, ParseOptions::default());
     let rel_path = path.strip_prefix(root).unwrap().to_path_buf();
-    ResolveDocument {
-        path,
-        rel_path,
-        structure,
-    }
+    ResolveDocument::primary(path, rel_path, structure)
 }
 
 /// Build a prefix index from the stems of the given documents.
@@ -44,7 +43,7 @@ fn resolve_graph_with_config(
     config: Config,
 ) -> downlint::resolution::ConnectionGraph {
     let prefix_index = prefix_index_for(&docs);
-    let input = make_input(root, docs, vec![], vec![], config, false, Some(prefix_index));
+    let input = make_input(root, docs, vec![], config, false, Some(prefix_index));
     resolve_links(input)
 }
 
@@ -54,8 +53,7 @@ fn resolve_graph_with_config(
 fn make_input(
     root: &std::path::Path,
     documents: Vec<ResolveDocument>,
-    extra_documents: Vec<ResolveDocument>,
-    extra_folder_roots: Vec<std::path::PathBuf>,
+    mounts: Vec<downlint::utils::ResolvedMount>,
     config: Config,
     single_file: bool,
     prefix_index: Option<PrefixIndex>,
@@ -64,9 +62,9 @@ fn make_input(
     ResolveInput {
         root: root.to_path_buf(),
         documents,
-        extra_documents,
+        mounts,
+        conflicts: vec![],
         config,
-        extra_folder_roots,
         single_file,
         prefix_index,
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
@@ -90,7 +88,7 @@ fn run_diagnostics(
             root: std::path::PathBuf::from("."),
             config_path: None,
             documents: Vec::new(),
-            extra_folders: Vec::new(),
+            mounts: Vec::new(),
         },
         mode: downlint::utils::WorkspaceMode::MultiFile,
         config: downlint::config::Config::default(),
@@ -332,20 +330,12 @@ fn wiki_link_with_non_ascii_title_resolves_correctly() {
     let input = ResolveInput {
         root: root.clone(),
         documents: vec![
-            ResolveDocument {
-                path: target_path.clone(),
-                rel_path: target_rel,
-                structure: target_structure,
-            },
-            ResolveDocument {
-                path: source_path.clone(),
-                rel_path: source_rel,
-                structure: source_structure,
-            },
+            ResolveDocument::primary(target_path.clone(), target_rel, target_structure),
+            ResolveDocument::primary(source_path.clone(), source_rel, source_structure),
         ],
-        extra_documents: vec![],
+        mounts: vec![],
+        conflicts: vec![],
         config: Config::default(),
-        extra_folder_roots: vec![],
         single_file: false,
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
@@ -398,20 +388,12 @@ fn wiki_link_with_non_ascii_heading_anchor_resolves_correctly() {
     let input = ResolveInput {
         root: root.clone(),
         documents: vec![
-            ResolveDocument {
-                path: target_path.clone(),
-                rel_path: target_rel,
-                structure: target_structure,
-            },
-            ResolveDocument {
-                path: source_path.clone(),
-                rel_path: source_rel,
-                structure: source_structure,
-            },
+            ResolveDocument::primary(target_path.clone(), target_rel, target_structure),
+            ResolveDocument::primary(source_path.clone(), source_rel, source_structure),
         ],
-        extra_documents: vec![],
+        mounts: vec![],
+        conflicts: vec![],
         config: Config::default(),
-        extra_folder_roots: vec![],
         single_file: false,
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
@@ -468,20 +450,12 @@ fn wiki_link_with_mojibake_does_not_match_correct_title() {
     let input = ResolveInput {
         root: root.clone(),
         documents: vec![
-            ResolveDocument {
-                path: target_path.clone(),
-                rel_path: target_rel,
-                structure: target_structure,
-            },
-            ResolveDocument {
-                path: source_path.clone(),
-                rel_path: source_rel,
-                structure: source_structure,
-            },
+            ResolveDocument::primary(target_path.clone(), target_rel, target_structure),
+            ResolveDocument::primary(source_path.clone(), source_rel, source_structure),
         ],
-        extra_documents: vec![],
+        mounts: vec![],
+        conflicts: vec![],
         config: Config::default(),
-        extra_folder_roots: vec![],
         single_file: false,
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
@@ -508,21 +482,22 @@ fn wiki_link_with_mojibake_does_not_match_correct_title() {
     );
 }
 
-/// Verify that wiki links with explicit paths resolve against extra_folders.
+/// Verify that a workspace-absolute wiki link resolves to a mounted document
+/// via its namespace path (RFC 0010: mounts are co-equal, not a fallback).
 ///
 /// Scenario:
+/// - A mount (no prefix) at `../ext_project` contains `people/john-doe.md`
 /// - Source doc in the main project references `[[/people/john-doe|Some Name]]`
-/// - Target doc lives in an extra folder (`../ext_project/people/john-doe.md`)
-/// - Target has title `# John Doe`
+/// - The workspace-absolute target matches the mounted doc's namespace path
 #[test]
-fn wiki_link_explicit_path_resolves_in_extra_folders() {
+fn wiki_link_explicit_path_resolves_in_mount() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
 
-    // Create the extra project outside the main root
+    // Create the mounted project outside the main root
     let ext_root = root.parent().unwrap().join("ext_project");
 
-    // Target document in the extra project
+    // Target document in the mounted project
     let target_md = "# John Doe\n\nBio content.\n";
     let target_path = ext_root.join("people/john-doe.md");
     fs::create_dir_all(target_path.parent().unwrap()).unwrap();
@@ -540,20 +515,31 @@ fn wiki_link_explicit_path_resolves_in_extra_folders() {
     let target_rel = target_path.strip_prefix(&ext_root).unwrap().to_path_buf();
     let source_rel = source_path.strip_prefix(&root).unwrap().to_path_buf();
 
+    // The mounted doc is co-equal: it lives in the main index with its
+    // namespace path (mount-root-relative, no prefix) and mount attribution.
+    let target_doc = ResolveDocument {
+        path: target_path.clone(),
+        rel_path: target_rel,
+        structure: target_structure,
+        namespace_rel_path: std::path::PathBuf::from("people/john-doe"),
+        mount: Some("ext_project".to_string()),
+        is_source: false,
+    };
+
     let input = ResolveInput {
         root: root.clone(),
-        documents: vec![ResolveDocument {
-            path: source_path.clone(),
-            rel_path: source_rel,
-            structure: source_structure,
+        documents: vec![
+            ResolveDocument::primary(source_path.clone(), source_rel, source_structure),
+            target_doc,
+        ],
+        mounts: vec![downlint::utils::ResolvedMount {
+            root: ext_root.clone(),
+            prefix: None,
+            lint: false,
+            attribution: "ext_project".to_string(),
         }],
-        extra_documents: vec![ResolveDocument {
-            path: target_path.clone(),
-            rel_path: target_rel,
-            structure: target_structure,
-        }],
+        conflicts: vec![],
         config: Config::default(),
-        extra_folder_roots: vec![ext_root.clone()],
         single_file: false,
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
@@ -572,31 +558,31 @@ fn wiki_link_explicit_path_resolves_in_extra_folders() {
 
     assert!(
         broken_links.is_empty(),
-        "Expected wiki link [[/people/john-doe|Some Name]] to resolve in extra_folders, but got broken links: {:?}",
+        "Expected wiki link [[/people/john-doe|Some Name]] to resolve in the mount, but got broken links: {:?}",
         broken_links
             .iter()
             .map(|d| d.message.as_str())
             .collect::<Vec<_>>()
     );
 
-    // Verify the resolved reference points to the extra project doc
+    // Verify the resolved reference points to the mounted doc
     assert_eq!(graph.resolved_references.len(), 1);
     let ref_dest = &graph.resolved_references[0];
     assert_eq!(ref_dest.destinations.len(), 1);
     assert_eq!(ref_dest.destinations[0].path, target_path);
 }
 
-/// Verify that wiki links whose target text contains `/` resolve in extra_folders
-/// via title slug matching.
+/// Verify that a wiki link whose target text contains `/` resolves to a
+/// mounted document via title-slug matching (RFC 0010).
 ///
 /// Scenario:
 /// - Source doc references `[[Team knowledge transfer (QA/DB)]]`
 /// - The target text contains `/` which makes `is_explicit_path()` return true
-/// - Target doc lives in an extra folder with a different filename
+/// - Target doc lives in a mount with a different filename
 /// - Target has title `# Team knowledge transfer (QA/DB)`
 /// - Resolution should succeed via title slug matching
 #[test]
-fn wiki_link_with_slash_in_target_resolves_via_title_slug_in_extra_folders() {
+fn wiki_link_with_slash_in_target_resolves_via_title_slug_in_mount() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
 
@@ -621,20 +607,28 @@ fn wiki_link_with_slash_in_target_resolves_via_title_slug_in_extra_folders() {
     let target_rel = target_path.strip_prefix(&ext_root).unwrap().to_path_buf();
     let source_rel = source_path.strip_prefix(&root).unwrap().to_path_buf();
 
+    let target_doc = ResolveDocument {
+        path: target_path.clone(),
+        rel_path: target_rel,
+        structure: target_structure,
+        namespace_rel_path: std::path::PathBuf::from("notes/kt-session"),
+        mount: Some("ext_project".to_string()),
+        is_source: false,
+    };
     let input = ResolveInput {
         root: root.clone(),
-        documents: vec![ResolveDocument {
-            path: source_path.clone(),
-            rel_path: source_rel,
-            structure: source_structure,
+        documents: vec![
+            ResolveDocument::primary(source_path.clone(), source_rel, source_structure),
+            target_doc,
+        ],
+        mounts: vec![downlint::utils::ResolvedMount {
+            root: ext_root.clone(),
+            prefix: None,
+            lint: false,
+            attribution: "ext_project".to_string(),
         }],
-        extra_documents: vec![ResolveDocument {
-            path: target_path.clone(),
-            rel_path: target_rel,
-            structure: target_structure,
-        }],
+        conflicts: vec![],
         config: Config::default(),
-        extra_folder_roots: vec![ext_root.clone()],
         single_file: false,
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
@@ -653,7 +647,7 @@ fn wiki_link_with_slash_in_target_resolves_via_title_slug_in_extra_folders() {
 
     assert!(
         broken_links.is_empty(),
-        "Expected wiki link [[Team knowledge transfer (QA/DB)]] to resolve in extra_folders via title slug, but got broken links: {:?}",
+        "Expected wiki link [[Team knowledge transfer (QA/DB)]] to resolve in the mount via title slug, but got broken links: {:?}",
         broken_links
             .iter()
             .map(|d| d.message.as_str())
@@ -693,20 +687,12 @@ fn inline_link_with_non_ascii_filename_resolves_correctly() {
     let input = ResolveInput {
         root: root.clone(),
         documents: vec![
-            ResolveDocument {
-                path: target_path.clone(),
-                rel_path: target_rel,
-                structure: target_structure,
-            },
-            ResolveDocument {
-                path: source_path.clone(),
-                rel_path: source_rel,
-                structure: source_structure,
-            },
+            ResolveDocument::primary(target_path.clone(), target_rel, target_structure),
+            ResolveDocument::primary(source_path.clone(), source_rel, source_structure),
         ],
-        extra_documents: vec![],
+        mounts: vec![],
+        conflicts: vec![],
         config: Config::default(),
-        extra_folder_roots: vec![],
         single_file: false,
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
@@ -855,7 +841,7 @@ fn folder_link_with_anchor_is_unresolved() {
 }
 
 #[test]
-fn folder_link_in_extra_folder_resolves() {
+fn folder_link_in_mount_resolves() {
     let temp = TempDir::new().unwrap();
     let root = temp.path().to_path_buf();
     let extra_root = temp.path().join("extra");
@@ -871,9 +857,14 @@ fn folder_link_in_extra_folder_resolves() {
     let input = ResolveInput {
         root: root.clone(),
         documents: vec![doc],
-        extra_documents: vec![],
+        mounts: vec![downlint::utils::ResolvedMount {
+            root: extra_root.clone(),
+            prefix: None,
+            lint: false,
+            attribution: "extra".to_string(),
+        }],
+        conflicts: vec![],
         config: Config::default(),
-        extra_folder_roots: vec![extra_root.clone()],
         single_file: false,
         prefix_index: Default::default(),
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
@@ -887,7 +878,7 @@ fn folder_link_in_extra_folder_resolves() {
 
     assert!(
         diagnostics.iter().all(|d| d.code != DiagnosticCode::LinkBroken),
-        "folder link to directory in extra folder should resolve"
+        "folder link to directory in a mount should resolve"
     );
 }
 
@@ -1374,9 +1365,9 @@ fn obsidian_prefix_single_file_mode() {
     let input = ResolveInput {
         root: root.to_path_buf(),
         documents: vec![target, index],
-        extra_documents: vec![],
+        mounts: vec![],
+        conflicts: vec![],
         config: config_with_obsidian_prefix(true),
-        extra_folder_roots: vec![],
         single_file: true,
         prefix_index,
         uri_resolver: downlint::resolution::uri::UriResolver::empty(),
@@ -1677,4 +1668,361 @@ some content
     );
     assert_eq!(link_broken_anchor.len(), 1);
     assert!(link_broken_anchor[0].message.starts_with("Broken anchor:"));
+}
+
+/// A bare-stem wiki link matching a primary doc and a mounted doc (same stem)
+/// is `link/ambiguous` (RFC 0010: co-equal, not silent primary-wins).
+#[test]
+fn mount_same_name_primary_and_mount_is_ambiguous() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let ext_root = root.parent().unwrap().join("ext_project");
+
+    let primary_foo = write_document(&root, "notes/foo.md", "# Foo\n\nPrimary.\n");
+    let target_md = "# Foo\n\nMounted.\n";
+    let target_path = ext_root.join("foo.md");
+    fs::write(&target_path, target_md).unwrap();
+    let target_doc = ResolveDocument {
+        path: target_path.clone(),
+        rel_path: std::path::PathBuf::from("foo.md"),
+        structure: parse_document(target_md, ParseOptions::default()),
+        namespace_rel_path: std::path::PathBuf::from("foo"),
+        mount: Some("ext_project".to_string()),
+        is_source: false,
+    };
+    let source = write_document(&root, "notes/reference.md", "[[foo]]\n");
+
+    let input = ResolveInput {
+        root: root.clone(),
+        documents: vec![primary_foo, target_doc, source],
+        mounts: vec![downlint::utils::ResolvedMount {
+            root: ext_root.clone(),
+            prefix: None,
+            lint: false,
+            attribution: "ext_project".to_string(),
+        }],
+        conflicts: vec![],
+        config: Config::default(),
+        single_file: false,
+        prefix_index: Default::default(),
+        uri_resolver: downlint::resolution::uri::UriResolver::empty(),
+        uri_opts: downlint::resolution::UriOptions::default(),
+        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
+        uri_error: None,
+    };
+
+    let graph = resolve_links(input);
+    assert_eq!(graph.ambiguous_references.len(), 1, "expected one ambiguous reference");
+    assert_eq!(graph.ambiguous_references[0].destinations.len(), 2);
+}
+
+/// A same-stem clash is ambiguous, but the mount `prefix` path disambiguates.
+#[test]
+fn mount_prefix_disambiguates() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let ext_root = root.parent().unwrap().join("ext_project");
+
+    let primary_foo = write_document(&root, "notes/foo.md", "# Foo\n\nPrimary.\n");
+    let target_md = "# Foo\n\nMounted.\n";
+    let target_path = ext_root.join("foo.md");
+    fs::write(&target_path, target_md).unwrap();
+    let target_doc = ResolveDocument {
+        path: target_path.clone(),
+        rel_path: std::path::PathBuf::from("foo.md"),
+        structure: parse_document(target_md, ParseOptions::default()),
+        namespace_rel_path: std::path::PathBuf::from("kb/foo"),
+        mount: Some("/kb".to_string()),
+        is_source: false,
+    };
+    let source = write_document(&root, "notes/reference.md", "[[foo]]\n[[/kb/foo]]\n");
+
+    let input = ResolveInput {
+        root: root.clone(),
+        documents: vec![primary_foo, target_doc, source],
+        mounts: vec![downlint::utils::ResolvedMount {
+            root: ext_root.clone(),
+            prefix: Some("/kb".to_string()),
+            lint: false,
+            attribution: "/kb".to_string(),
+        }],
+        conflicts: vec![],
+        config: Config::default(),
+        single_file: false,
+        prefix_index: Default::default(),
+        uri_resolver: downlint::resolution::uri::UriResolver::empty(),
+        uri_opts: downlint::resolution::UriOptions::default(),
+        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
+        uri_error: None,
+    };
+
+    let graph = resolve_links(input);
+    // [[foo]] is ambiguous (primary + mounted both have stem "foo")
+    assert_eq!(graph.ambiguous_references.len(), 1, "expected [[foo]] to be ambiguous");
+    // [[/kb/foo]] resolves to the mounted doc via the prefix
+    assert_eq!(graph.resolved_references.len(), 1, "expected [[/kb/foo]] to resolve");
+    assert_eq!(graph.resolved_references[0].destinations[0].path, target_path);
+}
+
+/// A relative markdown link in a primary doc does not cross into a mount
+/// (RFC 0010: relative paths resolve against the containing doc's directory).
+#[test]
+fn mount_relative_markdown_link_does_not_cross() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let ext_root = root.parent().unwrap().join("ext_project");
+
+    let target_md = "# Foo\n\nMounted.\n";
+    let target_path = ext_root.join("foo.md");
+    fs::write(&target_path, target_md).unwrap();
+    let target_doc = ResolveDocument {
+        path: target_path.clone(),
+        rel_path: std::path::PathBuf::from("foo.md"),
+        structure: parse_document(target_md, ParseOptions::default()),
+        namespace_rel_path: std::path::PathBuf::from("foo"),
+        mount: Some("ext_project".to_string()),
+        is_source: false,
+    };
+    // Relative link resolves to notes/foo.md (filesystem), which does not exist.
+    let source = write_document(&root, "notes/reference.md", "[foo](foo.md)\n");
+
+    let input = ResolveInput {
+        root: root.clone(),
+        documents: vec![source, target_doc],
+        mounts: vec![downlint::utils::ResolvedMount {
+            root: ext_root.clone(),
+            prefix: None,
+            lint: false,
+            attribution: "ext_project".to_string(),
+        }],
+        conflicts: vec![],
+        config: Config::default(),
+        single_file: false,
+        prefix_index: Default::default(),
+        uri_resolver: downlint::resolution::uri::UriResolver::empty(),
+        uri_opts: downlint::resolution::UriOptions::default(),
+        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
+        uri_error: None,
+    };
+
+    let graph = resolve_links(input);
+    assert!(
+        graph.resolved_references.is_empty(),
+        "relative link must not cross into the mount"
+    );
+    assert_eq!(graph.unresolved_references.len(), 1);
+}
+
+/// A mounted doc with `lint = true` is a source: its internal links are
+/// diagnosed, and the diagnostic is attributed to the mount (RFC 0010).
+#[test]
+fn mount_lint_true_lints_and_attributes_internal_links() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let ext_root = root.parent().unwrap().join("ext_project");
+
+    let target_md = "# Foo\n\n[[does-not-exist]]\n";
+    let target_path = ext_root.join("foo.md");
+    fs::write(&target_path, target_md).unwrap();
+    let target_doc = ResolveDocument {
+        path: target_path.clone(),
+        rel_path: std::path::PathBuf::from("foo.md"),
+        structure: parse_document(target_md, ParseOptions::default()),
+        namespace_rel_path: std::path::PathBuf::from("foo"),
+        mount: Some("ext_project".to_string()),
+        is_source: true, // lint = true
+    };
+
+    let input = ResolveInput {
+        root: root.clone(),
+        documents: vec![target_doc],
+        mounts: vec![downlint::utils::ResolvedMount {
+            root: ext_root.clone(),
+            prefix: None,
+            lint: true,
+            attribution: "ext_project".to_string(),
+        }],
+        conflicts: vec![],
+        config: Config::default(),
+        single_file: false,
+        prefix_index: Default::default(),
+        uri_resolver: downlint::resolution::uri::UriResolver::empty(),
+        uri_opts: downlint::resolution::UriOptions::default(),
+        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
+        uri_error: None,
+    };
+
+    let graph = resolve_links(input);
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
+    let broken: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::LinkBroken)
+        .collect();
+    assert_eq!(broken.len(), 1, "expected the mounted doc's broken link to be diagnosed");
+    assert_eq!(broken[0].mount.as_deref(), Some("ext_project"));
+}
+
+/// A mounted doc with `lint = false` (default) is a target only: its internal
+/// links are NOT diagnosed (RFC 0010).
+#[test]
+fn mount_lint_false_does_not_lint_internal_links() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let ext_root = root.parent().unwrap().join("ext_project");
+
+    let target_md = "# Foo\n\n[[does-not-exist]]\n";
+    let target_path = ext_root.join("foo.md");
+    fs::write(&target_path, target_md).unwrap();
+    let target_doc = ResolveDocument {
+        path: target_path.clone(),
+        rel_path: std::path::PathBuf::from("foo.md"),
+        structure: parse_document(target_md, ParseOptions::default()),
+        namespace_rel_path: std::path::PathBuf::from("foo"),
+        mount: Some("ext_project".to_string()),
+        is_source: false, // lint = false
+    };
+
+    let input = ResolveInput {
+        root: root.clone(),
+        documents: vec![target_doc],
+        mounts: vec![downlint::utils::ResolvedMount {
+            root: ext_root.clone(),
+            prefix: None,
+            lint: false,
+            attribution: "ext_project".to_string(),
+        }],
+        conflicts: vec![],
+        config: Config::default(),
+        single_file: false,
+        prefix_index: Default::default(),
+        uri_resolver: downlint::resolution::uri::UriResolver::empty(),
+        uri_opts: downlint::resolution::UriOptions::default(),
+        uri_sync_cache: downlint::resolution::UriSyncCache::new(),
+        uri_error: None,
+    };
+
+    let graph = resolve_links(input);
+    assert!(
+        graph.unresolved_references.is_empty(),
+        "lint=false mounted doc must not be linted"
+    );
+}
+
+/// A mount whose `prefix` collides with a primary path is a structural error
+/// (`mount/conflict`), and the prefix is suspended (RFC 0010).
+#[test]
+fn mount_prefix_conflict_suspends_prefix() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let ext_root = root.parent().unwrap().join("ext_project");
+    fs::create_dir_all(&ext_root).unwrap();
+
+    // Primary has a `kb/` folder.
+    let primary_kb = root.join("kb");
+    fs::create_dir_all(&primary_kb).unwrap();
+    fs::write(primary_kb.join("a.md"), "# A\n").unwrap();
+
+    // Mount has prefix `/kb` (collides) and a doc.
+    fs::write(ext_root.join("b.md"), "# B\n").unwrap();
+
+    let workspace = downlint::utils::Workspace {
+        folder: downlint::utils::DiscoveredFolder {
+            root: root.clone(),
+            config_path: None,
+            documents: vec![downlint::utils::WorkspaceDocument {
+                path: root.join("kb/a.md"),
+                rel_path: PathBuf::from("kb/a.md"),
+                text: downlint::utils::Text::new("# A\n"),
+                source: downlint::utils::DocumentSource::Disk,
+            }],
+            mounts: vec![downlint::utils::ResolvedMount {
+                root: ext_root.clone(),
+                prefix: Some("/kb".to_string()),
+                lint: false,
+                attribution: "kb".to_string(),
+            }],
+        },
+        mode: downlint::utils::WorkspaceMode::MultiFile,
+        config: Config::default(),
+    };
+
+    let input = ResolveInput::from_workspace(&workspace);
+    assert_eq!(input.conflicts.len(), 1);
+    assert_eq!(input.conflicts[0].kind, downlint::utils::MountConflictKind::Prefix);
+
+    let graph = resolve_links(input);
+    // The prefix is suspended: the mount's doc's namespace path is its
+    // mount-root-relative path (`b.md`), NOT `kb/b.md`.
+    let b_doc = graph
+        .documents
+        .iter()
+        .find(|d| d.rel_path == PathBuf::from("b.md"))
+        .unwrap();
+    assert_eq!(b_doc.namespace_rel_path, PathBuf::from("b.md"));
+
+    // The conflict is reported as an error diagnostic.
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
+    let conflict_diags: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::MountConflict)
+        .collect();
+    assert_eq!(conflict_diags.len(), 1);
+    assert_eq!(conflict_diags[0].severity, DiagnosticSeverity::Error);
+    assert_eq!(conflict_diags[0].mount.as_deref(), Some("kb"));
+}
+
+/// A mount whose top-level folder collides with a primary folder is a
+/// structural error (`mount/conflict`), and files under that folder are not
+/// linted (RFC 0010).
+#[test]
+fn mount_folder_conflict_suspends_lint() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let ext_root = root.parent().unwrap().join("ext_project");
+    fs::create_dir_all(&ext_root).unwrap();
+
+    // Primary has a `notes/` folder.
+    let primary_notes = root.join("notes");
+    fs::create_dir_all(&primary_notes).unwrap();
+    fs::write(primary_notes.join("a.md"), "# A\n").unwrap();
+
+    // Mount has a `notes/` folder (collides) with a doc that has a broken link.
+    let mount_notes = ext_root.join("notes");
+    fs::create_dir_all(&mount_notes).unwrap();
+    fs::write(mount_notes.join("b.md"), "# B\n\n[[does-not-exist]]\n").unwrap();
+
+    let workspace = downlint::utils::Workspace {
+        folder: downlint::utils::DiscoveredFolder {
+            root: root.clone(),
+            config_path: None,
+            documents: vec![downlint::utils::WorkspaceDocument {
+                path: root.join("notes/a.md"),
+                rel_path: PathBuf::from("notes/a.md"),
+                text: downlint::utils::Text::new("# A\n"),
+                source: downlint::utils::DocumentSource::Disk,
+            }],
+            mounts: vec![downlint::utils::ResolvedMount {
+                root: ext_root.clone(),
+                prefix: None,
+                lint: true, // would normally lint
+                attribution: "ext_project".to_string(),
+            }],
+        },
+        mode: downlint::utils::WorkspaceMode::MultiFile,
+        config: Config::default(),
+    };
+
+    let input = ResolveInput::from_workspace(&workspace);
+    assert_eq!(input.conflicts.len(), 1);
+    assert_eq!(input.conflicts[0].kind, downlint::utils::MountConflictKind::Folder);
+
+    let graph = resolve_links(input);
+    // The doc under the conflicting folder is a target only (not linted).
+    let b_doc = graph
+        .documents
+        .iter()
+        .find(|d| d.rel_path == PathBuf::from("notes/b.md"))
+        .unwrap();
+    assert!(!b_doc.is_source, "doc under conflicting folder must not be a source");
+    assert!(graph.unresolved_references.is_empty());
 }

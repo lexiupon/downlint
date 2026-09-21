@@ -43,12 +43,16 @@ Things that are wrong, missing, or inconsistent relative to what should already 
 
 ### CLI & docs
 
-- [ ] **README drift** — the Rename section documents `--config` and `--allow-extra-folders`
-  (default true) on the rename subcommands; neither flag exists in `src/cli/`. Fix the
-  README or add the flags.
-- [ ] **Windows drive-letter quirk** (`spec/linting.md` §6.2 #16) — a target like `C:\…`
-  is parsed as a URI-scheme target (scheme `C`) and goes through RES-07, not path
-  resolution. Decide: special-case single-letter schemes, or document as intended.
+- [x] **README drift** (fixed 2026-09-21, Mounts) — the Rename section documented
+  `--config` and `--allow-extra-folders` on the rename subcommands; neither flag exists in
+  `src/cli/`. README corrected to document `--dry-run` and the `[[mounts]]` rename scope.
+- [ ] **Windows drive-letter quirk** (`spec/linting.md` §6.2 #16; `has_scheme` in
+  `src/resolution/path.rs`) — `has_scheme` treats the first `:`-segment as a scheme when
+  it is all scheme-chars (ASCII alnum + `+ - .`) with content after, so a target like
+  `C:\foo\bar.md` reads as scheme `C` and is routed to URI resolution (RES-07) instead of
+  path resolution → typically `NoMapping` → `link/broken` + `uri/no-mapping` hint.
+  Windows-only (no effect on macOS). Decide: special-case single-letter schemes, require
+  `//` after the scheme, or document as intended.
 - [ ] **`--wait-for-debugger`** is a 250 ms sleep placeholder — decide real behavior or
   remove.
 
@@ -103,7 +107,7 @@ surface is documented in `spec/downlint.md` §3.2.
 - [ ] **Diagnostic caching** — cache diagnostic results per document to speed up
   re-checks.
 - [ ] **Multi-root workspaces** — multiple independent LSP roots (beyond single root +
-  `extra_folders`).
+  `[[mounts]]`).
 
 ---
 

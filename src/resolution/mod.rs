@@ -16,7 +16,7 @@ use crate::resolution::path::{has_scheme, is_external_web_scheme, is_folder_link
 use crate::resolution::prefix::PrefixIndex;
 use crate::resolution::uri::{UriOutcome, UriResolver};
 use crate::resolution::uri_sync::SyncRunner;
-use crate::utils::{Workspace, WorkspaceMode};
+use crate::utils::{MountConflict, MountConflictKind, ResolvedMount, Workspace, WorkspaceMode};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -30,8 +30,17 @@ pub use slug::Slug;
 #[derive(Clone, Debug)]
 pub struct ResolveDocument {
     pub path: PathBuf,
+    /// Path relative to the document's own root (the primary root for primary
+    /// docs, the mount root for mounted docs).
     pub rel_path: PathBuf,
     pub structure: Structure,
+    /// Address in the combined namespace (RFC 0010): `rel_path` for primary
+    /// docs, `prefix/rel_path` (or `rel_path`) for mounted docs.
+    pub namespace_rel_path: PathBuf,
+    /// Mount attribution (`prefix` or `root`), `None` for primary docs.
+    pub mount: Option<String>,
+    /// Whether this doc's own links are linted.
+    pub is_source: bool,
 }
 
 impl ResolveDocument {
@@ -43,6 +52,20 @@ impl ResolveDocument {
             .and_then(|value| value.to_str())
             .map(|value| value.to_string())
             .unwrap_or_default()
+    }
+
+    /// Construct a primary (non-mounted) document: namespace path == `rel_path`,
+    /// no mount attribution, always a source. Used by tests and the LSP/rename
+    /// layers that build inputs by hand.
+    pub fn primary(path: PathBuf, rel_path: PathBuf, structure: Structure) -> Self {
+        Self {
+            path,
+            rel_path: rel_path.clone(),
+            structure,
+            namespace_rel_path: rel_path,
+            mount: None,
+            is_source: true,
+        }
     }
 }
 
@@ -73,9 +96,15 @@ pub use uri_sync::UriSyncCache;
 #[derive(Clone, Debug)]
 pub struct ResolveInput {
     pub root: PathBuf,
+    /// All indexed documents: primary docs plus mounted docs (co-equal, RFC
+    /// 0010). Each carries its namespace path, mount attribution, and source flag.
     pub documents: Vec<ResolveDocument>,
-    pub extra_documents: Vec<ResolveDocument>,
-    pub extra_folder_roots: Vec<PathBuf>,
+    /// The configured mounts (resolved roots + prefix + lint), used for folder
+    /// links and structural-conflict detection.
+    pub mounts: Vec<ResolvedMount>,
+    /// Namespace-level mount conflicts detected at startup (RFC 0010). Each is
+    /// reported as a `mount/conflict` error diagnostic.
+    pub conflicts: Vec<MountConflict>,
     pub config: Config,
     pub single_file: bool,
     /// Case-insensitive prefix index over the stems of `documents` and `extra_documents`.
@@ -100,36 +129,132 @@ pub struct ResolveInput {
 
 impl ResolveInput {
     pub fn from_workspace(workspace: &Workspace) -> Self {
-        let documents = workspace
+        let parse_options = crate::parser::ParseOptions {
+            title_from_heading: workspace.config.core.title_from_heading,
+            heading_ids: workspace.config.core.heading_ids.enable,
+        };
+
+        // Primary docs: namespace path == rel_path, always sources.
+        let mut documents: Vec<ResolveDocument> = workspace
             .folder
             .documents
             .iter()
-            .map(|doc| ResolveDocument {
-                path: doc.path.clone(),
-                rel_path: doc.rel_path.clone(),
-                structure: crate::parser::parse_document(
-                    doc.text.as_str(),
-                    crate::parser::ParseOptions {
-                        title_from_heading: workspace.config.core.title_from_heading,
-                        heading_ids: workspace.config.core.heading_ids.enable,
-                    },
-                ),
+            .map(|doc| {
+                let rel_path = doc.rel_path.clone();
+                ResolveDocument {
+                    path: doc.path.clone(),
+                    rel_path: rel_path.clone(),
+                    structure: crate::parser::parse_document(doc.text.as_str(), parse_options),
+                    namespace_rel_path: rel_path,
+                    mount: None,
+                    is_source: true,
+                }
             })
-            .collect::<Vec<_>>();
+            .collect();
 
-        let extra_documents =
-            load_extra_documents(&workspace.folder.extra_folders, &workspace.config);
+        // The primary project's top-level entry names (folders and files),
+        // used for structural-conflict detection (RFC 0010).
+        let primary_top_level: HashSet<String> = workspace
+            .folder
+            .documents
+            .iter()
+            .filter_map(|doc| doc.rel_path.components().next())
+            .filter_map(|component| component.as_os_str().to_str())
+            .map(|name| name.to_string())
+            .collect();
+
+        let mut conflicts: Vec<MountConflict> = Vec::new();
+
+        // Mounted docs: co-equal with primary (RFC 0010). Namespace path is
+        // `prefix/rel` when a prefix is set, else `rel`. Sources only when the
+        // mount has `lint = true`. A prefix conflict suspends the prefix;
+        // a folder conflict suspends linting of the conflicting folder.
+        for mount in &workspace.folder.mounts {
+            let loaded_docs = load_mount_documents(&mount.root, &workspace.config);
+            let mount_top_level_folders: HashSet<String> = loaded_docs
+                .iter()
+                .filter_map(|doc| doc.rel_path.components().next())
+                .filter_map(|component| component.as_os_str().to_str())
+                .map(|name| name.to_string())
+                .collect();
+
+            // Prefix conflict: the prefix's first component matches a primary
+            // top-level entry.
+            let prefix_first = mount
+                .prefix
+                .as_deref()
+                .map(|prefix| {
+                    prefix
+                        .trim_start_matches('/')
+                        .split('/')
+                        .next()
+                        .unwrap_or("")
+                        .to_string()
+                });
+            let prefix_conflict = prefix_first
+                .as_deref()
+                .filter(|first| !first.is_empty())
+                .is_some_and(|first| primary_top_level.contains(first));
+
+            // Folder conflict: a top-level folder in the mount matches a
+            // primary top-level folder.
+            let conflicting_folders: HashSet<String> = mount_top_level_folders
+                .iter()
+                .filter(|folder| primary_top_level.contains(*folder))
+                .cloned()
+                .collect();
+
+            if prefix_conflict
+                && let Some(first) = &prefix_first
+            {
+                let prefix = mount.prefix.as_deref().unwrap_or("");
+                conflicts.push(MountConflict {
+                    mount_attribution: mount.attribution.clone(),
+                    kind: MountConflictKind::Prefix,
+                    detail: format!("prefix `{prefix}` collides with primary path `{first}`"),
+                });
+            }
+            for folder in &conflicting_folders {
+                conflicts.push(MountConflict {
+                    mount_attribution: mount.attribution.clone(),
+                    kind: MountConflictKind::Folder,
+                    detail: format!("top-level folder `{folder}` collides with a primary folder"),
+                });
+            }
+
+            let apply_prefix = !prefix_conflict;
+            for loaded in loaded_docs {
+                let namespace_rel_path = if apply_prefix
+                    && let Some(prefix) = &mount.prefix
+                {
+                    PathBuf::from(prefix.trim_start_matches('/')).join(&loaded.rel_path)
+                } else {
+                    loaded.rel_path.clone()
+                };
+                // A doc under a conflicting folder is a target only (not linted).
+                let under_conflict = loaded
+                    .rel_path
+                    .components()
+                    .next()
+                    .and_then(|component| component.as_os_str().to_str())
+                    .is_some_and(|first| conflicting_folders.contains(first));
+                let is_source = mount.lint && !under_conflict;
+                documents.push(ResolveDocument {
+                    path: loaded.path,
+                    rel_path: loaded.rel_path,
+                    structure: loaded.structure,
+                    namespace_rel_path,
+                    mount: Some(mount.attribution.clone()),
+                    is_source,
+                });
+            }
+        }
 
         let prefix_index = PrefixIndex::from_entries(
-            documents
-                .iter()
-                .map(|doc| (doc.stem(), doc.path.clone()))
-                .chain(
-                    extra_documents
-                        .iter()
-                        .map(|doc| (doc.stem(), doc.path.clone())),
-                ),
+            documents.iter().map(|doc| (doc.stem(), doc.path.clone())),
         );
+
+        let mounts = workspace.folder.mounts.clone();
 
         let uri_resolver = match UriResolver::new(&workspace.config.uri, &workspace.folder.root)
         {
@@ -140,8 +265,8 @@ impl ResolveInput {
                 return ResolveInput {
                     root: workspace.folder.root.clone(),
                     documents,
-                    extra_documents,
-                    extra_folder_roots: workspace.folder.extra_folders.clone(),
+                    mounts,
+                    conflicts,
                     config: workspace.config.clone(),
                     single_file: matches!(workspace.mode, WorkspaceMode::SingleFile),
                     prefix_index,
@@ -156,8 +281,8 @@ impl ResolveInput {
         Self {
             root: workspace.folder.root.clone(),
             documents,
-            extra_documents,
-            extra_folder_roots: workspace.folder.extra_folders.clone(),
+            mounts,
+            conflicts,
             config: workspace.config.clone(),
             single_file: matches!(workspace.mode, WorkspaceMode::SingleFile),
             prefix_index,
@@ -170,30 +295,26 @@ impl ResolveInput {
 }
 
 pub fn resolve_links(input: ResolveInput) -> ConnectionGraph {
-    let primary_documents = input
+    // All docs (primary + mounted) are indexed co-equal (RFC 0010).
+    let all_documents = input
         .documents
-        .iter()
-        .map(|doc| index_document(doc, &input.root))
-        .collect::<Vec<_>>();
-    let extra_documents = input
-        .extra_documents
         .iter()
         .map(|doc| index_document(doc, &input.root))
         .collect::<Vec<_>>();
 
     let mut graph = ConnectionGraph {
-        documents: primary_documents.clone(),
+        documents: all_documents.clone(),
+        conflicts: input.conflicts.clone(),
         ..ConnectionGraph::default()
     };
 
-    for doc in &primary_documents {
-        resolve_document(
-            doc,
-            &primary_documents,
-            &extra_documents,
-            &input,
-            &mut graph,
-        );
+    for doc in &all_documents {
+        // Mounted docs with `lint = false` are targets only — their own links
+        // are not diagnosed.
+        if !doc.is_source {
+            continue;
+        }
+        resolve_document(doc, &all_documents, &input, &mut graph);
     }
 
     graph
@@ -278,13 +399,15 @@ fn index_document(doc: &ResolveDocument, _root: &Path) -> ResolvedDocument {
         link_defs,
         headings,
         tags,
+        namespace_rel_path: doc.namespace_rel_path.clone(),
+        mount: doc.mount.clone(),
+        is_source: doc.is_source,
     }
 }
 
 fn resolve_document(
     doc: &ResolvedDocument,
-    primary_docs: &[ResolvedDocument],
-    extra_docs: &[ResolvedDocument],
+    all_docs: &[ResolvedDocument],
     input: &ResolveInput,
     graph: &mut ConnectionGraph,
 ) {
@@ -306,13 +429,7 @@ fn resolve_document(
                     input,
                     graph,
                 };
-                resolve_wiki_ref(
-                    &mut ctx,
-                    target,
-                    heading.as_deref(),
-                    primary_docs,
-                    extra_docs,
-                );
+                resolve_wiki_ref(&mut ctx, target, heading.as_deref(), all_docs);
             }
             Ref::Inline {
                 target,
@@ -326,7 +443,7 @@ fn resolve_document(
                     input,
                     graph,
                 };
-                resolve_inline_ref(&mut ctx, target, anchor.as_deref(), primary_docs);
+                resolve_inline_ref(&mut ctx, target, anchor.as_deref(), all_docs);
             }
             Ref::Full { label, .. } | Ref::Collapsed { label } => {
                 if let Some(destinations) = doc.link_defs.get(label).cloned() {
@@ -536,12 +653,12 @@ fn resolve_folder_link(
     source_path: &Path,
     target: &str,
     root: &Path,
-    extra_roots: &[PathBuf],
+    mounts: &[ResolvedMount],
 ) -> Option<ResolvedDestination> {
     // Strip anchor and trailing / to get the actual directory path
     let (path_part, _anchor) = crate::resolution::path::split_anchor(target);
     let target_dir = path_part.trim_end_matches('/');
-    
+
     let source_dir = source_path.parent().unwrap_or(root);
 
     // For absolute paths (starting with /), resolve from root
@@ -555,13 +672,12 @@ fn resolve_folder_link(
         });
     }
 
-    // Check in extra folder roots for absolute paths, matching by prefix
+    // Check in mount roots for absolute paths (RFC 0010): try a direct join to
+    // the mount root, and (when the mount has a prefix) strip the prefix first.
     if target_dir.starts_with('/') {
-        // Strip leading / to get path components
         let rel = target_dir.trim_start_matches('/');
-        for extra_root in extra_roots {
-            // Try direct join first
-            let candidate = extra_root.join(rel);
+        for mount in mounts {
+            let candidate = mount.root.join(rel);
             if candidate.is_dir() {
                 return Some(ResolvedDestination {
                     path: candidate,
@@ -570,22 +686,17 @@ fn resolve_folder_link(
                     range: None,
                 });
             }
-            // Try matching the first path component against the extra folder name
-            // e.g. /example/cases/ -> extra_root ~/projects/example -> ~/projects/example/cases/
-            if let Some(first) = rel.split('/').next() {
-                if let Some(name) = extra_root.file_name().and_then(|n| n.to_str()) {
-                    if first == name {
-                        // Strip the first component and join
-                        let rest = rel.splitn(2, '/').nth(1).unwrap_or("");
-                        let candidate = extra_root.join(rest);
-                        if candidate.is_dir() {
-                            return Some(ResolvedDestination {
-                                path: candidate,
-                                kind: DestinationKind::Directory,
-                                name: target_dir.to_string(),
-                                range: None,
-                            });
-                        }
+            if let Some(prefix) = &mount.prefix {
+                let prefix_rel = prefix.trim_start_matches('/');
+                if let Some(rest) = rel.strip_prefix(prefix_rel) {
+                    let candidate = mount.root.join(rest.trim_start_matches('/'));
+                    if candidate.is_dir() {
+                        return Some(ResolvedDestination {
+                            path: candidate,
+                            kind: DestinationKind::Directory,
+                            name: target_dir.to_string(),
+                            range: None,
+                        });
                     }
                 }
             }
@@ -599,8 +710,7 @@ fn resolve_wiki_ref(
     ctx: &mut ResolveRefContext<'_>,
     target: &str,
     heading: Option<&str>,
-    primary_docs: &[ResolvedDocument],
-    extra_docs: &[ResolvedDocument],
+    all_docs: &[ResolvedDocument],
 ) {
     let doc = ctx.doc;
     let symbol = ctx.symbol;
@@ -672,7 +782,7 @@ fn resolve_wiki_ref(
             });
             return;
         }
-        if let Some(destination) = resolve_folder_link(&doc.path, target, &ctx.input.root, &ctx.input.extra_folder_roots) {
+        if let Some(destination) = resolve_folder_link(&doc.path, target, &ctx.input.root, &ctx.input.mounts) {
             ctx.graph.resolved_references.push(ResolvedReference {
                 source_path: doc.path.clone(),
                 occurrence_id: symbol.id,
@@ -700,9 +810,10 @@ fn resolve_wiki_ref(
 
 
     let explicit = is_explicit_path(target);
-    let primary_matches =
-        find_doc_matches(primary_docs, &doc.path, &ctx.input.root, target, explicit, &[]);
-    if primary_matches.len() > 1 {
+    // Co-equal matching over primary + mounted docs (RFC 0010): more than one
+    // candidate is `link/ambiguous`; there is no primary-first fallback.
+    let destinations = find_doc_matches(all_docs, &doc.path, &ctx.input.root, target, explicit, true);
+    if destinations.len() > 1 {
         ctx.graph.ambiguous_references.push(AmbiguousReference {
             source_path: doc.path.clone(),
             occurrence_id: symbol.id,
@@ -710,16 +821,10 @@ fn resolve_wiki_ref(
             name_range: symbol.name_range,
             reference: reference.clone(),
             target: target.to_string(),
-            destinations: primary_matches,
+            destinations,
         });
         return;
     }
-
-    let destinations = if primary_matches.is_empty() {
-        find_doc_matches(extra_docs, &doc.path, &ctx.input.root, target, explicit, &ctx.input.extra_folder_roots)
-    } else {
-        primary_matches
-    };
 
     // Opt-in Obsidian-style prefix matching runs only after the existing exact,
     // title-slug, and relative-path matches have returned zero candidates, and only
@@ -775,7 +880,7 @@ fn resolve_inline_ref(
     ctx: &mut ResolveRefContext<'_>,
     target: &str,
     anchor: Option<&str>,
-    primary_docs: &[ResolvedDocument],
+    all_docs: &[ResolvedDocument],
 ) {
     let doc = ctx.doc;
     let symbol = ctx.symbol;
@@ -850,7 +955,7 @@ fn resolve_inline_ref(
             });
             return;
         }
-        if let Some(destination) = resolve_folder_link(&doc.path, target, &ctx.input.root, &ctx.input.extra_folder_roots) {
+        if let Some(destination) = resolve_folder_link(&doc.path, target, &ctx.input.root, &ctx.input.mounts) {
             ctx.graph.resolved_references.push(ResolvedReference {
                 source_path: doc.path.clone(),
                 occurrence_id: symbol.id,
@@ -877,7 +982,7 @@ fn resolve_inline_ref(
     }
 
 
-    let destinations = find_doc_matches(primary_docs, &doc.path, &ctx.input.root, target, true, &[]);
+    let destinations = find_doc_matches(all_docs, &doc.path, &ctx.input.root, target, true, false);
     finalize_doc_or_attachment(ctx, target, anchor, destinations);
 }
 
@@ -1002,39 +1107,49 @@ fn find_doc_matches(
     root: &Path,
     target: &str,
     explicit_only: bool,
-    extra_roots: &[PathBuf],
+    is_wiki: bool,
 ) -> Vec<ResolvedDestination> {
     let source_dir = source_path.parent().unwrap_or(root);
     let source_dir = source_dir.to_path_buf();
     let target_slug = Slug::from_heading_text(target);
     let explicit_path = resolve_explicit_path(root, &source_dir, target);
     let explicit_no_ext = path_without_extension(&explicit_path);
+    // For a workspace-absolute target (`/kb/notes/foo`), its namespace path is
+    // the target without the leading slash. This is how a mount `prefix` (a
+    // virtual directory at the workspace root) is reached (RFC 0010).
+    let target_namespace_no_ext = target
+        .strip_prefix('/')
+        .map(|value| path_without_extension(Path::new(value)));
 
     let mut destinations = Vec::new();
     let mut seen = HashSet::new();
     for doc in docs {
-        let rel_no_ext = path_without_extension(&doc.rel_path);
+        // `namespace_rel_path` equals `rel_path` for primary docs and is
+        // `prefix/rel` (or `rel`) for mounted docs, so matching on it is
+        // co-equal across primary + mounted docs (RFC 0010).
+        let ns_no_ext = path_without_extension(&doc.namespace_rel_path);
         let matches = if explicit_only || is_explicit_path(target) {
-            // For explicit paths, primarily check path-based matches.
-            // When searching extra docs (extra_roots non-empty), also fall back
-            // to title slug matching since the target may not be a valid path.
-            let path_matches = doc.path == explicit_path
-                || rel_no_ext == explicit_no_ext
-                || extra_roots.iter().any(|extra_root| {
-                    let resolved = resolve_explicit_path(extra_root, extra_root, target);
-                    let resolved_rel = resolved.strip_prefix(extra_root).unwrap_or(&resolved);
-                    let resolved_no_ext = path_without_extension(resolved_rel);
-                    doc.path == resolved || rel_no_ext == resolved_no_ext
-                });
-            // Extra fallback: title slug matching when searching extra docs
-            let slug_matches = !extra_roots.is_empty() && doc.title_slug == target_slug;
-            path_matches || slug_matches
+            // Path-based matching:
+            //  (a) filesystem match (markdown links, source-relative);
+            //  (b) resolved-path namespace match;
+            //  (c) workspace-absolute namespace match (mount prefix access).
+            let fs_match = doc.path == explicit_path;
+            let rel_ns_match = ns_no_ext.eq_ignore_ascii_case(&explicit_no_ext);
+            let abs_ns_match = target_namespace_no_ext
+                .as_ref()
+                .is_some_and(|value| value.eq_ignore_ascii_case(&ns_no_ext));
+            // A wiki target containing `/` may actually be a title (e.g.
+            // "Team knowledge transfer (QA/DB)"); fall back to title-slug
+            // matching, co-equal across primary + mounted docs. Markdown links
+            // are paths only (no title fallback).
+            let title_match = is_wiki && doc.title_slug == target_slug;
+            fs_match || rel_ns_match || abs_ns_match || title_match
         } else {
             doc.file_stem.eq_ignore_ascii_case(target)
                 || doc.title_slug == target_slug
-                || rel_no_ext.eq_ignore_ascii_case(target)
+                || ns_no_ext.eq_ignore_ascii_case(target)
                 || doc
-                    .rel_path
+                    .namespace_rel_path
                     .to_string_lossy()
                     .replace('\\', "/")
                     .eq_ignore_ascii_case(target)
@@ -1085,34 +1200,43 @@ fn is_explicit_path(target: &str) -> bool {
             })
 }
 
-fn load_extra_documents(folders: &[PathBuf], config: &Config) -> Vec<ResolveDocument> {
+/// A document loaded from a mount root, before its namespace path / attribution
+/// / source flag are attached by the caller (RFC 0010).
+struct LoadedDoc {
+    path: PathBuf,
+    rel_path: PathBuf,
+    structure: Structure,
+}
+
+fn load_mount_documents(mount_root: &Path, config: &Config) -> Vec<LoadedDoc> {
     let ext_set: HashSet<String> = config.core.file_extensions.iter().cloned().collect();
     let mut documents = Vec::new();
-    for root in folders {
-        let walker = ignore::WalkBuilder::new(root).follow_links(true).build();
-        for entry in walker.flatten() {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let Some(ext) = path.extension().and_then(|value| value.to_str()) else {
-                continue;
-            };
-            if !ext_set.contains(ext) {
-                continue;
-            }
-            let Ok(text) = fs::read_to_string(path) else {
-                continue;
-            };
-            documents.push(ResolveDocument {
-                path: path.to_path_buf(),
-                rel_path: path.strip_prefix(root).unwrap_or(path).to_path_buf(),
-                structure: crate::parser::parse_document(
-                    &text,
-                    crate::parser::ParseOptions::default(),
-                ),
-            });
+    let walker = ignore::WalkBuilder::new(mount_root).follow_links(true).build();
+    for entry in walker.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
         }
+        let Some(ext) = path.extension().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !ext_set.contains(ext) {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(path) else {
+            continue;
+        };
+        documents.push(LoadedDoc {
+            path: path.to_path_buf(),
+            rel_path: path.strip_prefix(mount_root).unwrap_or(path).to_path_buf(),
+            structure: crate::parser::parse_document(
+                &text,
+                crate::parser::ParseOptions {
+                    title_from_heading: config.core.title_from_heading,
+                    heading_ids: config.core.heading_ids.enable,
+                },
+            ),
+        });
     }
     documents
 }

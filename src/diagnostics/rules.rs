@@ -31,6 +31,7 @@ pub fn broken_link(reference: &UnresolvedReference) -> Option<Diagnostic> {
             code: DiagnosticCode::LinkBrokenAnchor,
             message: format!("Broken anchor: '{display}' could not be resolved"),
             related: Vec::new(),
+            mount: None,
         });
     }
     let mut message = format!("Broken link: '{}' could not be resolved", reference.target);
@@ -70,6 +71,7 @@ pub fn broken_link(reference: &UnresolvedReference) -> Option<Diagnostic> {
         code: DiagnosticCode::LinkBroken,
         message,
         related: Vec::new(),
+        mount: None,
     })
 }
 
@@ -91,6 +93,7 @@ pub fn ambiguous_link(reference: &AmbiguousReference) -> Option<Diagnostic> {
                 message: destination.path.display().to_string(),
             })
             .collect(),
+        mount: None,
     })
 }
 
@@ -115,6 +118,7 @@ pub fn uri_no_mapping_hint(unresolved: &[UnresolvedReference]) -> Option<Diagnos
             first.target,
         ),
         related: Vec::new(),
+        mount: None,
     })
 }
 
@@ -150,6 +154,7 @@ pub fn uri_sync_skipped(source_path: &Path, mapping_count: usize, targets: &[&st
             have_word = if mapping_count == 1 { "has" } else { "have" },
         ),
         related: Vec::new(),
+        mount: None,
     })
 }
 
@@ -169,6 +174,7 @@ pub fn sync_failure_warning(unresolved: &[UnresolvedReference]) -> Option<Diagno
             first.target,
         ),
         related: Vec::new(),
+        mount: None,
     })
 }
 
@@ -187,6 +193,7 @@ pub fn non_breaking_space(path: &Path, input: &str) -> Vec<Diagnostic> {
                 code: DiagnosticCode::HeadingNbsp,
                 message: "Non-breaking whitespace after heading marker".into(),
                 related: Vec::new(),
+                mount: None,
             });
         }
         offset += line.len();

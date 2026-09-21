@@ -137,7 +137,7 @@ Downlint's core differentiator: rename something, and every reference is rewritt
 **What gets rewritten** (file/attachment rename): the path portion of wiki links, markdown
 links, and reference definitions — preserving `|alias`, `#heading`, and URL fragments.
 New paths are computed relative to each referencing document (cross-subtree moves yield
-`../`). References from extra folders are included.
+`../`). References from mounts are included.
 
 **Heading rename** rewrites only the `#section` portion of every referencing link.
 

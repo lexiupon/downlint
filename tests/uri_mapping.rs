@@ -79,7 +79,7 @@ fn workspace_with_doc(root: &Path, rel_path: &str, body: &str) -> Workspace {
                 text: downlint::utils::Text::new(body.to_string()),
                 source: downlint::utils::DocumentSource::Disk,
             }],
-            extra_folders: vec![],
+            mounts: vec![],
         },
         mode: WorkspaceMode::MultiFile,
         config: Config::default(),
@@ -115,7 +115,7 @@ fn run_diagnostics(
             root: workspace_root.to_path_buf(),
             config_path: None,
             documents: Vec::new(),
-            extra_folders: Vec::new(),
+            mounts: Vec::new(),
         },
         mode: WorkspaceMode::MultiFile,
         config: Config::default(),
@@ -326,7 +326,7 @@ fn no_uri_sync_mapping_means_skipped_diagnostic() {
             root: tmp.path().to_path_buf(),
             config_path: None,
             documents: Vec::new(),
-            extra_folders: Vec::new(),
+            mounts: Vec::new(),
         },
         mode: WorkspaceMode::MultiFile,
         config: config.clone(),
@@ -460,11 +460,11 @@ fn sync_cache_is_shared_across_resolve_links_calls() {
 
     // First run: file already exists, no sync is needed -- but we still
     // touch the cache via the runner.
-    let _doc = ResolveDocument {
-        path: tmp.path().join("notes.md"),
-        rel_path: PathBuf::from("notes.md"),
-        structure: parse_document("[[scheme://file]]\n", ParseOptions::default()),
-    };
+    let _doc = ResolveDocument::primary(
+        tmp.path().join("notes.md"),
+        PathBuf::from("notes.md"),
+        parse_document("[[scheme://file]]\n", ParseOptions::default()),
+    );
     fs::write(assets.join("file"), "ok").unwrap();
 
     let uri = finalize_uri(PartialUriConfig {

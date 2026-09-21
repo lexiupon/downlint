@@ -161,11 +161,11 @@ mod tests {
 
     fn build_graph(text: &str) -> (ConnectionGraph, Text) {
         let parsed = parse_document(text, ParseOptions::default());
-        let doc = ResolveDocument {
-            path: PathBuf::from("/tmp/test.md"),
-            rel_path: PathBuf::from("test.md"),
-            structure: parsed,
-        };
+        let doc = ResolveDocument::primary(
+            PathBuf::from("/tmp/test.md"),
+            PathBuf::from("test.md"),
+            parsed,
+        );
         let text_obj = Text::new(text);
         let prefix = PrefixIndex::from_entries(std::iter::once((
             "test".to_string(),
@@ -174,9 +174,9 @@ mod tests {
         let input = ResolveInput {
             root: PathBuf::from("/tmp"),
             documents: vec![doc],
-            extra_documents: vec![],
+            mounts: vec![],
+            conflicts: vec![],
             config: Default::default(),
-            extra_folder_roots: vec![],
             single_file: false,
             prefix_index: prefix,
             uri_resolver: crate::resolution::uri::UriResolver::empty(),

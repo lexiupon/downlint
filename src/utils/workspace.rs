@@ -27,12 +27,50 @@ pub struct WorkspaceDocument {
     pub source: DocumentSource,
 }
 
+/// A mount with its `root` expanded to an absolute filesystem path, plus the
+/// config needed by the resolution layer (RFC 0010).
+#[derive(Clone, Debug)]
+pub struct ResolvedMount {
+    /// The resolved filesystem root of the mount.
+    pub root: PathBuf,
+    /// The exact-path alias (a workspace-absolute virtual directory), if any.
+    pub prefix: Option<String>,
+    /// Whether links within the mounted docs are linted (they become sources).
+    pub lint: bool,
+    /// Label used to attribute diagnostics from this mount (its `prefix`, or
+    /// `root` when there is no prefix).
+    pub attribution: String,
+}
+
+/// The kind of a namespace-level mount conflict (RFC 0010).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MountConflictKind {
+    /// The mount's `prefix` collides with a path that exists in the primary
+    /// project. While unresolved, the prefix is not applied.
+    Prefix,
+    /// A top-level folder in the mount has the same name as a top-level folder
+    /// in the primary project. While unresolved, files under that folder are
+    /// not linted.
+    Folder,
+}
+
+/// A namespace-level conflict between a mount and the primary project
+/// (RFC 0010). Reported as a `mount/conflict` error diagnostic.
+#[derive(Clone, Debug)]
+pub struct MountConflict {
+    /// The mount's attribution (`prefix`, or `root` when there is no prefix).
+    pub mount_attribution: String,
+    pub kind: MountConflictKind,
+    /// A human-readable description of the collision.
+    pub detail: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct DiscoveredFolder {
     pub root: PathBuf,
     pub config_path: Option<PathBuf>,
     pub documents: Vec<WorkspaceDocument>,
-    pub extra_folders: Vec<PathBuf>,
+    pub mounts: Vec<ResolvedMount>,
 }
 
 #[derive(Clone, Debug)]
@@ -87,7 +125,7 @@ pub fn discover_workspace(
                 text: Text::new(text),
                 source: DocumentSource::Stdin,
             }],
-            extra_folders: resolve_extra_folders(&root, &config),
+            mounts: resolve_mounts(&root, &config),
         }
     } else if target_path.is_file() {
         let text = fs::read_to_string(&target_path).map_err(crate::config::ConfigError::Io)?;
@@ -104,7 +142,7 @@ pub fn discover_workspace(
                 text: Text::new(text),
                 source: DocumentSource::Disk,
             }],
-            extra_folders: resolve_extra_folders(&root, &config),
+            mounts: resolve_mounts(&root, &config),
         }
     } else {
         let documents =
@@ -113,7 +151,7 @@ pub fn discover_workspace(
             root: root.clone(),
             config_path: find_project_config(&root),
             documents,
-            extra_folders: resolve_extra_folders(&root, &config),
+            mounts: resolve_mounts(&root, &config),
         }
     };
 
@@ -242,19 +280,32 @@ fn collect_documents(root: &Path, config: &Config) -> std::io::Result<Vec<Worksp
     Ok(docs)
 }
 
-fn resolve_extra_folders(root: &Path, config: &Config) -> Vec<PathBuf> {
+fn expand_root(root: &Path, value: &str) -> PathBuf {
+    // Expand ~ to home directory; otherwise resolve relative to the workspace root.
+    let expanded = if let Some(stripped) = value.strip_prefix("~/") {
+        std::env::var("HOME")
+            .ok()
+            .and_then(|h| PathBuf::try_from(h).ok())
+            .unwrap_or_else(|| PathBuf::from("/"))
+            .join(stripped)
+    } else {
+        root.join(value)
+    };
+    canonicalize_if_exists(expanded)
+}
+
+fn resolve_mounts(root: &Path, config: &Config) -> Vec<ResolvedMount> {
     config
-        .core
-        .extra_folders
+        .mounts
         .iter()
-        .map(|value| {
-            // Expand ~ to home directory
-            let expanded = if let Some(stripped) = value.strip_prefix("~/") {
-            std::env::var("HOME").ok().and_then(|h| PathBuf::try_from(h).ok()).unwrap_or_else(|| PathBuf::from("/")).join(stripped)
-            } else {
-                root.join(value)
-            };
-            canonicalize_if_exists(expanded)
+        .map(|mount| ResolvedMount {
+            attribution: mount
+                .prefix
+                .clone()
+                .unwrap_or_else(|| mount.root.clone()),
+            root: expand_root(root, &mount.root),
+            prefix: mount.prefix.clone(),
+            lint: mount.lint,
         })
         .collect()
 }

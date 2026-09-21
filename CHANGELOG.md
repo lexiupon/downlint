@@ -85,6 +85,21 @@ tracked in `ServerState::indexing` and the `is_indexing()` helper.
   `.downlint.toml` is found (suggesting `downlint init`) and/or when the workspace
   contains no markdown. Suppressed by `--quiet`; never affects the exit code.
 
+#### Mounts (co-equal resolution roots)
+
+- `[[mounts]]` replaces `core.extra_folders` (the old key is removed, not
+  aliased). Each entry has a `root` (required), an optional workspace-absolute
+  `prefix` (e.g. `/kb`), and an optional `lint` flag (default `false`).
+- Mounted documents are indexed **co-equal** with the primary project (no
+  primary-wins fallback): a link matching documents in both is `link/ambiguous`.
+- Relative links do not cross into a mount; workspace-absolute links reach a mount
+  via its `prefix`; bare stem/title wiki links resolve across the whole namespace.
+- A mounted document is linted as a source only when its mount has `lint = true`.
+- Diagnostics from mounted documents carry a `mount` attribution (`prefix` or `root`).
+- New `mount/conflict` (Error) diagnostic for structural prefix/folder collisions,
+  with suspend behavior (conflicting prefix not applied / conflicting folder not
+  linted).
+
 ### Changed
 
 - **Diagnostic codes re-based to semantic slugs** (breaking, wire format). The opaque

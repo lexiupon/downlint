@@ -1,6 +1,6 @@
 use crate::parser::{LinkLabel, Ref, Structure};
 use crate::resolution::Slug;
-use crate::utils::ByteRange;
+use crate::utils::{ByteRange, MountConflict};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -86,6 +86,18 @@ pub struct ResolvedDocument {
     pub link_defs: HashMap<LinkLabel, Vec<ResolvedDestination>>,
     pub headings: HashMap<Slug, Vec<ResolvedDestination>>,
     pub tags: HashMap<String, Vec<ResolvedDestination>>,
+    /// The document's address in the combined namespace (RFC 0010). For a
+    /// primary doc this equals `rel_path`; for a mounted doc it is
+    /// `prefix/rel_path` (when a `prefix` is set) or `rel_path` (otherwise).
+    /// Path-based wiki targets are matched against this, co-equal across
+    /// primary and mounted docs.
+    pub namespace_rel_path: PathBuf,
+    /// Attribution for diagnostics emitted from a mounted doc: the mount's
+    /// `prefix` (or `root` when there is no prefix). `None` for primary docs.
+    pub mount: Option<String>,
+    /// Whether this document's own links are linted. Primary docs are always
+    /// sources; mounted docs are sources only when their mount has `lint = true`.
+    pub is_source: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -94,6 +106,8 @@ pub struct ConnectionGraph {
     pub resolved_references: Vec<ResolvedReference>,
     pub unresolved_references: Vec<UnresolvedReference>,
     pub ambiguous_references: Vec<AmbiguousReference>,
+    /// Namespace-level mount conflicts detected at startup (RFC 0010).
+    pub conflicts: Vec<MountConflict>,
 }
 
 impl ConnectionGraph {

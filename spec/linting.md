@@ -50,8 +50,8 @@ as described in RFC 2119.
 |---|---|
 | **workspace** | A root directory from which documents are discovered. The root is inferred by walking up from the target directory while the directory contains a `.downlint.toml` or `.git` marker; if no marker is found, the target directory itself is the root. `--root` overrides inference. |
 | **primary folder** | A workspace folder under direct linting. In the LSP, the client's workspace folders; in the CLI, the checked directory. |
-| **extra folder** | An additional folder declared via `core.extra_folders`, loaded from the primary folder's configuration. Used only as a resolution fallback (RES-08). |
-| **document** | A file whose extension (without dot) is in `core.file_extensions`, discovered in a primary or extra folder. |
+| **mount** | An additional folder declared via `[[mounts]]`, indexed co-equal with the primary project (RES-08). |
+| **document** | A file whose extension (without dot) is in `core.file_extensions`, discovered in the primary project or a mount. |
 | **attachment** | A non-document file that may be the target of a link (image, PDF, XLSX, …). No extension whitelist applies (RES-06). |
 | **link** | One occurrence of a recognized link form (LNK-01) in a document. |
 | **wiki link** | `[[target]]`, optionally with `\|alias` and/or `#heading`. |
@@ -216,21 +216,22 @@ For a **non-explicit** wiki target, a document matches when ANY of:
 4. full workspace-relative path (backslashes → `/`) equals the target (ASCII case-insensitive)
 
 For an **explicit** target, matching is path-based only: exact path equality or
-relative-path-without-extension equality. When searching extra folders, a title-slug
-fallback is additionally allowed.
+relative-path-without-extension equality. A path-like target may additionally fall back
+to a title-slug match (so a mounted document can be reached by an explicit path).
 
 **Title.** When `core.title_from_heading` is true (default), the document's first H1 is its
 title; otherwise the file stem. Title-only wiki links (`[[|My Title]]`) resolve by title
 slug.
 
-**Tiering.** Primary-folder documents are searched first. If the primary tier yields more
-than one match, the link is immediately ambiguous (`link/ambiguous`) and extra folders are not
-consulted. If the primary tier yields zero, extra folders are searched (wiki, non-explicit
-targets only — RES-08). Matches are deduplicated by document path.
+**Co-equal namespace.** Primary and mounted documents are searched together in one
+namespace (RES-08): there is no primary-first tiering. A link that matches more than one
+document — across the primary project and the mounts — is ambiguous (`link/ambiguous`).
+Matches are deduplicated by document path.
 
 Tests: `wiki_link_with_non_ascii_title_resolves_correctly`,
-`wiki_link_explicit_path_resolves_in_extra_folders`,
-`wiki_link_with_slash_in_target_resolves_via_title_slug_in_extra_folders`.
+`wiki_link_explicit_path_resolves_in_mount`,
+`wiki_link_with_slash_in_target_resolves_via_title_slug_in_mount`,
+`mount_same_name_primary_and_mount_is_ambiguous`.
 
 ### 3.4 RES-04 — Folder Link Resolution
 
@@ -244,9 +245,9 @@ resolution.
 1. Strip trailing slashes; resolve the path per RES-02.
 2. If a directory exists at the resolved path, the link resolves **to the directory
    itself**. There is no index-file lookup; an empty directory is a valid target.
-3. For workspace-absolute targets only, extra folder roots are also tried (direct join,
-   then matching the first path component against the extra root's own name). The first
-   existing directory wins; folder resolution never produces ambiguity.
+3. For workspace-absolute targets only, mount roots are also tried (direct join, then
+   matching the first path component against the mount root's own name, then via a mount's
+   `prefix`). The first existing directory wins; folder resolution never produces ambiguity.
 4. Otherwise the link is broken (`link/broken`) — including when the path exists but is a file.
 
 **Folder link + heading** (`[[dir/#h]]`, `[x](dir/#h)`) is invalid: the link is broken
@@ -255,7 +256,7 @@ resolution.
 Tests: `folder_link_to_existing_directory_resolves`,
 `folder_link_to_missing_directory_is_broken`, `folder_link_to_file_not_directory_is_broken`,
 `wiki_link_to_folder_resolves`, `folder_link_with_anchor_is_unresolved`,
-`folder_link_in_extra_folder_resolves`, `non_folder_link_to_directory_name_unchanged`.
+`folder_link_in_mount_resolves`, `non_folder_link_to_directory_name_unchanged`.
 
 ### 3.5 RES-05 — Prefix Matching
 
@@ -264,7 +265,7 @@ is true (default false), only for non-empty non-explicit targets, and only after
 title-slug, and relative-path matching (RES-03) have returned zero candidates.
 
 **Matching.** The target is treated as a leading prefix of document stems (primary and
-extra folders), ASCII case-insensitive. There is no word-boundary requirement: any leading
+mounted), ASCII case-insensitive. There is no word-boundary requirement: any leading
 prefix matches; a suffix does not.
 
 **Multiplicity.**
@@ -383,18 +384,53 @@ Tests: `onedrive_present_file_resolves`, `onedrive_missing_file_yields_broken_li
 `auto_verify_off_skips_heuristics`, `batch_size_three_fans_out_into_one_spawn`,
 `batch_clamps_to_per_file_when_argv_exceeds_limit`.
 
-### 3.8 RES-08 — Cross-Folder Resolution
+### 3.8 RES-08 — Mounts (Co-Equal Resolution Roots)
 
-- Primary folders are searched before extra folders; extra folders are a **fallback only**.
-- Only wiki (non-explicit) targets may resolve into extra folders. Markdown links with
-  path syntax are anchored to the source document and never use the extra-folder fallback.
-- A primary-tier match wins; a link is never ambiguous *across* tiers. Ambiguity arises
-  only within the active tier.
-- Resolution is non-transitive: no chaining A → B → C through extra folders.
-- Documents in extra folders are not diagnosed from the primary session.
+A **mount** (`[[mounts]]`) is an additional folder indexed **co-equal** with the primary
+project — not a fallback tier. Each mount has a `root` (required), an optional `prefix`
+(workspace-absolute, e.g. `/kb`), and an optional `lint` flag (default `false`).
 
-Tests: `wiki_link_explicit_path_resolves_in_extra_folders`,
-`folder_link_in_extra_folder_resolves`.
+**Indexing.** Mounted documents are indexed alongside primary documents in one namespace.
+A mounted document's *namespace path* is `prefix/rel` when a `prefix` is set, else `rel`
+(mount-root-relative). Primary documents' namespace path is their workspace-relative path.
+
+**Reachability.**
+
+- **Relative** targets (markdown links, and wiki targets with path syntax) resolve against
+  the containing document's directory and do **not** cross into a mount.
+- **Workspace-absolute** targets (`/…`) resolve against the workspace root, or against a
+  mount whose `prefix` matches (the prefix is a virtual directory at the workspace root).
+- **Bare stem / title** wiki targets (`[[Title]]`) resolve across the whole namespace
+  (primary + all mounts).
+
+**Co-equal, not fallback.** A link matching documents in both the primary project and a
+mount is ambiguous (`link/ambiguous`); there is no primary-wins tie-break. A `prefix`
+disambiguates by giving the mounted document a distinct namespace path.
+
+**Linting.** A mounted document is a *source* (its own links are diagnosed) only when its
+mount has `lint = true`. Otherwise it is a *target* only. When `lint = true`, its links
+resolve against the full namespace (primary + all mounts).
+
+**Attribution.** A diagnostic whose source is a mounted document is labeled with the
+mount's attribution (`prefix` when set, else `root`).
+
+**Structural conflicts** (`mount/conflict`, Error). Detected at startup, top-level only:
+
+- *Prefix conflict*: the mount's `prefix` matches a path that already exists in the primary
+  project. While unresolved, the prefix is **not applied** (the mount's documents keep
+  their mount-root-relative namespace paths).
+- *Folder conflict*: a top-level folder in the mount has the same name as a top-level
+  folder in the primary project. While unresolved, files under the conflicting folder are
+  **not linted** (targets only). Deeper same-stem collisions are not conflicts; they
+  surface as per-link `link/ambiguous`.
+
+Tests: `wiki_link_explicit_path_resolves_in_mount`,
+`wiki_link_with_slash_in_target_resolves_via_title_slug_in_mount`,
+`folder_link_in_mount_resolves`, `mount_same_name_primary_and_mount_is_ambiguous`,
+`mount_prefix_disambiguates`, `mount_relative_markdown_link_does_not_cross`,
+`mount_lint_true_lints_and_attributes_internal_links`,
+`mount_lint_false_does_not_lint_internal_links`,
+`mount_prefix_conflict_suspends_prefix`, `mount_folder_conflict_suspends_lint`.
 
 ### 3.9 RES-09 — Symlink Handling
 
@@ -441,6 +477,7 @@ Tests: `ignore_project_overrides_user`, `ignore_negation_pattern_parses`.
 | `link/broken` | Broken link | Error (wiki/embed) / Warning (markdown) | no destination |
 | `heading/nbsp` | Non-breaking space after heading | Warning | U+00A0 after heading marker |
 | `link/broken-anchor` | Broken anchor | Warning (all link forms) | anchor did not resolve |
+| `mount/conflict` | Mount conflict | Error | mount `prefix` or top-level folder collides with the primary (RES-08) |
 | `uri/no-mapping` | No URI mapping | Info | unmapped URI target, mappings configured |
 | `uri/sync-skipped` | URI sync skipped | Info | warm mappings present, sync not allowed |
 | `uri/sync-failed` | URI sync failed | Info | soft warm failure |
@@ -454,9 +491,9 @@ always reports at `info`.
 
 ### 4.1 `link/ambiguous` — Ambiguous link
 
-- **Condition**: a link target resolves to more than one destination — multiple primary
-  matches, multiple extra-folder matches (when the primary tier is empty), or prefix
-  matching with ≥ 2 candidates (RES-05).
+- **Condition**: a link target resolves to more than one destination — multiple matches
+  across the co-equal namespace (primary + mounts, RES-08), or prefix matching with ≥ 2
+  candidates (RES-05).
 - **Severity**: Error (wiki/embed), Warning (markdown).
 - **Message** (verbatim): `Ambiguous link: '{target}' resolves to multiple destinations`
 - **Related information**: one entry per destination, carrying its path. No cap.
@@ -641,7 +678,7 @@ Tests: `parse_rejects_removed_attachment_extensions_key`, `uri_missing_prefix_yi
 | `core.heading_ids.enable` | `true` | RES-01 duplicate disambiguation. |
 | `core.text_sync` | `"full"` (`"full" \| "incremental"`) | LSP text-sync mode (non-linting; see `spec/downlint.md`). |
 | `core.title_from_heading` | `true` | RES-03 title = first H1. |
-| `core.extra_folders` | `[]` | RES-08 (and RES-04 extra-root check). Relative to the config file's directory. |
+| `[[mounts]]` | `[]` | RES-08 (and RES-04 mount-root check). Each entry: `root` (required), `prefix` (optional, workspace-absolute), `lint` (optional, default `false`). `root` is relative to the config file's directory. |
 | `core.ignore` | `[]` | RES-10. |
 | `wiki.obsidian_prefix` | `false` | RES-05. |
 | `code_action.toc.enable` / `code_action.toc.include` | `true` / `[1,2,3,4,5,6]` | Non-linting (TOC code action). |
@@ -687,8 +724,8 @@ produced.
 10. Subtags (`#rust/cli`, `#rust/cli/help`) are distinct, string-equal symbols; tag
     matching is case-insensitive.
 11. `![[nonexistent]]` produces `link/broken` at **Error** severity, like a broken wiki-link.
-12. Ambiguity never crosses tiers (RES-08): a primary match wins over extra-folder
-    candidates.
+12. The namespace is co-equal (RES-08): a link matching documents in both the primary
+    project and a mount is ambiguous; there is no primary-wins tie-break.
 13. `[text]` shortcut links are always suppressed from diagnostics.
 14. Backslashes in link targets are treated as path separators.
 15. Stem/path matching is ASCII case-insensitive in memory, on every platform.
@@ -731,6 +768,7 @@ produced.
 | 2026-09-20 | — | Initial extraction from the bootstrap `spec.md` and implemented RFCs 0001–0004, 0006–0009. Where the bootstrap spec and code disagreed, the code won: `[wiki]` section added to §5; `core.file_extensions` default `["md","markdown"]`; `code_action.toc.include` default `[1..6]`; `warm_timeout` default 30; DNL003 message text; DNL006/007/008 multiplicity is per-run; hidden files excluded by default; exactly 9 silent web schemes; DNL009 declared but not emitted; folder links resolve to the directory itself (no index-file lookup); DNL005 always Warning. |
 | 2026-09-20 | — | Bootstrap `spec.md` and `rfc/0001`–`0009` removed from the working tree (folded in; git history is the record). Open issues moved to `TODO.md`. |
 | 2026-09-21 | — | Diagnostic codes re-based from opaque `DNLnnn` to namespaced semantic slugs. Old→new: `DNL001`→`link/ambiguous`, `DNL002`→`link/broken`, `DNL003`→`heading/nbsp`, `DNL005`→`link/broken-anchor`, `DNL006`→`uri/no-mapping`, `DNL007`→`uri/sync-skipped`, `DNL008`→`uri/sync-failed`, `DNL009`→`uri/batch-clamped`. `DNL004` was never assigned and is retired with the numeric scheme. Severity is unchanged (still a separate axis). Wire-format breaking change: emitted `code` strings changed. |
+| 2026-09-21 | 0010 (Phase 1) | RES-08 re-scoped from “Cross-Folder Resolution” (fallback) to “Mounts” (co-equal, indexed resolution roots): `core.extra_folders` replaced by `[[mounts]]` (`root`, optional `prefix`, optional `lint`); mounted documents indexed co-equal with primary (no primary-wins tiering); relative links do not cross mounts; workspace-absolute links reach a mount via its `prefix`; bare stem/title resolve across the whole namespace; `lint` controls whether a mounted doc is a source; diagnostics from mounted docs carry mount attribution. New diagnostic `mount/conflict` (Error) for structural prefix/folder collisions, with suspend behavior. `link/ambiguous` condition updated (co-equal namespace). |
 
 **Known coverage gaps** (clauses without tests yet): `heading/nbsp`; `uri/batch-clamped` (by design, until
 emission lands); single-file-mode `link/broken` suppression; URI-target + anchor → `link/broken-anchor`.

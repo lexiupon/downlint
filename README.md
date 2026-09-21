@@ -22,6 +22,38 @@ Example:
 obsidian_prefix = true
 ```
 
+### `[[mounts]]` — Co-Equal Resolution Roots
+
+Mount an additional folder so its documents resolve alongside the primary project —
+for cross-project wikilinks, or a shared asset folder that is also a note vault.
+Mounted documents are **co-equal** with primary documents (not a fallback): a link
+matching documents in both is `link/ambiguous`.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `root` | string | *(required)* | The folder to mount. Supports `~`, env vars, and relative-to-config-dir paths. |
+| `prefix` | string | *(none)* | Workspace-absolute virtual path (e.g. `/kb`) that reaches this mount. Without a prefix, the mount's subfolders behave as if in the current folder. |
+| `lint` | bool | `false` | When `true`, the mount's documents are linted as sources (their own links are diagnosed, resolved against the full namespace). |
+
+Example:
+
+```toml
+# Mount a second vault, reachable by bare title and via `/kb/...`.
+[[mounts]]
+root = "~/vaults/work"
+prefix = "/kb"
+
+# Mount a shared asset folder that is also a note vault, and lint it.
+[[mounts]]
+root = "~/notes"
+lint = true
+```
+
+Relative links never cross into a mount; workspace-absolute links reach a mount via its
+`prefix`; bare stem/title wiki links resolve across the whole namespace. A mount whose
+`prefix` or top-level folder collides with the primary project emits a `mount/conflict`
+(Error) diagnostic; the conflicting namespace is suspended until the config is corrected.
+
 ### `[uri]` — External Asset URI Mapping
 
 Maps URI-style wiki/markdown link targets (`onedrive://work/...`, `s3://...`) to
@@ -229,9 +261,8 @@ to think about it. `rename-link` rewrites a logical identifier
 workspace-wide without touching disk.
 
 Both subcommands accept `--dry-run` to print planned edits without
-applying them, and `--config` to override the default config lookup.
-`--allow-extra-folders` (default true) includes `extra_folders` in the
-scope of the rename.
+applying them. Mounted documents (`[[mounts]]`) are in the rename scope
+alongside the primary project.
 
 ### Exit codes
 
