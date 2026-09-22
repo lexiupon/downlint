@@ -7,6 +7,19 @@ Pre-1.0 versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.12.0] — LSP honors `[completion]` config
+
+### Fixed
+
+- **LSP completion now reads `[completion]` from `.downlint.toml`.** The
+  `textDocument/completion` handler previously hardcoded
+  `WikiCompletionStyle::TitleSlug` and `max_candidates: 50`, so the config's
+  `wiki.style` and `candidates` were silently ignored (and, since the CLI never
+  calls `complete_at`, those keys were effectively dead). The handler now takes
+  the configured style and candidate cap from the workspace config, falling back
+  to the previous defaults when no workspace is loaded. The completion engine and
+  config parsing were already correct — only the wiring was missing.
+
 ## [0.11.0] — Workspace `info` command
 
 New `downlint info`: a read-only, descriptive report of what downlint sees — the
