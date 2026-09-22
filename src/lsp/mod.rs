@@ -33,6 +33,12 @@ struct ServerState {
     /// Serializes writes to `io::stdout()` so the loop and the reindexer never
     /// interleave a `Content-Length` header with another message's body.
     stdout_guard: Arc<Mutex<()>>,
+    /// The diagnostics last published per document (path → diagnostics JSON).
+    /// Used to detect when a document's diagnostics change — including when
+    /// they are *cleared* — so an empty list is published to clear the
+    /// client's stale diagnostics.
+    diagnostics_state:
+        Arc<Mutex<std::collections::HashMap<std::path::PathBuf, Vec<serde_json::Value>>>>,
     // Background reindexer handles (None until `initialize`).
     reindex_tx: Option<mpsc::Sender<()>>,
     reindex_shutdown: Option<mpsc::Sender<()>>,
@@ -359,27 +365,70 @@ fn initialize_state(state: &mut ServerState, params: Option<&Value>) -> Option<P
     Some(root)
 }
 
-fn publish_diagnostics_graph(graph: &ConnectionGraph, stdout_guard: &Mutex<()>) {
+/// Publish diagnostics for `graph`, sending only what changed since the last
+/// publish (tracked in `diagnostics_state`). A document whose diagnostics are
+/// *cleared* gets an empty list, which tells the client to drop its stale
+/// diagnostics (e.g. a link that was broken while typing and is resolved once
+/// a completion is accepted).
+///
+/// On the very first publish (empty state) only documents that *have*
+/// diagnostics are sent, so a large workspace does not emit one empty
+/// notification per clean document at startup.
+fn publish_diagnostics_for_graph(
+    graph: &ConnectionGraph,
+    diagnostics_state: &Mutex<std::collections::HashMap<std::path::PathBuf, Vec<Value>>>,
+    stdout_guard: &Mutex<()>,
+) {
+    // Build the full set of diagnostics: every document, with an empty list for
+    // documents that have none.
+    let mut new_diags: std::collections::HashMap<std::path::PathBuf, Vec<Value>> = graph
+        .documents
+        .iter()
+        .map(|doc| (doc.path.clone(), Vec::new()))
+        .collect();
     for (path, diagnostics) in handlers::diagnostics(graph) {
-        let Some(uri) = Url::from_file_path(&path).ok() else {
-            continue;
-        };
-        write_notification(
-            stdout_guard,
-            "textDocument/publishDiagnostics",
-            json!({
-                "uri": uri.to_string(),
-                "diagnostics": diagnostics,
-            }),
-        );
+        if let Some(entry) = new_diags.get_mut(&path) {
+            *entry = diagnostics.as_array().cloned().unwrap_or_default();
+        }
     }
+
+    let mut state = diagnostics_state.lock().unwrap();
+    let first_publish = state.is_empty();
+    for (path, diagnostics) in &new_diags {
+        let should_publish = if first_publish {
+            !diagnostics.is_empty()
+        } else {
+            state
+                .get(path)
+                .map(|previous| previous != diagnostics)
+                .unwrap_or(true)
+        };
+        if should_publish {
+            let Some(uri) = Url::from_file_path(path).ok() else {
+                continue;
+            };
+            write_notification(
+                stdout_guard,
+                "textDocument/publishDiagnostics",
+                json!({
+                    "uri": uri.to_string(),
+                    "diagnostics": diagnostics,
+                }),
+            );
+        }
+    }
+    *state = new_diags;
 }
 
 /// Publish diagnostics for the current graph (request-loop convenience wrapper).
 fn publish_current_diagnostics(state: &ServerState) {
     let graph = state.graph.lock().unwrap();
     if let Some(graph) = graph.as_ref() {
-        publish_diagnostics_graph(graph, state.stdout_guard.as_ref());
+        publish_diagnostics_for_graph(
+            graph,
+            state.diagnostics_state.as_ref(),
+            state.stdout_guard.as_ref(),
+        );
     }
 }
 
@@ -758,12 +807,14 @@ fn spawn_reindexer(state: &mut ServerState) {
     let workspace = Arc::clone(&state.workspace);
     let graph = Arc::clone(&state.graph);
     let stdout_guard = Arc::clone(&state.stdout_guard);
+    let diagnostics_state = Arc::clone(&state.diagnostics_state);
     let uri_opts = state.uri_opts.clone();
     let handle = thread::spawn(move || {
         reindexer_loop(
             workspace,
             graph,
             stdout_guard,
+            diagnostics_state,
             uri_opts,
             reindex_rx,
             shutdown_rx,
@@ -794,6 +845,7 @@ fn reindexer_loop(
     workspace: Arc<Mutex<Option<Workspace>>>,
     graph: Arc<Mutex<Option<ConnectionGraph>>>,
     stdout_guard: Arc<Mutex<()>>,
+    diagnostics_state: Arc<Mutex<std::collections::HashMap<std::path::PathBuf, Vec<Value>>>>,
     uri_opts: UriOptions,
     reindex_rx: mpsc::Receiver<()>,
     shutdown_rx: mpsc::Receiver<()>,
@@ -804,7 +856,13 @@ fn reindexer_loop(
             Ok(()) => dirty = true, // an edit happened; reset the window
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if dirty {
-                    perform_reindex(&workspace, &graph, &stdout_guard, &uri_opts);
+                    perform_reindex(
+                        &workspace,
+                        &graph,
+                        &stdout_guard,
+                        &diagnostics_state,
+                        &uri_opts,
+                    );
                     dirty = false;
                 }
             }
@@ -823,6 +881,7 @@ fn perform_reindex(
     workspace: &Arc<Mutex<Option<Workspace>>>,
     graph: &Arc<Mutex<Option<ConnectionGraph>>>,
     stdout_guard: &Arc<Mutex<()>>,
+    diagnostics_state: &Arc<Mutex<std::collections::HashMap<std::path::PathBuf, Vec<Value>>>>,
     uri_opts: &UriOptions,
 ) {
     let input = {
@@ -839,7 +898,7 @@ fn perform_reindex(
     let new_graph = resolve_links(input);
     *graph.lock().unwrap() = Some(new_graph);
     if let Some(current) = graph.lock().unwrap().as_ref() {
-        publish_diagnostics_graph(current, stdout_guard.as_ref());
+        publish_diagnostics_for_graph(current, diagnostics_state.as_ref(), stdout_guard.as_ref());
     }
 }
 
@@ -854,8 +913,17 @@ mod reindexer_tests {
         let workspace: Arc<Mutex<Option<Workspace>>> = Arc::new(Mutex::new(None));
         let graph: Arc<Mutex<Option<ConnectionGraph>>> = Arc::new(Mutex::new(None));
         let stdout_guard: Arc<Mutex<()>> = Arc::new(Mutex::new(()));
+        let diagnostics_state: Arc<
+            Mutex<std::collections::HashMap<std::path::PathBuf, Vec<serde_json::Value>>>,
+        > = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let uri_opts = UriOptions::default();
-        perform_reindex(&workspace, &graph, &stdout_guard, &uri_opts);
+        perform_reindex(
+            &workspace,
+            &graph,
+            &stdout_guard,
+            &diagnostics_state,
+            &uri_opts,
+        );
         assert!(graph.lock().unwrap().is_none());
     }
 

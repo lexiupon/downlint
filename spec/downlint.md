@@ -240,7 +240,12 @@ surface:
   typing and completion stay responsive on large workspaces) and after
   `didRenameFiles`; the initial index at `initialize` is synchronous. Each diagnostic
   carries `source: "downlint"` so editors can attribute it alongside other servers
-  (e.g. Marksman).
+  (e.g. Marksman). Diagnostics are published *differentially*: a document whose
+  diagnostics change — including when they are **cleared** (e.g. a link that was broken
+  while typing and is resolved once a completion is accepted) — gets a fresh
+  `publishDiagnostics`, with an empty list clearing the editor's stale markers. On the
+  initial publish only documents that *have* diagnostics are sent, so a large workspace
+  does not emit one empty notification per clean document at startup.
 - **Completion**: wiki document (`[[foo`), wiki heading (`[[#`), and tag (`#`) prompts;
   trigger characters `[`, `#`, `(`; case-insensitive subsequence matching.
 - **Code intelligence**: `hover`, `definition`, `references`, `documentSymbol`.

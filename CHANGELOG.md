@@ -7,6 +7,19 @@ Pre-1.0 versions may include breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The LSP server now clears stale diagnostics when a link is fixed.**
+  Previously, when a document's diagnostics were all resolved (e.g. a wiki link
+  that was broken while typing and is completed to a valid target), the server
+  published diagnostics only for documents that *still had* findings — so the
+  resolved document dropped out of the set and the editor kept showing the old
+  marker. Diagnostics are now published *differentially*: a document whose
+  diagnostics change, including when they are cleared, gets a fresh
+  `publishDiagnostics` (an empty list clears the editor's markers). On the
+  initial publish only documents that *have* diagnostics are sent, so a large
+  workspace does not emit one empty notification per clean document at startup.
+
 ## [0.13.0] — Background, debounced LSP re-indexing
 
 ### Changed

@@ -10,7 +10,7 @@
 //! configured `style` is observable in `textEdit.newText` (the inserted text).
 //! So the assertions target `newText`.
 
-use serde_json::json;
+use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -284,5 +284,83 @@ fn lsp_completion_not_blocked_by_reindex() {
     assert!(
         !saw_diagnostic_before_completion,
         "completion was blocked behind a post-edit re-index (a publishDiagnostics arrived before the completion response)"
+    );
+}
+
+/// A broken link that is fixed by a `didChange` must have its diagnostic
+/// *cleared* (an empty `publishDiagnostics`), not left stale in the client.
+/// Regression for "completion accepted but the old broken-link diagnostic
+/// persists".
+#[test]
+fn lsp_diagnostics_cleared_when_link_fixed() {
+    let root = setup_workspace("");
+    let mut client = LspClient::spawn();
+    client.send(
+        "initialize",
+        Some(1),
+        json!({ "rootUri": file_uri(root.path()) }),
+    );
+    let init = client.response(1);
+    assert!(init.get("result").is_some(), "initialize failed: {init}");
+    client.send("initialized", None, json!({}));
+
+    let alpha = root.path().join("notes/alpha.md");
+    let uri = file_uri(&alpha);
+    // Open alpha with a *complete* broken link (`[[broken]]` — no such note),
+    // which the re-indexer resolves to a `link/broken` diagnostic.
+    client.send(
+        "textDocument/didOpen",
+        None,
+        json!({
+            "textDocument": { "uri": &uri, "languageId": "markdown", "version": 1, "text": "# Alpha Title\n\n[[broken]]\n" }
+        }),
+    );
+    // Wait for the initial broken-link diagnostic for alpha.
+    let mut saw_broken = false;
+    for _ in 0..500 {
+        let msg = client.next_message();
+        if msg.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && msg["params"]["uri"] == uri
+            && msg["params"]["diagnostics"]
+                .as_array()
+                .map(|d| !d.is_empty())
+                .unwrap_or(false)
+        {
+            saw_broken = true;
+            break;
+        }
+    }
+    assert!(
+        saw_broken,
+        "expected a broken-link diagnostic after didOpen"
+    );
+
+    // Fix the link (didChange with the full text).
+    client.send(
+        "textDocument/didChange",
+        None,
+        json!({
+            "textDocument": { "uri": &uri, "version": 2 },
+            "contentChanges": [{ "text": "# Alpha Title\n\n[[Beta Title]]\n" }]
+        }),
+    );
+    // Wait for the cleared (empty) diagnostic for alpha.
+    let mut saw_cleared = false;
+    for _ in 0..500 {
+        let msg = client.next_message();
+        if msg.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+            && msg["params"]["uri"] == uri
+            && msg["params"]["diagnostics"]
+                .as_array()
+                .map(|d| d.is_empty())
+                .unwrap_or(false)
+        {
+            saw_cleared = true;
+            break;
+        }
+    }
+    assert!(
+        saw_cleared,
+        "expected an empty diagnostic (cleared) after fixing the link"
     );
 }
