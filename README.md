@@ -1,6 +1,8 @@
 # Downlint
 
-Rust implementation of a Markdown checker and LSP inspired by Marksman.
+A Rust Markdown checker and language server for wiki-link note vaults. The LSP
+surface is inspired by Marksman; the resolution model (Obsidian-style
+`[[wiki-links]]`, mounts, URI schemas) is downlint's own.
 
 ## Configuration
 
