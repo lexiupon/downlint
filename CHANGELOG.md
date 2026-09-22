@@ -7,6 +7,38 @@ Pre-1.0 versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.7.0] — Obsidian-Compatible Path Resolution
+
+Wiki link path resolution now matches Obsidian's documented, deterministic rules:
+bare `[[folder/note]]` links resolve against the vault root, the `.md` suffix is
+optional, and `.`/`..` are normalized. This fixes false-positive broken links, the
+dot-relative attachment misclassification, and silently-unvalidated anchors.
+
+### Changed
+
+- **Wiki path links now resolve Obsidian-compatibly** (behavior change, RFC 0013). The
+  resolution base is decided by the target's prefix, with no fallback:
+  - `./…` / `../…` → the containing document's directory
+  - `/…` and **bare `path/file`** (wiki) → the workspace root
+  - markdown links keep standard source-relative semantics
+  - `.`/`..` are normalized lexically before comparison
+- **`.md` is optional** for wiki path targets (a `.md` document matches a candidate with
+  or without the suffix; non-`.md` files require the extension). This fixes the
+  previously-dead extensionless matching rule.
+- **Dot-relative wiki links resolve as documents** (previously misclassified as
+  attachments), and their anchors are now validated (new `link/broken-anchor` possible
+  where a section is missing).
+- **Mount prefixes** are reachable from bare wiki `path/file` targets (like `/…`
+  targets).
+- **`downlint resolve`**: `--from` now only affects source-relative (`./…`/`../…`)
+  targets; bare wiki `path/file` and `/…` targets are root-relative and ignore `--from`.
+
+### Impact
+
+Some links that only "worked" under the previous source-relative interpretation of bare
+wiki paths now report `link/broken` (they were false negatives against Obsidian).
+Extensionless and dot-relative wiki path links now resolve.
+
 ## [0.6.0] — Target Resolution Query
 
 New `downlint resolve` subcommand: given a link target, it reports every
