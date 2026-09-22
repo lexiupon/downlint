@@ -186,11 +186,25 @@ fn handle_request(
             publish_diagnostics(state, stdout);
         }
         "textDocument/completion" => {
+            // Honor the [completion] config (style + candidate cap) instead of
+            // hardcoding the defaults. Falls back to the defaults when no
+            // workspace is loaded (in which case with_text_position returns
+            // empty anyway, so the values are unused).
+            let (style, max_candidates) = state
+                .workspace
+                .as_ref()
+                .map(|ws| {
+                    (
+                        ws.config.completion.wiki.style,
+                        ws.config.completion.candidates,
+                    )
+                })
+                .unwrap_or((crate::config::WikiCompletionStyle::TitleSlug, 50));
             let result = with_text_position(
                 state,
                 request.params.as_ref(),
                 |graph, path, text, line, character| {
-                    handlers::completion(graph, path, text, line, character)
+                    handlers::completion(graph, path, text, line, character, style, max_candidates)
                 },
             )
             .unwrap_or_else(|| json!([]));

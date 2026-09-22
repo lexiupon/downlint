@@ -19,6 +19,8 @@ pub fn completion(
     text: &Text,
     line: u32,
     character: u32,
+    style: crate::config::WikiCompletionStyle,
+    max_candidates: usize,
 ) -> Value {
     let offset = match text.byte_offset(
         &lsp_types::Position::new(line, character),
@@ -32,8 +34,8 @@ pub fn completion(
         source_text: text.as_str().to_string(),
         cursor_offset: offset,
         graph: graph.clone(),
-        style: crate::config::WikiCompletionStyle::TitleSlug,
-        max_candidates: 50,
+        style,
+        max_candidates,
     });
     json!(
         items
