@@ -7,6 +7,40 @@ Pre-1.0 versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.8.0] — Mounts/Schemas Config Field Rename
+
+The `[[mounts]]` and `[[schemas]]` keys are renamed so each is self-evident and the two
+sections no longer share a vocabulary. No behavior change — this is a config-key rename.
+
+### Changed (breaking)
+
+| Feature | old key | new key |
+|---|---|---|
+| mount disk folder | `root` | `path` |
+| mount virtual path | `prefix` | `as` |
+| schema URI | `prefix` | `uri` |
+| schema disk folder | `root` | `to` |
+
+A mount is a disk `path` exposed `as` a virtual path; a schema is a `uri` that resolves
+`to` a disk folder. `lint`, `auto_verify`, and `verify_cmd` are unchanged.
+
+**Migration** — existing `.downlint.toml` files using the old keys fail to parse
+(`deny_unknown_fields`); rename the keys mechanically:
+
+```diff
+ [[mounts]]
+-root = "~/kb"
+-prefix = "/kb"
++path = "~/kb"
++as = "/kb"
+
+ [[schemas]]
+-prefix = "onedrive://xyz/"
+-root = "downloads/onedrive"
++uri = "onedrive://xyz/"
++to = "downloads/onedrive"
+```
+
 ## [0.7.0] — Obsidian-Compatible Path Resolution
 
 Wiki link path resolution now matches Obsidian's documented, deterministic rules:
