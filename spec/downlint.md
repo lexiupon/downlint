@@ -235,9 +235,12 @@ surface:
 
 - **Lifecycle**: `initialize`, `initialized`, `shutdown`, `exit`.
 - **Text sync**: `didOpen`, `didChange`, `didClose` (full-text semantics).
-- **Diagnostics**: push via `publishDiagnostics` on open/change/close and after
-  `didRenameFiles`; each diagnostic carries `source: "downlint"` so editors can
-  attribute it alongside other servers (e.g. Marksman).
+- **Diagnostics**: pushed via `publishDiagnostics` after a **debounced background
+  re-index** (~300 ms after the last edit — the re-index runs off the request loop so
+  typing and completion stay responsive on large workspaces) and after
+  `didRenameFiles`; the initial index at `initialize` is synchronous. Each diagnostic
+  carries `source: "downlint"` so editors can attribute it alongside other servers
+  (e.g. Marksman).
 - **Completion**: wiki document (`[[foo`), wiki heading (`[[#`), and tag (`#`) prompts;
   trigger characters `[`, `#`, `(`; case-insensitive subsequence matching.
 - **Code intelligence**: `hover`, `definition`, `references`, `documentSymbol`.

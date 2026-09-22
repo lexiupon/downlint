@@ -29,11 +29,11 @@ pub fn completion(
         Ok(offset) => offset,
         Err(_) => return json!([]),
     };
-    let items = complete_at(CompletionParams {
+    let items = complete_at(&CompletionParams {
         path,
         source_text: text.as_str().to_string(),
         cursor_offset: offset,
-        graph: graph.clone(),
+        graph, // &ConnectionGraph — no clone (RFC 0017)
         style,
         max_candidates,
     });

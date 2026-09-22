@@ -65,6 +65,14 @@ impl LspClient {
             }
         }
     }
+
+    /// Read and parse the next single LSP message (a response or a
+    /// notification), in arrival order. Used to assert the *ordering* of
+    /// messages (RFC 0017).
+    fn next_message(&mut self) -> serde_json::Value {
+        let body = read_frame(&mut self.stdout).expect("server closed stdout");
+        serde_json::from_str(&body).unwrap()
+    }
 }
 
 impl Drop for LspClient {
@@ -202,5 +210,79 @@ fn lsp_completion_defaults_to_title_slug() {
     assert!(
         !texts.contains(&"beta".to_string()),
         "file-stem 'beta' must not appear under the default title-slug style, got {texts:?}"
+    );
+}
+
+/// RFC 0017: a completion request must be served WITHOUT waiting for the
+/// post-edit re-index. Before the fix, `didChange` triggered an inline
+/// `resolve_links` that blocked the request loop, so the completion response
+/// arrived only *after* the re-index's `publishDiagnostics`. Now the re-index
+/// runs in a debounced background thread, so the completion response is written
+/// immediately — before any post-edit diagnostics.
+///
+/// This is an *ordering* assertion (not a timing one), so it holds even on a
+/// small vault: after a `didChange`, the completion response must be the first
+/// message, not a `publishDiagnostics`.
+#[test]
+fn lsp_completion_not_blocked_by_reindex() {
+    let temp = setup_workspace("");
+    let root = temp.path();
+    let alpha = root.join("notes/alpha.md");
+    let alpha_text = fs::read_to_string(&alpha).unwrap();
+
+    let mut client = LspClient::spawn();
+    client.send("initialize", Some(1), json!({ "rootUri": file_uri(root) }));
+    let init = client.response(1);
+    assert!(init.get("result").is_some(), "initialize failed: {init}");
+    client.send("initialized", None, json!({}));
+
+    // Flush the initial diagnostics with a marker request: reading until the
+    // marker response consumes every `publishDiagnostics` the `initialized`
+    // handler emitted, leaving the stream clear.
+    client.send(
+        "textDocument/completion",
+        Some(99),
+        json!({
+            "textDocument": { "uri": file_uri(&alpha) },
+            "position": { "line": 2, "character": 2 }
+        }),
+    );
+    client.response(99);
+
+    // Edit the document (triggers the background re-index) and immediately
+    // request completion.
+    client.send(
+        "textDocument/didChange",
+        None,
+        json!({
+            "textDocument": { "uri": file_uri(&alpha), "version": 2 },
+            "contentChanges": [{ "text": alpha_text }]
+        }),
+    );
+    client.send(
+        "textDocument/completion",
+        Some(2),
+        json!({
+            "textDocument": { "uri": file_uri(&alpha) },
+            "position": { "line": 2, "character": 2 }
+        }),
+    );
+
+    // The completion response must arrive BEFORE any post-edit
+    // `publishDiagnostics`. Read in arrival order until the completion
+    // response; assert no diagnostic was seen first.
+    let mut saw_diagnostic_before_completion = false;
+    loop {
+        let value = client.next_message();
+        if value.get("id").and_then(|v| v.as_u64()) == Some(2) {
+            break;
+        }
+        if value.get("method").and_then(|m| m.as_str()) == Some("textDocument/publishDiagnostics") {
+            saw_diagnostic_before_completion = true;
+        }
+    }
+    assert!(
+        !saw_diagnostic_before_completion,
+        "completion was blocked behind a post-edit re-index (a publishDiagnostics arrived before the completion response)"
     );
 }

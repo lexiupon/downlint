@@ -3,30 +3,41 @@ pub mod handlers;
 pub mod types;
 
 use crate::lsp::types::{RpcError, RpcRequest, RpcResponse};
-use crate::resolution::{ResolveInput, resolve_links};
+use crate::resolution::{ConnectionGraph, ResolveInput, UriOptions, resolve_links};
 use crate::utils::{PositionEncoding, Text, Workspace, WorkspaceInput, discover_workspace};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 use url::Url;
+
+/// Debounce window for the background reindexer: a re-index fires this long
+/// after the *last* edit, so a burst of keystrokes coalesces into one pass
+/// (RFC 0017).
+const REINDEX_DEBOUNCE: Duration = Duration::from_millis(300);
 
 #[derive(Default)]
 struct ServerState {
     initialized: bool,
     shutdown_requested: bool,
-    workspace: Option<Workspace>,
-    graph: Option<crate::resolution::ConnectionGraph>,
     open_documents: HashMap<Url, String>,
-    uri_opts: crate::resolution::UriOptions,
-    /// True while a `resolve_links` pass is in flight. Rename operations
-    /// (RFC 0009) must reject while this is set — the `ConnectionGraph`
-    /// would otherwise be in an inconsistent intermediate state. Set by
-    /// `initialize_state` / `refresh_graph` / `refresh_workspace_doc`
-    /// around the `resolve_links` call, cleared on return.
-    indexing: bool,
+    uri_opts: UriOptions,
+    // Shared with the background reindexer (RFC 0017). Each is wrapped so the
+    // request loop and the reindexer never touch the same data without a lock.
+    workspace: Arc<Mutex<Option<Workspace>>>,
+    graph: Arc<Mutex<Option<ConnectionGraph>>>,
+    /// Serializes writes to `io::stdout()` so the loop and the reindexer never
+    /// interleave a `Content-Length` header with another message's body.
+    stdout_guard: Arc<Mutex<()>>,
+    // Background reindexer handles (None until `initialize`).
+    reindex_tx: Option<mpsc::Sender<()>>,
+    reindex_shutdown: Option<mpsc::Sender<()>>,
+    reindex_handle: Option<JoinHandle<()>>,
 }
-
 
 pub async fn run_server(
     _verbose: u8,
@@ -39,16 +50,17 @@ pub async fn run_server(
 
     let stdin = io::stdin();
     let mut reader = io::BufReader::new(stdin.lock());
-    let mut stdout = io::stdout().lock();
-    let mut state = ServerState::default();
-    state.uri_opts = uri_opts;
+    let mut state = ServerState {
+        uri_opts,
+        ..Default::default()
+    };
 
     while let Some(message) = read_message(&mut reader) {
         let request = match serde_json::from_slice::<RpcRequest>(&message) {
             Ok(request) => request,
             Err(error) => {
                 write_response(
-                    &mut stdout,
+                    state.stdout_guard.as_ref(),
                     RpcResponse {
                         jsonrpc: "2.0",
                         id: None,
@@ -62,25 +74,23 @@ pub async fn run_server(
                 continue;
             }
         };
-        let code = handle_request(&mut state, &mut stdout, request);
+        let code = handle_request(&mut state, request);
         if let Some(code) = code {
+            stop_reindexer(&mut state);
             return code;
         }
     }
 
+    stop_reindexer(&mut state);
     if state.shutdown_requested { 0 } else { 1 }
 }
 
-fn handle_request(
-    state: &mut ServerState,
-    stdout: &mut impl Write,
-    request: RpcRequest,
-) -> Option<i32> {
+fn handle_request(state: &mut ServerState, request: RpcRequest) -> Option<i32> {
     let method = request.method.unwrap_or_default();
     if !state.initialized && !matches!(method.as_str(), "initialize" | "shutdown" | "exit") {
         if request.id.is_some() {
             write_response(
-                stdout,
+                state.stdout_guard.as_ref(),
                 RpcResponse {
                     jsonrpc: "2.0",
                     id: request.id,
@@ -145,7 +155,7 @@ fn handle_request(
                 }
             });
             write_response(
-                stdout,
+                state.stdout_guard.as_ref(),
                 RpcResponse {
                     jsonrpc: "2.0",
                     id: request.id,
@@ -158,12 +168,12 @@ fn handle_request(
             }
         }
         "initialized" => {
-            publish_diagnostics(state, stdout);
+            publish_current_diagnostics(state);
         }
         "shutdown" => {
             state.shutdown_requested = true;
             write_response(
-                stdout,
+                state.stdout_guard.as_ref(),
                 RpcResponse {
                     jsonrpc: "2.0",
                     id: request.id,
@@ -173,17 +183,18 @@ fn handle_request(
             );
         }
         "exit" => return Some(if state.shutdown_requested { 0 } else { 1 }),
+        // RFC 0017: edits no longer re-index inline. They update the shared
+        // workspace text and signal the debounced background reindexer, which
+        // runs `resolve_links` off the request loop and publishes the
+        // resulting diagnostics.
         "textDocument/didOpen" => {
             apply_open_change(state, request.params.as_ref());
-            publish_diagnostics(state, stdout);
         }
         "textDocument/didChange" => {
             apply_text_change(state, request.params.as_ref());
-            publish_diagnostics(state, stdout);
         }
         "textDocument/didClose" => {
             apply_close_change(state, request.params.as_ref());
-            publish_diagnostics(state, stdout);
         }
         "textDocument/completion" => {
             // Honor the [completion] config (style + candidate cap) instead of
@@ -192,6 +203,8 @@ fn handle_request(
             // empty anyway, so the values are unused).
             let (style, max_candidates) = state
                 .workspace
+                .lock()
+                .unwrap()
                 .as_ref()
                 .map(|ws| {
                     (
@@ -208,26 +221,26 @@ fn handle_request(
                 },
             )
             .unwrap_or_else(|| json!([]));
-            write_response(stdout, ok_response(request.id, result));
+            write_response(state.stdout_guard.as_ref(), ok_response(request.id, result));
         }
         "textDocument/hover" => {
             let result = with_offset(state, request.params.as_ref(), |graph, path, _, offset| {
                 handlers::hover(graph, path, offset).unwrap_or(Value::Null)
             })
             .unwrap_or(Value::Null);
-            write_response(stdout, ok_response(request.id, result));
+            write_response(state.stdout_guard.as_ref(), ok_response(request.id, result));
         }
         "textDocument/definition" => {
             let result = with_offset(state, request.params.as_ref(), handlers::definition)
                 .unwrap_or_else(|| json!([]));
-            write_response(stdout, ok_response(request.id, result));
+            write_response(state.stdout_guard.as_ref(), ok_response(request.id, result));
         }
         "textDocument/references" => {
             let result = with_offset(state, request.params.as_ref(), |graph, path, _, offset| {
                 handlers::references(graph, path, offset)
             })
             .unwrap_or_else(|| json!([]));
-            write_response(stdout, ok_response(request.id, result));
+            write_response(state.stdout_guard.as_ref(), ok_response(request.id, result));
         }
         "textDocument/documentSymbol" => {
             let path = request
@@ -240,11 +253,13 @@ fn handle_request(
                 .and_then(|path| {
                     state
                         .graph
+                        .lock()
+                        .unwrap()
                         .as_ref()
                         .map(|graph| handlers::document_symbols(graph, path))
                 })
                 .unwrap_or_else(|| json!([]));
-            write_response(stdout, ok_response(request.id, result));
+            write_response(state.stdout_guard.as_ref(), ok_response(request.id, result));
         }
         // RFC 0009 — Rename & Link Refactor.
         //
@@ -274,7 +289,7 @@ fn handle_request(
                 }
             })
             .unwrap_or(Value::Null);
-            write_response(stdout, ok_response(request.id, result));
+            write_response(state.stdout_guard.as_ref(), ok_response(request.id, result));
         }
         "textDocument/rename" => {
             let result = with_rename_input(state, request.params.as_ref(), |graph, path, text, offset, new_name| {
@@ -287,25 +302,25 @@ fn handle_request(
                 Some(crate::lsp::edit::build_single_edit_workspace_edit(text, &uri, range, new_name))
             })
             .unwrap_or(Value::Null);
-            write_response(stdout, ok_response(request.id, result));
+            write_response(state.stdout_guard.as_ref(), ok_response(request.id, result));
         }
         "textDocument/codeAction" => {
             let result = with_code_action_input(state, request.params.as_ref(), |graph, path, text, range| {
                 handlers::code_actions(graph, path, text, range)
             })
             .unwrap_or_default();
-            write_response(stdout, ok_response(request.id, Value::Array(result)));
+            write_response(state.stdout_guard.as_ref(), ok_response(request.id, Value::Array(result)));
         }
         "workspace/didRenameFiles" => {
             // RFC 0009 Phase 4 — react after a file rename by updating
             // the graph in-place (path fields + reference destinations)
             // and re-publishing diagnostics for touched documents.
-            handle_did_rename_files(state, stdout, request.params.as_ref());
+            handle_did_rename_files(state, request.params.as_ref());
         }
         _ => {
             if request.id.is_some() {
                 write_response(
-                    stdout,
+                    state.stdout_guard.as_ref(),
                     RpcResponse {
                         jsonrpc: "2.0",
                         id: request.id,
@@ -330,46 +345,41 @@ fn initialize_state(state: &mut ServerState, params: Option<&Value>) -> Option<P
     let workspace =
         discover_workspace(WorkspaceInput::Path(root.clone()), Some(root.as_path())).ok()?;
     let mut input = ResolveInput::from_workspace(&workspace);
-    // Plumb the opts through so refresh_graph reuses them across LSP events.
+    // Plumb the opts through so the background reindexer reuses them (RFC 0017).
     input.uri_opts = state.uri_opts.clone();
-    state.indexing = true;
+    // The initial index is synchronous: the client is waiting for the
+    // `initialize` response, so the first graph must be ready before we reply.
     let graph = resolve_links(input);
-    state.indexing = false;
-    state.workspace = Some(workspace);
-    state.graph = Some(graph);
+    *state.workspace.lock().unwrap() = Some(workspace);
+    *state.graph.lock().unwrap() = Some(graph);
     state.initialized = true;
+    // Stop any existing reindexer (re-initialization) before spawning a new one.
+    stop_reindexer(state);
+    spawn_reindexer(state);
     Some(root)
 }
 
-/// Returns true while a `resolve_links` pass is in flight. Rename handlers
-/// (RFC 0009) consult this to refuse work during indexing — a half-built
-/// graph could produce incorrect rewrites. Stable to call from any thread
-/// that already holds `&ServerState` (the underlying bool is mutated only
-/// synchronously by the LSP event loop today).
-#[allow(dead_code)] // Wired up in RFC 0009 Phase 1 (rename handlers).
-fn is_indexing(state: &ServerState) -> bool {
-    state.indexing
-}
-
-fn publish_diagnostics(state: &ServerState, stdout: &mut impl Write) {
-    let Some(graph) = &state.graph else {
-        return;
-    };
-    if state.workspace.is_none() {
-        return;
-    }
+fn publish_diagnostics_graph(graph: &ConnectionGraph, stdout_guard: &Mutex<()>) {
     for (path, diagnostics) in handlers::diagnostics(graph) {
         let Some(uri) = Url::from_file_path(&path).ok() else {
             continue;
         };
         write_notification(
-            stdout,
+            stdout_guard,
             "textDocument/publishDiagnostics",
             json!({
                 "uri": uri.to_string(),
                 "diagnostics": diagnostics,
             }),
         );
+    }
+}
+
+/// Publish diagnostics for the current graph (request-loop convenience wrapper).
+fn publish_current_diagnostics(state: &ServerState) {
+    let graph = state.graph.lock().unwrap();
+    if let Some(graph) = graph.as_ref() {
+        publish_diagnostics_graph(graph, state.stdout_guard.as_ref());
     }
 }
 
@@ -389,7 +399,8 @@ fn apply_open_change(state: &mut ServerState, params: Option<&Value>) {
         .map(str::to_string);
     if let (Some(uri), Some(text)) = (uri, text) {
         state.open_documents.insert(uri.clone(), text);
-        refresh_workspace_doc(state, &uri);
+        update_workspace_doc_text(state, &uri);
+        signal_reindex(state);
     }
 }
 
@@ -411,7 +422,8 @@ fn apply_text_change(state: &mut ServerState, params: Option<&Value>) {
         .map(str::to_string);
     if let (Some(uri), Some(text)) = (uri, change) {
         state.open_documents.insert(uri.clone(), text);
-        refresh_workspace_doc(state, &uri);
+        update_workspace_doc_text(state, &uri);
+        signal_reindex(state);
     }
 }
 
@@ -423,43 +435,44 @@ fn apply_close_change(state: &mut ServerState, params: Option<&Value>) {
         return;
     };
     state.open_documents.remove(&uri);
-    if let Some(workspace) = &mut state.workspace
-        && let Ok(path) = uri.to_file_path()
-        && let Some(doc) = workspace
-            .folder
-            .documents
-            .iter_mut()
-            .find(|doc| doc.path == path)
+    // Restore the document's text from disk (the editor's unsaved changes are
+    // discarded on close).
+    if let Ok(path) = uri.to_file_path()
         && let Ok(text) = std::fs::read_to_string(&path)
     {
-        doc.text = Text::new(text);
+        let mut guard = state.workspace.lock().unwrap();
+        if let Some(ws) = guard.as_mut()
+            && let Some(doc) = ws.folder.documents.iter_mut().find(|doc| doc.path == path)
+        {
+            doc.text = Text::new(text);
+        }
     }
-    refresh_graph(state);
+    signal_reindex(state);
 }
 
-fn refresh_workspace_doc(state: &mut ServerState, uri: &Url) {
-    if let Some(workspace) = &mut state.workspace
-        && let Ok(path) = uri.to_file_path()
-        && let Some(text) = state.open_documents.get(uri)
-        && let Some(doc) = workspace
-            .folder
-            .documents
-            .iter_mut()
-            .find(|doc| doc.path == path)
+/// Update a single document's text in the shared workspace from the
+/// editor-provided text in `open_documents`. Holds the workspace lock only for
+/// the brief mutation (RFC 0017).
+fn update_workspace_doc_text(state: &ServerState, uri: &Url) {
+    let Some(text) = state.open_documents.get(uri) else {
+        return;
+    };
+    let Ok(path) = uri.to_file_path() else {
+        return;
+    };
+    let mut guard = state.workspace.lock().unwrap();
+    if let Some(ws) = guard.as_mut()
+        && let Some(doc) = ws.folder.documents.iter_mut().find(|doc| doc.path == path)
     {
         doc.text = Text::new(text.clone());
     }
-    refresh_graph(state);
 }
 
-fn refresh_graph(state: &mut ServerState) {
-    if let Some(workspace) = &state.workspace {
-        let mut input = ResolveInput::from_workspace(workspace);
-        input.uri_opts = state.uri_opts.clone();
-        state.indexing = true;
-        let graph = resolve_links(input);
-        state.indexing = false;
-        state.graph = Some(graph);
+/// Signal the background reindexer that the workspace changed (RFC 0017). A
+/// no-op until `initialize` has spawned the reindexer.
+fn signal_reindex(state: &ServerState) {
+    if let Some(tx) = &state.reindex_tx {
+        let _ = tx.send(());
     }
 }
 
@@ -468,13 +481,14 @@ fn with_offset<T>(
     params: Option<&Value>,
     handler: impl FnOnce(&crate::resolution::ConnectionGraph, &PathBuf, &Text, usize) -> T,
 ) -> Option<T> {
-    let graph = state.graph.as_ref()?;
+    let graph_guard = state.graph.lock().unwrap();
+    let graph = graph_guard.as_ref()?;
     let uri = params
         .and_then(path_from_text_document)
         .and_then(|value| Url::parse(value.as_str()).ok())?;
     let path = uri.to_file_path().ok()?;
-    let document = state
-        .workspace
+    let workspace_guard = state.workspace.lock().unwrap();
+    let document = workspace_guard
         .as_ref()?
         .folder
         .documents
@@ -498,13 +512,14 @@ fn with_text_position<T>(
     params: Option<&Value>,
     handler: impl FnOnce(&crate::resolution::ConnectionGraph, PathBuf, &Text, u32, u32) -> T,
 ) -> Option<T> {
-    let graph = state.graph.as_ref()?;
+    let graph_guard = state.graph.lock().unwrap();
+    let graph = graph_guard.as_ref()?;
     let uri = params
         .and_then(path_from_text_document)
         .and_then(|value| Url::parse(value.as_str()).ok())?;
     let path = uri.to_file_path().ok()?;
-    let document = state
-        .workspace
+    let workspace_guard = state.workspace.lock().unwrap();
+    let document = workspace_guard
         .as_ref()?
         .folder
         .documents
@@ -525,13 +540,14 @@ fn with_rename_input<T>(
     params: Option<&Value>,
     handler: impl FnOnce(&crate::resolution::ConnectionGraph, &PathBuf, &Text, usize, &str) -> Option<T>,
 ) -> Option<T> {
-    let graph = state.graph.as_ref()?;
+    let graph_guard = state.graph.lock().unwrap();
+    let graph = graph_guard.as_ref()?;
     let params = params?;
     let uri = path_from_text_document(params)
         .and_then(|value| Url::parse(value.as_str()).ok())?;
     let path = uri.to_file_path().ok()?;
-    let document = state
-        .workspace
+    let workspace_guard = state.workspace.lock().unwrap();
+    let document = workspace_guard
         .as_ref()?
         .folder
         .documents
@@ -555,7 +571,7 @@ fn with_rename_input<T>(
 /// in-place and re-publish diagnostics for the touched documents. O(r)
 /// per rename where r is the number of references to the moved file
 /// (RFC §"Performance").
-fn handle_did_rename_files(state: &mut ServerState, stdout: &mut impl Write, params: Option<&Value>) {
+fn handle_did_rename_files(state: &mut ServerState, params: Option<&Value>) {
     let Some(params) = params else {
         return;
     };
@@ -587,13 +603,16 @@ fn handle_did_rename_files(state: &mut ServerState, stdout: &mut impl Write, par
             to: new_path,
         });
     }
-    if let Some(graph) = state.graph.as_mut() {
-        handlers::workspace::apply_file_renames(graph, &renames);
+    {
+        let mut guard = state.graph.lock().unwrap();
+        if let Some(graph) = guard.as_mut() {
+            handlers::workspace::apply_file_renames(graph, &renames);
+        }
     }
     // Re-publish diagnostics for the affected documents. The graph
     // mutation above already touched the relevant state; this surfaces
     // it to the editor.
-    publish_diagnostics(state, stdout);
+    publish_current_diagnostics(state);
 }
 
 /// Resolve the LSP `textDocument/codeAction` request shape: textDocument
@@ -603,13 +622,14 @@ fn with_code_action_input<T>(
     params: Option<&Value>,
     handler: impl FnOnce(&crate::resolution::ConnectionGraph, &PathBuf, &Text, crate::utils::ByteRange) -> T,
 ) -> Option<T> {
-    let graph = state.graph.as_ref()?;
+    let graph_guard = state.graph.lock().unwrap();
+    let graph = graph_guard.as_ref()?;
     let params = params?;
     let uri = path_from_text_document(params)
         .and_then(|value| Url::parse(value.as_str()).ok())?;
     let path = uri.to_file_path().ok()?;
-    let document = state
-        .workspace
+    let workspace_guard = state.workspace.lock().unwrap();
+    let document = workspace_guard
         .as_ref()?
         .folder
         .documents
@@ -680,23 +700,29 @@ fn ok_response(id: Option<Value>, result: Value) -> RpcResponse<'static> {
     }
 }
 
-fn write_notification(stdout: &mut impl Write, method: &str, params: Value) {
+fn write_notification(guard: &Mutex<()>, method: &str, params: Value) {
     let message = json!({
         "jsonrpc": "2.0",
         "method": method,
         "params": params,
     });
-    write_message(stdout, &message);
+    write_message(guard, &message);
 }
 
-fn write_response(stdout: &mut impl Write, response: RpcResponse<'_>) {
+fn write_response(guard: &Mutex<()>, response: RpcResponse<'_>) {
     let message = serde_json::to_value(response).unwrap_or_else(|_| json!({}));
-    write_message(stdout, &message);
+    write_message(guard, &message);
 }
 
-fn write_message(stdout: &mut impl Write, value: &Value) {
+/// Write one LSP message to `io::stdout()`, atomically with respect to the
+/// other writer (the background reindexer). The `Content-Length` header, body,
+/// and flush all happen while holding `guard`, so two threads never interleave
+/// a header with another message's body (RFC 0017).
+fn write_message(guard: &Mutex<()>, value: &Value) {
     let body = serde_json::to_vec(value).unwrap_or_default();
-    let _ = write!(stdout, "Content-Length: {}\r\n\r\n", body.len());
+    let _guard = guard.lock().unwrap();
+    let mut stdout = io::stdout();
+    let _ = write!(&mut stdout, "Content-Length: {}\r\n\r\n", body.len());
     let _ = stdout.write_all(&body);
     let _ = stdout.flush();
 }
@@ -721,42 +747,135 @@ fn read_message(reader: &mut impl BufRead) -> Option<Vec<u8>> {
     Some(body)
 }
 
+// --- Background reindexer (RFC 0017) -------------------------------------
+
+/// Spawn the debounced background reindexer. Called from `initialize_state`
+/// after the initial (synchronous) index. Clones the shared `Arc`s and a copy
+/// of `uri_opts` into the new thread.
+fn spawn_reindexer(state: &mut ServerState) {
+    let (reindex_tx, reindex_rx) = mpsc::channel::<()>();
+    let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
+    let workspace = Arc::clone(&state.workspace);
+    let graph = Arc::clone(&state.graph);
+    let stdout_guard = Arc::clone(&state.stdout_guard);
+    let uri_opts = state.uri_opts.clone();
+    let handle = thread::spawn(move || {
+        reindexer_loop(
+            workspace,
+            graph,
+            stdout_guard,
+            uri_opts,
+            reindex_rx,
+            shutdown_rx,
+        );
+    });
+    state.reindex_tx = Some(reindex_tx);
+    state.reindex_shutdown = Some(shutdown_tx);
+    state.reindex_handle = Some(handle);
+}
+
+/// Signal the reindexer to stop and join it. Idempotent and safe to call when
+/// no reindexer is running. Called on every `run_server` exit path and before
+/// re-spawning on re-initialization.
+fn stop_reindexer(state: &mut ServerState) {
+    if let Some(tx) = state.reindex_shutdown.take() {
+        let _ = tx.send(());
+    }
+    if let Some(handle) = state.reindex_handle.take() {
+        let _ = handle.join();
+    }
+    state.reindex_tx = None;
+}
+
+/// Debounce loop: coalesce a burst of edit signals into one re-index that fires
+/// `REINDEX_DEBOUNCE` after the *last* signal. Exits on shutdown or when the
+/// signal channel is disconnected.
+fn reindexer_loop(
+    workspace: Arc<Mutex<Option<Workspace>>>,
+    graph: Arc<Mutex<Option<ConnectionGraph>>>,
+    stdout_guard: Arc<Mutex<()>>,
+    uri_opts: UriOptions,
+    reindex_rx: mpsc::Receiver<()>,
+    shutdown_rx: mpsc::Receiver<()>,
+) {
+    let mut dirty = false;
+    loop {
+        match reindex_rx.recv_timeout(REINDEX_DEBOUNCE) {
+            Ok(()) => dirty = true, // an edit happened; reset the window
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if dirty {
+                    perform_reindex(&workspace, &graph, &stdout_guard, &uri_opts);
+                    dirty = false;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        if shutdown_rx.try_recv().is_ok() {
+            break;
+        }
+    }
+}
+
+/// Perform one re-index: snapshot the workspace (brief lock), run
+/// `resolve_links` with NO lock held, swap the graph in, then publish the
+/// resulting diagnostics.
+fn perform_reindex(
+    workspace: &Arc<Mutex<Option<Workspace>>>,
+    graph: &Arc<Mutex<Option<ConnectionGraph>>>,
+    stdout_guard: &Arc<Mutex<()>>,
+    uri_opts: &UriOptions,
+) {
+    let input = {
+        let ws = workspace.lock().unwrap();
+        ws.as_ref().map(|ws| {
+            let mut input = ResolveInput::from_workspace(ws);
+            input.uri_opts = uri_opts.clone();
+            input
+        })
+    };
+    let Some(input) = input else {
+        return;
+    };
+    let new_graph = resolve_links(input);
+    *graph.lock().unwrap() = Some(new_graph);
+    if let Some(current) = graph.lock().unwrap().as_ref() {
+        publish_diagnostics_graph(current, stdout_guard.as_ref());
+    }
+}
+
 #[cfg(test)]
-mod indexing_guard_tests {
+mod reindexer_tests {
     use super::*;
 
-    /// Default ServerState reports `is_indexing == false`. The guard is
-    /// additive: every existing LSP entry point must continue to operate as
-    /// if no guard existed when no `resolve_links` pass is in flight.
+    /// `perform_reindex` with no workspace is a no-op: the graph cell is left
+    /// untouched (still `None`) and nothing is written to stdout.
     #[test]
-    fn default_state_is_not_indexing() {
+    fn perform_reindex_without_workspace_is_noop() {
+        let workspace: Arc<Mutex<Option<Workspace>>> = Arc::new(Mutex::new(None));
+        let graph: Arc<Mutex<Option<ConnectionGraph>>> = Arc::new(Mutex::new(None));
+        let stdout_guard: Arc<Mutex<()>> = Arc::new(Mutex::new(()));
+        let uri_opts = UriOptions::default();
+        perform_reindex(&workspace, &graph, &stdout_guard, &uri_opts);
+        assert!(graph.lock().unwrap().is_none());
+    }
+
+    /// A default `ServerState` has no reindexer running (all handles `None`)
+    /// and an empty graph cell — the shared-state guard is additive.
+    #[test]
+    fn default_state_has_no_reindexer() {
         let state = ServerState::default();
-        assert!(!is_indexing(&state));
+        assert!(state.reindex_tx.is_none());
+        assert!(state.reindex_shutdown.is_none());
+        assert!(state.reindex_handle.is_none());
+        assert!(state.graph.lock().unwrap().is_none());
     }
 
-    /// Manually toggling the flag (which is what `initialize_state` /
-    /// `refresh_graph` do around `resolve_links`) is observed by
-    /// `is_indexing`. This is the contract rename handlers will rely on.
+    /// `stop_reindexer` is a safe no-op when no reindexer is running (it must
+    /// not panic or block on a missing handle).
     #[test]
-    fn manual_flip_is_observed() {
+    fn stop_reindexer_without_running_is_noop() {
         let mut state = ServerState::default();
-        assert!(!is_indexing(&state));
-        state.indexing = true;
-        assert!(is_indexing(&state));
-        state.indexing = false;
-        assert!(!is_indexing(&state));
-    }
-
-    /// `refresh_graph` on a default (uninitialized) state is a no-op: it
-    /// guards on `state.workspace` being set. The indexing flag must stay
-    /// `false` — the guard must not "leak" `true` from a pass that never
-    /// ran. This is a regression test against accidentally flipping the
-    /// flag outside the `if let` block.
-    #[test]
-    fn refresh_graph_without_workspace_leaves_flag_clear() {
-        let mut state = ServerState::default();
-        // No workspace set — the function takes the early return path.
-        refresh_graph(&mut state);
-        assert!(!is_indexing(&state));
+        stop_reindexer(&mut state);
+        assert!(state.reindex_handle.is_none());
     }
 }
