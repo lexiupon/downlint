@@ -250,7 +250,7 @@ candidate (per RES-02, `.`/`..` normalized) is compared against the document's
 filesystem path, with the **`.md` suffix optional for wiki targets** (a `.md`
 document matches a candidate with or without the `.md` suffix; a non-`.md` file
 requires the exact path). A **root-relative** target (RES-02) additionally matches
-the document's namespace path, which is how a mount `prefix` (a virtual directory
+the document's namespace path, which is how a mount `as` (a virtual directory
 at the workspace root) is reached (RFC 0010). A path-like wiki target may
 additionally fall back to a title-slug match (so a mounted document can be reached
 by an explicit path). Markdown path targets match exactly (extension required).
@@ -281,9 +281,9 @@ resolution.
 1. Strip trailing slashes; resolve the path per RES-02.
 2. If a directory exists at the resolved path, the link resolves **to the directory
    itself**. There is no index-file lookup; an empty directory is a valid target.
-3. For workspace-absolute targets only, mount roots are also tried (direct join, then
-   matching the first path component against the mount root's own name, then via a mount's
-   `prefix`). The first existing directory wins; folder resolution never produces ambiguity.
+3. For workspace-absolute targets only, mount paths are also tried (direct join, then
+   matching the first path component against the mount path's own name, then via a mount's
+   `as`). The first existing directory wins; folder resolution never produces ambiguity.
 4. Otherwise the link is broken (`link/broken`) — including when the path exists but is a file.
 
 **Folder link + heading** (`[[dir/#h]]`, `[x](dir/#h)`) is invalid: the link is broken
@@ -355,25 +355,25 @@ Tests: `explicit_file_like_targets_resolve_as_attachments_without_config`,
 
 ### 3.7 RES-07 — Schemes (External URI Mapping)
 
-A **scheme** (`[[schemas]]`) maps an external URI scheme prefix to a local folder.
+A **scheme** (`[[schemas]]`) maps an external URI to a local folder.
 Resolution is **rewrite + stat + verify** — no warming, no caching. Each schema has a
-`prefix` (required, e.g. `icloud://assets/`), a `root` (required), an optional
+`uri` (required, e.g. `icloud://assets/`), a `to` (required), an optional
 `auto_verify` (default `true`), and an optional `verify_cmd`. Schemes are **not indexed**
-— a link must carry the full scheme prefix.
+— a link must carry the full `uri`.
 
 **Detection.** A target has a URI scheme when the part before the first `:` is non-empty
 and consists of scheme characters `[A-Za-z0-9+-.]`. Web schemes (LNK-03) are handled
 first; all other scheme targets enter scheme resolution.
 
-**Prefix match.** Each `[[schemas]]` prefix is normalized with a trailing slash. A target
-matches when it equals the prefix (slash-less) or starts with the normalized prefix. The
-**most specific** (longest) matching prefix wins; only the first match is used.
+**URI match.** Each `[[schemas]]` `uri` is normalized with a trailing slash. A target
+matches when it equals the `uri` (slash-less) or starts with the normalized `uri`. The
+**most specific** (longest) matching `uri` wins; only the first match is used.
 
-**Path computation.** The resolved local path is `root + percent-decoded remainder`, where
-the remainder is the target minus the prefix (leading `/` trimmed). An empty remainder
-resolves to the root itself.
+**Path computation.** The resolved local path is `to + percent-decoded remainder`, where
+the remainder is the target minus the `uri` (leading `/` trimmed). An empty remainder
+resolves to the `to` folder itself.
 
-**Root expansion** (per schema, at startup):
+**`to` expansion** (per schema, at startup):
 
 1. `$VAR` / `${VAR}` are expanded; a missing variable is a startup configuration error.
 2. Leading `~` expands to the user's home directory.
@@ -415,25 +415,25 @@ Tests: `present_file_resolves_as_attachment`, `missing_file_yields_broken_link`,
 ### 3.8 RES-08 — Mounts (Co-Equal Resolution Roots)
 
 A **mount** (`[[mounts]]`) is an additional folder indexed **co-equal** with the primary
-project — not a fallback tier. Each mount has a `root` (required), an optional `prefix`
+project — not a fallback tier. Each mount has a `path` (required), an optional `as`
 (workspace-absolute, e.g. `/kb`), and an optional `lint` flag (default `false`).
 
 **Indexing.** Mounted documents are indexed alongside primary documents in one namespace.
-A mounted document's *namespace path* is `prefix/rel` when a `prefix` is set, else `rel`
-(mount-root-relative). Primary documents' namespace path is their workspace-relative path.
+A mounted document's *namespace path* is `as/rel` when `as` is set, else `rel`
+(mount-path-relative). Primary documents' namespace path is their workspace-relative path.
 
 **Reachability.**
 
 - **Source-relative** targets — markdown links, and wiki `./…`/`../…` targets — resolve
   against the containing document's directory and do **not** cross into a mount.
 - **Root-relative** targets — workspace-absolute (`/…`) and bare wiki `path/file` targets
-  (RFC 0013) — resolve against the workspace root, or against a mount whose `prefix`
-  matches (the prefix is a virtual directory at the workspace root).
+  (RFC 0013) — resolve against the workspace root, or against a mount whose `as`
+  matches (the `as` is a virtual directory at the workspace root).
 - **Bare stem / title** wiki targets (`[[Title]]`) resolve across the whole namespace
   (primary + all mounts).
 
 **Co-equal, not fallback.** A link matching documents in both the primary project and a
-mount is ambiguous (`link/ambiguous`); there is no primary-wins tie-break. A `prefix`
+mount is ambiguous (`link/ambiguous`); there is no primary-wins tie-break. An `as`
 disambiguates by giving the mounted document a distinct namespace path.
 
 **Linting.** A mounted document is a *source* (its own links are diagnosed) only when its
@@ -441,13 +441,13 @@ mount has `lint = true`. Otherwise it is a *target* only. When `lint = true`, it
 resolve against the full namespace (primary + all mounts).
 
 **Attribution.** A diagnostic whose source is a mounted document is labeled with the
-mount's attribution (`prefix` when set, else `root`).
+mount's attribution (`as` when set, else `path`).
 
 **Structural conflicts** (`mount/conflict`, Error). Detected at startup, per mount. A
 conflict is a fine-grained **namespace-path collision** between the mount and the primary
 (RFC 0011) — sharing a top-level name alone is *not* a conflict:
 
-- *Same-path file collision*: a mount file's namespace path (`prefix/rel` when a `prefix`
+- *Same-path file collision*: a mount file's namespace path (`as/rel` when `as`
   is set, else `rel`) equals a primary file's namespace path.
 - *File/folder name collision*: a mount file and a primary folder (or a mount folder and a
   primary file) share a name (stem, `Path::file_stem`) at the same namespace location.
@@ -594,7 +594,7 @@ Tests: `inline_anchor_to_existing_heading_resolves`,
 
 ### 4.5 `uri/no-mapping` — No scheme mapping
 
-- **Condition**: a non-web URI-scheme target matched no `[[schemas]]` prefix, at
+- **Condition**: a non-web URI-scheme target matched no `[[schemas]]` `uri`, at
   least one schema is configured, and `--no-uri-hints` was not passed.
 - **Multiplicity**: at most **one per run**, attached to the first hint-eligible link.
 - **Severity**: Info. The underlying `link/broken` for the same link is still emitted; `uri/no-mapping` is
@@ -657,10 +657,10 @@ Tests: `obsidian_prefix_single_file_mode`, `no_uri_sync_mapping_means_skipped_di
   - `core.file_extensions` must be non-empty.
   - `code_action.toc.include` must be non-empty and contain only levels 1–6.
   - `completion.candidates` is floored to 1.
-  - `[[schemas]][*].prefix` and `.root` are required and non-empty.
-  - A `root` that fails expansion (missing `$VAR`, no home directory) is a startup error.
+  - `[[schemas]][*].uri` and `.to` are required and non-empty.
+  - A `to` that fails expansion (missing `$VAR`, no home directory) is a startup error.
 
-Tests: `parse_rejects_removed_attachment_extensions_key`, `schema_missing_prefix_yields_indexed_error`,
+Tests: `parse_rejects_removed_attachment_extensions_key`, `schema_missing_uri_yields_indexed_error`,
 `ignore_project_overrides_user`.
 
 ### 5.3 Per-Key Clauses
@@ -671,14 +671,14 @@ Tests: `parse_rejects_removed_attachment_extensions_key`, `schema_missing_prefix
 | `core.heading_ids.enable` | `true` | RES-01 duplicate disambiguation. |
 | `core.text_sync` | `"full"` (`"full" \| "incremental"`) | LSP text-sync mode (non-linting; see `spec/downlint.md`). |
 | `core.title_from_heading` | `true` | RES-03 title = first H1. |
-| `[[mounts]]` | `[]` | RES-08 (and RES-04 mount-root check). Each entry: `root` (required), `prefix` (optional, workspace-absolute), `lint` (optional, default `false`). `root` is relative to the config file's directory. |
+| `[[mounts]]` | `[]` | RES-08 (and RES-04 mount-path check). Each entry: `path` (required), `as` (optional, workspace-absolute), `lint` (optional, default `false`). `path` is relative to the config file's directory. |
 | `core.ignore` | `[]` | RES-10. |
 | `wiki.obsidian_prefix` | `false` | RES-05. |
 | `code_action.toc.enable` / `code_action.toc.include` | `true` / `[1,2,3,4,5,6]` | Non-linting (TOC code action). |
 | `code_action.create_missing_file.enable` | `true` | Non-linting (code action). |
 | `completion.candidates` | `50` | Non-linting. |
 | `completion.wiki.style` | `"title-slug"` (`"title-slug" \| "title" \| "file-stem" \| "file-path-stem"`) | Non-linting. |
-| `[[schemas]]` | `[]` | RES-07. Each entry: `prefix` (required, e.g. `icloud://assets/`), `root` (required), `auto_verify` (optional, default `true`), `verify_cmd` (optional). `root` is relative to the config file's directory. |
+| `[[schemas]]` | `[]` | RES-07. Each entry: `uri` (required, e.g. `icloud://assets/`), `to` (required), `auto_verify` (optional, default `true`), `verify_cmd` (optional). `to` is relative to the config file's directory. |
 
 CLI flags that affect linting behavior: `--min-severity` (default `warning`),
 `--allow-uri-sync`, `--no-uri-hints`, `--uri-sync-batch-size` (default 50, min 1),
@@ -758,6 +758,7 @@ produced.
 | 2026-09-21 | 0011 | RES-08 `mount/conflict` re-scoped from a coarse top-level-entry check (prefix/folder name match) to a fine-grained **namespace-path collision**: a same-path file collision, or a file/folder sharing a name (stem) at the same location. Sharing a top-level name alone is no longer a conflict (a mount merges into an existing folder when no file collides). `MountConflictKind::{Prefix,Folder}` replaced by a single `PathCollision`. Conflicting mount file(s) are targets only (not linted). `link/ambiguous` is explicitly *not* a mount conflict. |
 | 2026-09-22 | 0012 | Added the `downlint resolve` target resolution query (spec/downlint.md §3.1): a read-only projection of the existing matching rules (RES-03/04/05/06/07) — no new diagnostics, no new matching semantics. The per-document matching rules are single-sourced (`match_document_kinds`), shared by link resolution and the query; `find_doc_matches` is rebuilt on top with unchanged behavior. |
 | 2026-09-23 | 0013 | Obsidian-compatible path resolution. RES-02 re-scoped to a strict prefix-driven base rule (no fallback): `./…`/`../…` → containing document's directory; `/…` and **bare wiki** `path/file` → workspace root; markdown bare paths/basenames → containing document's directory (unchanged). `.`/`..` normalized lexically before comparison. RES-03 explicit matching re-scoped: the resolved candidate is compared with the **`.md` suffix optional for wiki targets** (fixes the previously-dead extensionless rule); root-relative targets also match the namespace path (mount `prefix` access, now for bare wiki paths too, not only `/…`). RES-06: a markdown file matching an indexed document resolves as a document (attachment fallback is for non-markdown / unmatched file-like paths). LNK-02 adds the **bare wiki path** form. Consequences: extensionless and dot-relative wiki path links resolve; `[[../x.md]]` resolves as a document (not attachment) and its anchor is validated. |
+| 2026-09-23 | 0014 | Config key rename for clarity (no behavior change). `[[mounts]]`: `root`→`path`, `prefix`→`as`. `[[schemas]]`: `prefix`→`uri`, `root`→`to`. Each key is now self-evident and the two sections no longer share a vocabulary (a mount is a disk `path` exposed `as` a virtual path; a schema is a `uri` that resolves `to` a disk folder). Breaking: existing configs using the old keys fail to parse (`deny_unknown_fields`); migration is a mechanical key rename. The internal `ResolvedMount` fields are renamed to match (`path`/`as`). |
 
 **Known coverage gaps** (clauses without tests yet): scheme-target + anchor →
 `link/broken-anchor`.

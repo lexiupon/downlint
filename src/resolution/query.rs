@@ -283,7 +283,7 @@ pub fn resolve_target(
             super::resolve_folder_link(source_dir, target, &input.root, &input.mounts, true)
         {
             let base = mount
-                .map(|m| m.root.as_path())
+                .map(|m| m.path.as_path())
                 .unwrap_or(input.root.as_path());
             let mount_attribution = mount.map(|m| m.attribution.clone());
             return TargetResolution {

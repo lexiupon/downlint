@@ -14,15 +14,15 @@ pub struct SchemaConfig {
     pub schemas: Vec<Schema>,
 }
 
-/// One row of `[[schemas]]`: maps an external URI scheme prefix (e.g.
-/// `icloud://assets/`) to a local folder. The link must carry the full prefix.
+/// One row of `[[schemas]]`: maps an external URI (e.g. `icloud://assets/`) to a
+/// local folder. The link must carry the full `uri` prefix.
 #[derive(Clone, Debug)]
 pub struct Schema {
-    /// The scheme prefix, e.g. `icloud://assets/`.
-    pub prefix: String,
-    /// The local folder the prefix maps to. Supports `~`, env vars, and
+    /// The URI prefix a link target must start with, e.g. `icloud://assets/`.
+    pub uri: String,
+    /// The local folder the URI resolves to. Supports `~`, env vars, and
     /// relative-to-config-dir paths (expanded by the resolver).
-    pub root: String,
+    pub to: String,
     /// Run the built-in evicted-placeholder heuristics (vendor-specific: iCloud
     /// `.icloud` sibling, OneDrive `._<name>` resource fork). Default `true`.
     pub auto_verify: bool,
@@ -35,8 +35,8 @@ pub struct Schema {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PartialSchema {
-    pub prefix: Option<String>,
-    pub root: Option<String>,
+    pub uri: Option<String>,
+    pub to: Option<String>,
     pub auto_verify: Option<bool>,
     pub verify_cmd: Option<Vec<String>>,
 }
@@ -59,18 +59,18 @@ impl std::error::Error for SchemaConfigError {}
 /// Validate a single schema entry. Returns the validated `Schema`, or a
 /// `Validation` error describing the first broken rule.
 pub fn finalize_schema(index: usize, partial: PartialSchema) -> Result<Schema, SchemaConfigError> {
-    let prefix = partial
-        .prefix
+    let uri = partial
+        .uri
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| validation_at(index, "schemas[*].prefix is required"))?;
-    let root = partial
-        .root
+        .ok_or_else(|| validation_at(index, "schemas[*].uri is required"))?;
+    let to = partial
+        .to
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| validation_at(index, "schemas[*].root is required"))?;
+        .ok_or_else(|| validation_at(index, "schemas[*].to is required"))?;
     let auto_verify = partial.auto_verify.unwrap_or(true);
     Ok(Schema {
-        prefix,
-        root,
+        uri,
+        to,
         auto_verify,
         verify_cmd: partial.verify_cmd,
     })
@@ -104,14 +104,10 @@ fn validation_at(index: usize, message: &str) -> SchemaConfigError {
 mod tests {
     use super::*;
 
-    fn partial(
-        prefix: Option<&str>,
-        root: Option<&str>,
-        auto_verify: Option<bool>,
-    ) -> PartialSchema {
+    fn partial(uri: Option<&str>, to: Option<&str>, auto_verify: Option<bool>) -> PartialSchema {
         PartialSchema {
-            prefix: prefix.map(|value| value.to_string()),
-            root: root.map(|value| value.to_string()),
+            uri: uri.map(|value| value.to_string()),
+            to: to.map(|value| value.to_string()),
             auto_verify,
             verify_cmd: None,
         }
@@ -124,7 +120,7 @@ mod tests {
             partial(Some("icloud://assets/"), Some("~/icloud/assets"), None),
         )
         .unwrap();
-        assert_eq!(cfg.prefix, "icloud://assets/");
+        assert_eq!(cfg.uri, "icloud://assets/");
         assert!(cfg.auto_verify, "auto_verify defaults to true");
         assert!(cfg.verify_cmd.is_none());
     }
@@ -133,14 +129,18 @@ mod tests {
     fn auto_verify_can_be_disabled() {
         let cfg = finalize_schema(
             0,
-            partial(Some("icloud://assets/"), Some("~/icloud/assets"), Some(false)),
+            partial(
+                Some("icloud://assets/"),
+                Some("~/icloud/assets"),
+                Some(false),
+            ),
         )
         .unwrap();
         assert!(!cfg.auto_verify);
     }
 
     #[test]
-    fn prefix_and_root_are_required() {
+    fn uri_and_to_are_required() {
         assert!(finalize_schema(0, partial(None, Some("x"), None)).is_err());
         assert!(finalize_schema(0, partial(Some("s://"), None, None)).is_err());
     }

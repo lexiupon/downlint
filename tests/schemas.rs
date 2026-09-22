@@ -11,11 +11,11 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 /// Build a `Config` whose `[[schemas]]` section contains a single schema.
-fn config_with_schema(prefix: &str, root: &str, auto_verify: Option<bool>) -> Config {
+fn config_with_schema(uri: &str, to: &str, auto_verify: Option<bool>) -> Config {
     let mut config = Config::default();
     config.schemas = finalize_schemas(vec![PartialSchema {
-        prefix: Some(prefix.to_string()),
-        root: Some(root.to_string()),
+        uri: Some(uri.to_string()),
+        to: Some(to.to_string()),
         auto_verify,
         verify_cmd: None,
     }])
@@ -24,11 +24,11 @@ fn config_with_schema(prefix: &str, root: &str, auto_verify: Option<bool>) -> Co
 }
 
 /// Build a `Config` with a single schema that has a `verify_cmd`.
-fn config_with_schema_and_verify(prefix: &str, root: &str, verify_cmd: Vec<String>) -> Config {
+fn config_with_schema_and_verify(uri: &str, to: &str, verify_cmd: Vec<String>) -> Config {
     let mut config = Config::default();
     config.schemas = finalize_schemas(vec![PartialSchema {
-        prefix: Some(prefix.to_string()),
-        root: Some(root.to_string()),
+        uri: Some(uri.to_string()),
+        to: Some(to.to_string()),
         auto_verify: None,
         verify_cmd: Some(verify_cmd),
     }])
@@ -303,14 +303,14 @@ fn more_specific_prefix_wins() {
     let mut config = Config::default();
     config.schemas = finalize_schemas(vec![
         PartialSchema {
-            prefix: Some("onedrive://work/".to_string()),
-            root: Some(work.to_str().unwrap().to_string()),
+            uri: Some("onedrive://work/".to_string()),
+            to: Some(work.to_str().unwrap().to_string()),
             auto_verify: None,
             verify_cmd: None,
         },
         PartialSchema {
-            prefix: Some("onedrive://work/bucket-a/".to_string()),
-            root: Some(bucket_a.to_str().unwrap().to_string()),
+            uri: Some("onedrive://work/bucket-a/".to_string()),
+            to: Some(bucket_a.to_str().unwrap().to_string()),
             auto_verify: None,
             verify_cmd: None,
         },

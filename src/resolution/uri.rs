@@ -57,15 +57,15 @@ struct CompiledMapping {
 
 impl UriResolver {
     /// Build a resolver from the finalized config. `config_dir` is the directory
-    /// `.downlint.toml` lives in (used to expand relative `root` values).
+    /// `.downlint.toml` lives in (used to expand relative `to` values).
     /// `schemas` are sorted by descending prefix length so that the most
     /// specific prefix wins even if a less-specific one would also match.
     pub fn new(config: &SchemaConfig, config_dir: &Path) -> Result<Self, UriExpansionError> {
         let mut compiled = Vec::with_capacity(config.schemas.len());
         for (index, schema) in config.schemas.iter().enumerate() {
-            let expanded_root = expand_root(&schema.root, config_dir)
+            let expanded_root = expand_root(&schema.to, config_dir)
                 .map_err(|error| UriExpansionError { index, error })?;
-            let canonical_prefix = ensure_trailing_slash(&schema.prefix);
+            let canonical_prefix = ensure_trailing_slash(&schema.uri);
             let prefix_without_slash = canonical_prefix
                 .strip_suffix('/')
                 .unwrap_or(&canonical_prefix)
@@ -185,7 +185,7 @@ pub struct UriExpansionError {
 
 impl std::fmt::Display for UriExpansionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "schemas[{}].root: {}", self.index, self.error)
+        write!(f, "schemas[{}].to: {}", self.index, self.error)
     }
 }
 
@@ -303,10 +303,10 @@ mod tests {
         tempfile::tempdir().unwrap()
     }
 
-    fn config_with_mapping(prefix: &str, root: &str) -> SchemaConfig {
+    fn config_with_mapping(uri: &str, to: &str) -> SchemaConfig {
         finalize_schemas(vec![PartialSchema {
-            prefix: Some(prefix.to_string()),
-            root: Some(root.to_string()),
+            uri: Some(uri.to_string()),
+            to: Some(to.to_string()),
             ..Default::default()
         }])
         .unwrap()
@@ -381,13 +381,13 @@ mod tests {
         let dir = tempdir();
         let cfg = finalize_schemas(vec![
             PartialSchema {
-                prefix: Some("onedrive://work/".to_string()),
-                root: Some("./work".to_string()),
+                uri: Some("onedrive://work/".to_string()),
+                to: Some("./work".to_string()),
                 ..Default::default()
             },
             PartialSchema {
-                prefix: Some("onedrive://work/bucket-a/".to_string()),
-                root: Some("./bucket-a".to_string()),
+                uri: Some("onedrive://work/bucket-a/".to_string()),
+                to: Some("./bucket-a".to_string()),
                 ..Default::default()
             },
         ])
@@ -462,14 +462,14 @@ mod tests {
         let dir = tempdir();
         let cfg = finalize_schemas(vec![
             PartialSchema {
-                prefix: Some("a://".to_string()),
-                root: Some("./a".to_string()),
+                uri: Some("a://".to_string()),
+                to: Some("./a".to_string()),
                 auto_verify: Some(false),
                 ..Default::default()
             },
             PartialSchema {
-                prefix: Some("b://".to_string()),
-                root: Some("./b".to_string()),
+                uri: Some("b://".to_string()),
+                to: Some("./b".to_string()),
                 auto_verify: None, // default true
                 ..Default::default()
             },

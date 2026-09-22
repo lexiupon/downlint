@@ -183,13 +183,13 @@ impl ResolveInput {
         let mut conflicts: Vec<MountConflict> = Vec::new();
 
         // Mounted docs: co-equal with primary (RFC 0010). Namespace path is
-        // `prefix/rel` when a prefix is set, else `rel`. Sources only when the
+        // `as/rel` when `as` is set, else `rel`. Sources only when the
         // mount has `lint = true`. A path collision (RFC 0011) suspends linting
         // of the conflicting mount file(s).
         for mount in &workspace.folder.mounts {
-            let loaded_docs = load_mount_documents(&mount.root, &workspace.config);
+            let loaded_docs = load_mount_documents(&mount.path, &workspace.config);
             let prefix = mount
-                .prefix
+                .r#as
                 .as_deref()
                 .map(|p| p.trim_start_matches('/').to_string());
 
@@ -736,19 +736,19 @@ fn resolve_folder_link<'a>(
     }
 
     // Check in mount roots for root-relative targets (RFC 0010, 0013): try a
-    // direct join to the mount root, and (when the mount has a prefix) strip
-    // the prefix first.
+    // direct join to the mount path, and (when the mount has an `as`) strip
+    // the `as` first.
     if is_root_relative(path_part, is_wiki) {
         let rel = path_part.trim_matches('/');
         for mount in mounts {
-            let candidate = mount.root.join(rel);
+            let candidate = mount.path.join(rel);
             if candidate.is_dir() {
                 return Some((candidate, Some(mount)));
             }
-            if let Some(prefix) = &mount.prefix {
+            if let Some(prefix) = &mount.r#as {
                 let prefix_rel = prefix.trim_start_matches('/');
                 if let Some(rest) = rel.strip_prefix(prefix_rel) {
-                    let candidate = mount.root.join(rest.trim_start_matches('/'));
+                    let candidate = mount.path.join(rest.trim_start_matches('/'));
                     if candidate.is_dir() {
                         return Some((candidate, Some(mount)));
                     }

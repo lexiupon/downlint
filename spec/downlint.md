@@ -186,7 +186,7 @@ New paths are computed relative to each referencing document (cross-subtree move
   references, string-only F2 rename; `didRenameFiles` keeps indexes consistent.
 - **KB maintenance**: `rename-file` / `rename-link` to evolve the base; `--dry-run` to
   preview; the blocking rule forces cleanup of pre-existing diagnostics first.
-- **Cloud assets**: declare `[[schemas]]` to map a scheme prefix to a local folder;
+- **Cloud assets**: declare `[[schemas]]` to map a URI to a local folder;
   `check` stats the resolved path and (per `auto_verify`) flags evicted placeholders.
 - **Quick single-doc check**: `echo '# Title' | downlint -`.
 

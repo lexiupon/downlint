@@ -564,8 +564,8 @@ mod tests {
             &path,
             r#"
 [[schemas]]
-prefix = "icloud://assets/"
-root = "~/icloud/assets"
+uri = "icloud://assets/"
+to = "~/icloud/assets"
 auto_verify = false
 "#,
         )
@@ -575,8 +575,8 @@ auto_verify = false
         let config = finalize_config(partial).unwrap();
         assert_eq!(config.schemas.schemas.len(), 1);
         let schema = &config.schemas.schemas[0];
-        assert_eq!(schema.prefix, "icloud://assets/");
-        assert_eq!(schema.root, "~/icloud/assets");
+        assert_eq!(schema.uri, "icloud://assets/");
+        assert_eq!(schema.to, "~/icloud/assets");
         assert!(!schema.auto_verify);
     }
 
@@ -588,17 +588,17 @@ auto_verify = false
     }
 
     #[test]
-    fn schema_missing_prefix_yields_indexed_error() {
+    fn schema_missing_uri_yields_indexed_error() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join(".downlint.toml");
         fs::write(
             &path,
             r#"
 [[schemas]]
-root = "./foo"
+to = "./foo"
 [[schemas]]
-prefix = "scheme://"
-root = "./bar"
+uri = "scheme://"
+to = "./bar"
 "#,
         )
         .unwrap();
@@ -607,7 +607,7 @@ root = "./bar"
         match error {
             ConfigError::Validation(message) => {
                 assert!(message.contains("schemas[0]"));
-                assert!(message.contains("prefix"));
+                assert!(message.contains("uri"));
             }
             other => panic!("expected validation error, got {other:?}"),
         }
@@ -621,8 +621,8 @@ root = "./bar"
             &path,
             r#"
 [[schemas]]
-prefix = "scheme://"
-root = "./foo"
+uri = "scheme://"
+to = "./foo"
 bogus = true
 "#,
         )

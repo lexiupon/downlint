@@ -112,8 +112,8 @@ pub fn uri_no_mapping_hint(unresolved: &[UnresolvedReference]) -> Option<Diagnos
         message: format!(
             "No scheme mapping found for '{}'. Configure [[schemas]] in .downlint.toml, e.g.:\n\
              \n  [[schemas]]\n  \
-             prefix = \"icloud://assets/\"\n  \
-             root = \"~/icloud/assets\"\n\
+             uri = \"icloud://assets/\"\n  \
+             to = \"~/icloud/assets\"\n\
              \nSuppress this hint with --no-uri-hints.",
             first.target,
         ),

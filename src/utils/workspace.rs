@@ -31,14 +31,14 @@ pub struct WorkspaceDocument {
 /// config needed by the resolution layer (RFC 0010).
 #[derive(Clone, Debug)]
 pub struct ResolvedMount {
-    /// The resolved filesystem root of the mount.
-    pub root: PathBuf,
+    /// The resolved filesystem path of the mount.
+    pub path: PathBuf,
     /// The exact-path alias (a workspace-absolute virtual directory), if any.
-    pub prefix: Option<String>,
+    pub r#as: Option<String>,
     /// Whether links within the mounted docs are linted (they become sources).
     pub lint: bool,
-    /// Label used to attribute diagnostics from this mount (its `prefix`, or
-    /// `root` when there is no prefix).
+    /// Label used to attribute diagnostics from this mount (its `as`, or
+    /// `path` when there is no `as`).
     pub attribution: String,
 }
 
@@ -311,11 +311,11 @@ fn resolve_mounts(root: &Path, config: &Config) -> Vec<ResolvedMount> {
         .iter()
         .map(|mount| ResolvedMount {
             attribution: mount
-                .prefix
+                .r#as
                 .clone()
-                .unwrap_or_else(|| mount.root.clone()),
-            root: expand_root(root, &mount.root),
-            prefix: mount.prefix.clone(),
+                .unwrap_or_else(|| mount.path.clone()),
+            path: expand_root(root, &mount.path),
+            r#as: mount.r#as.clone(),
             lint: mount.lint,
         })
         .collect()

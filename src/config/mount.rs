@@ -6,17 +6,17 @@ use std::fmt;
 /// A **mount** brings an external local markdown folder into the resolution
 /// namespace. Its documents are indexed and treated co-equal with primary
 /// documents (RFC 0010). The config layer owns the raw form; the workspace /
-/// resolution layer expands `root` (env vars, `~`, relative paths).
+/// resolution layer expands `path` (env vars, `~`, relative paths).
 #[derive(Clone, Debug)]
 pub struct Mount {
-    /// The folder to mount — the root where the mounted files are found.
+    /// The folder to mount — where the mounted files are found.
     /// Required. Expanded by the workspace layer (`~`, `$VAR`, config-relative).
-    pub root: String,
-    /// An optional exact-path alias. A mounted doc at `root/path/to/file.md` is
-    /// additionally reachable as `prefix/path/to/file.md`. The prefix is a
-    /// virtual directory at the workspace root and must start with `/`.
-    /// Serves as the unambiguous form when a name also exists in the primary.
-    pub prefix: Option<String>,
+    pub path: String,
+    /// An optional exact-path alias. A mounted doc at `path/<rel>` is additionally
+    /// reachable as `as/<rel>`. `as` is a virtual directory at the workspace root
+    /// and must start with `/`. Serves as the unambiguous form when a name also
+    /// exists in the primary.
+    pub r#as: Option<String>,
     /// When true, links *within* the mounted documents are also linted (the
     /// mounted docs become resolution sources, not just targets). Default false.
     pub lint: bool,
@@ -25,8 +25,8 @@ pub struct Mount {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PartialMount {
-    pub root: Option<String>,
-    pub prefix: Option<String>,
+    pub path: Option<String>,
+    pub r#as: Option<String>,
     pub lint: Option<bool>,
 }
 
@@ -48,21 +48,25 @@ impl std::error::Error for MountConfigError {}
 /// Validate a single `[[mounts]]` entry. Returns the validated `Mount`, or a
 /// `Validation` error naming the first broken rule.
 pub fn finalize_mount(index: usize, partial: PartialMount) -> Result<Mount, MountConfigError> {
-    let root = partial
-        .root
+    let path = partial
+        .path
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| validation_at(index, "root is required"))?;
-    let prefix = partial.prefix.filter(|value| !value.is_empty());
-    if let Some(prefix) = &prefix
-        && !prefix.starts_with('/')
+        .ok_or_else(|| validation_at(index, "path is required"))?;
+    let as_path = partial.r#as.filter(|value| !value.is_empty());
+    if let Some(as_path) = &as_path
+        && !as_path.starts_with('/')
     {
         return Err(validation_at(
             index,
-            "prefix must be a workspace-absolute virtual directory (start with `/`)",
+            "as must be a workspace-absolute virtual directory (start with `/`)",
         ));
     }
     let lint = partial.lint.unwrap_or(false);
-    Ok(Mount { root, prefix, lint })
+    Ok(Mount {
+        path,
+        r#as: as_path,
+        lint,
+    })
 }
 
 /// Validate the whole `[[mounts]]` section.
@@ -91,10 +95,10 @@ fn validation_at(index: usize, message: &str) -> MountConfigError {
 mod tests {
     use super::*;
 
-    fn partial(root: Option<&str>, prefix: Option<&str>, lint: Option<bool>) -> PartialMount {
+    fn partial(path: Option<&str>, as_path: Option<&str>, lint: Option<bool>) -> PartialMount {
         PartialMount {
-            root: root.map(|value| value.to_string()),
-            prefix: prefix.map(|value| value.to_string()),
+            path: path.map(|value| value.to_string()),
+            r#as: as_path.map(|value| value.to_string()),
             lint,
         }
     }
@@ -102,28 +106,29 @@ mod tests {
     #[test]
     fn minimal_mount_uses_defaults() {
         let mount = finalize_mount(0, partial(Some("~/kb"), None, None)).unwrap();
-        assert_eq!(mount.root, "~/kb");
-        assert!(mount.prefix.is_none());
+        assert_eq!(mount.path, "~/kb");
+        assert!(mount.r#as.is_none());
         assert!(!mount.lint);
     }
 
     #[test]
-    fn mount_with_prefix_and_lint() {
-        let mount = finalize_mount(0, partial(Some("~/kb"), Some("/kb_alias"), Some(true))).unwrap();
-        assert_eq!(mount.prefix.as_deref(), Some("/kb_alias"));
+    fn mount_with_as_and_lint() {
+        let mount =
+            finalize_mount(0, partial(Some("~/kb"), Some("/kb_alias"), Some(true))).unwrap();
+        assert_eq!(mount.r#as.as_deref(), Some("/kb_alias"));
         assert!(mount.lint);
     }
 
     #[test]
-    fn missing_root_errors() {
+    fn missing_path_errors() {
         let error = finalize_mount(2, partial(None, None, None)).unwrap_err();
         let message = error.to_string();
         assert!(message.contains("mounts[2]"), "{message}");
-        assert!(message.contains("root is required"), "{message}");
+        assert!(message.contains("path is required"), "{message}");
     }
 
     #[test]
-    fn empty_root_errors() {
+    fn empty_path_errors() {
         assert!(matches!(
             finalize_mount(0, partial(Some(""), None, None)),
             Err(MountConfigError::Validation(_))
@@ -131,10 +136,10 @@ mod tests {
     }
 
     #[test]
-    fn prefix_must_start_with_slash() {
+    fn as_must_start_with_slash() {
         let error = finalize_mount(0, partial(Some("~/kb"), Some("kb_alias"), None)).unwrap_err();
         let message = error.to_string();
-        assert!(message.contains("prefix"), "{message}");
+        assert!(message.contains("as must be"), "{message}");
         assert!(message.contains("/"), "{message}");
     }
 
@@ -154,12 +159,12 @@ mod tests {
         let low = Some(vec![partial(Some("~/b"), None, None)]);
         let merged = merge_mounts(high, low).unwrap();
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].root.as_deref(), Some("~/a"));
+        assert_eq!(merged[0].path.as_deref(), Some("~/a"));
     }
 
     #[test]
     fn merge_mounts_falls_back_to_low() {
         let merged = merge_mounts(None, Some(vec![partial(Some("~/b"), None, None)])).unwrap();
-        assert_eq!(merged[0].root.as_deref(), Some("~/b"));
+        assert_eq!(merged[0].path.as_deref(), Some("~/b"));
     }
 }

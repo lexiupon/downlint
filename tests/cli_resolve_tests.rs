@@ -182,7 +182,7 @@ fn resolve_mount_attribution() {
     // as primary + mounted).
     fs::write(
         vault.path().join(".downlint.toml"),
-        format!("[[mounts]]\nroot = \"{}\"\n", mount.path().display()),
+        format!("[[mounts]]\npath = \"{}\"\n", mount.path().display()),
     )
     .unwrap();
     resolve(vault.path(), "Avon", &[])
@@ -295,7 +295,7 @@ fn resolve_uri_mapped_present() {
     let temp = write_vault(&[
         (
             ".downlint.toml",
-            "[[schemas]]\nprefix = \"onedrive://work/\"\nroot = \"assets\"\n",
+            "[[schemas]]\nuri = \"onedrive://work/\"\nto = \"assets\"\n",
         ),
         ("assets/master-data/customers.xlsx", "x"),
     ]);
@@ -314,7 +314,7 @@ fn resolve_uri_mapped_missing() {
     let temp = write_vault(&[
         (
             ".downlint.toml",
-            "[[schemas]]\nprefix = \"onedrive://work/\"\nroot = \"assets\"\n",
+            "[[schemas]]\nuri = \"onedrive://work/\"\nto = \"assets\"\n",
         ),
         ("assets/other.xlsx", "x"),
     ]);
@@ -336,7 +336,7 @@ fn resolve_uri_mapped_placeholder() {
     let temp = write_vault(&[
         (
             ".downlint.toml",
-            "[[schemas]]\nprefix = \"icloud://assets/\"\nroot = \"Mobile Documents\"\n",
+            "[[schemas]]\nuri = \"icloud://assets/\"\nto = \"Mobile Documents\"\n",
         ),
         ("Mobile Documents/evicted.pdf", "x"),
     ]);
@@ -357,7 +357,7 @@ fn resolve_uri_unmapped() {
     let temp = write_vault(&[
         (
             ".downlint.toml",
-            "[[schemas]]\nprefix = \"onedrive://work/\"\nroot = \"assets\"\n",
+            "[[schemas]]\nuri = \"onedrive://work/\"\nto = \"assets\"\n",
         ),
         ("assets/a.xlsx", "x"),
     ]);

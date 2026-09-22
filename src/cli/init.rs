@@ -46,8 +46,8 @@ title_from_heading = true
 # indexed and co-equal with this workspace's (a same-name link is
 # link/ambiguous). Repeat this block per mount.
 # [[mounts]]
-# root = "~/another_project/kb"
-# prefix = "/another_project_kb"   # optional exact-path alias (starts with /)
+# path = "~/another_project/kb"
+# as = "/another_project_kb"       # optional virtual path it appears as (starts with /)
 # lint = false                     # also lint links within the mounted docs
 
 [wiki]
@@ -72,8 +72,8 @@ obsidian_prefix = false
 # Repeat this block per scheme. `auto_verify` (default true) runs the built-in
 # evicted-placeholder heuristics; `verify_cmd` is an advanced escape hatch.
 # [[schemas]]
-# prefix = "icloud://assets/"
-# root = "~/icloud/assets"
+# uri = "icloud://assets/"
+# to = "~/icloud/assets"
 # auto_verify = true
 # verify_cmd = []
 "#;
