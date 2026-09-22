@@ -7,6 +7,13 @@ Pre-1.0 versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.5.0] — Workspace-Anchored Stdin
+
+`downlint check --stdin` is now a workspace-anchored check: piped text is resolved
+against the current workspace and link diagnostics are reported on `<stdin>.md`,
+making single-line link validation scriptable. Also fixes markdown link
+destinations containing spaces.
+
 ### Changed
 
 - **`--stdin` is now a workspace-anchored check** (behavior change). Piped text is linted as a
