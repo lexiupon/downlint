@@ -32,7 +32,7 @@ document does not restate them.
 
 ### 3.1 CLI
 
-Six subcommands. `downlint` with no subcommand runs the check.
+Seven subcommands. `downlint` with no subcommand runs the check.
 
 | Command | Purpose |
 |---|---|
@@ -41,6 +41,7 @@ Six subcommands. `downlint` with no subcommand runs the check.
 | `downlint server` | Run the LSP server over stdio. |
 | `downlint rename-file` | Move a markdown file or attachment on disk and rewrite every link pointing at it. |
 | `downlint rename-link` | Rewrite a logical link-target identifier workspace-wide (no disk move). |
+| `downlint resolve <TARGET>` | Show what a link target resolves to: documents, attachments, folders, URI mappings. |
 
 **`check`** — key flags (defaults in parentheses):
 
@@ -65,6 +66,37 @@ Six subcommands. `downlint` with no subcommand runs the check.
   explicit file) prints an informational stderr hint when no `.downlint.toml` is found —
   suggesting `downlint init` — and/or when the workspace contains no markdown. Suppressed
   by `--quiet`. These never affect the exit code.
+
+**`resolve`** — target resolution query (RFC 0012). Given a link target, list
+**every** destination it resolves to, with the reason each matched. It uses the
+existing matching rules exactly (RES-03/04/05/06/07) — it predicts `check`'s
+behavior and introduces no new diagnostics.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `<TARGET>` | *(required)* | The link target (wiki-link target grammar: title/stem, explicit path, folder target, optional `#anchor`, or `scheme://…`). An empty target, or a target consisting only of `#anchor`, is a bad argument. |
+| `--root <DIR>` | inferred | Override workspace root. |
+| `--from <DOC>` | workspace root | Resolve relative targets as if the link were in this document (must name a document in the index — primary or mounted — else exit 2). |
+| `--format <text\|json>` | `text` | Output format. |
+| `--include-prefix` | off | Also list prefix candidates when `wiki.obsidian_prefix` is off (advisory: never affects status or exit code). |
+| `--allow-uri-sync` | off | Permit `verify_cmd` subprocess execution for URI targets (safety gate). |
+
+- **Statuses and exit codes**: `0` = `resolved` (exactly one destination),
+  `external` (web scheme, LNK-03), or `mapped-present`; `1` = `broken` (no
+  destination), `ambiguous` (more than one), `unmapped`, `mapped-missing`, or
+  `mapped-placeholder`; `2` = bad arguments / config error. The scriptable
+  contract: exit 0 iff the target is safe to use as a link as-is.
+- **Destinations** report: namespace path, H1 title, match kinds (`path`,
+  `stem`, `title`, `prefix` in canonical order; `attachment` and `directory` are
+  single), mount attribution, and per-destination anchor existence (advisory —
+  it does not change status or exit code).
+- **URI targets** (RES-07): the mapping status is reported — `mapped-present`,
+  `mapped-missing`, `mapped-placeholder` (rewrite + stat + verify), `unmapped`,
+  or `external`. Anchors on URI targets are not supported (reported as a note;
+  `check` emits `link/broken-anchor` for such links).
+- **Text output**: `{status} — {n} destination(s):` followed by one line per
+  destination. **JSON output**: a single object with `target`, `anchor`,
+  `status`, `destinations[]`, `prefix_candidates[]`, and `scheme`.
 
 **`init`** — scaffold a `.downlint.toml` in the workspace root (cwd, or `--root <DIR>`).
 Common options are written active (at their defaults) so the file doubles as a reference;

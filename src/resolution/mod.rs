@@ -2,6 +2,7 @@ pub mod auto_verify;
 pub mod conn;
 pub mod path;
 pub mod prefix;
+pub mod query;
 pub mod slug;
 pub mod uri;
 
@@ -11,7 +12,7 @@ use crate::resolution::conn::{
     AmbiguousReference, DestinationKind, ResolvedDestination, ResolvedDocument, ResolvedReference,
     UnresolvedReference,
 };
-use crate::resolution::path::{has_scheme, is_external_web_scheme, is_folder_link_target, path_without_extension, resolve_explicit_path, scheme_of};
+use crate::resolution::path::{has_scheme, is_external_web_scheme, is_folder_link_target, resolve_explicit_path, scheme_of};
 use crate::resolution::prefix::PrefixIndex;
 use crate::resolution::uri::{UriOutcome, UriResolver};
 use crate::utils::{
@@ -356,7 +357,7 @@ pub fn resolve_links(input: ResolveInput) -> ConnectionGraph {
     graph
 }
 
-fn index_document(doc: &ResolveDocument, _root: &Path) -> ResolvedDocument {
+pub(crate) fn index_document(doc: &ResolveDocument, _root: &Path) -> ResolvedDocument {
     let file_stem = doc
         .path
         .file_stem()
@@ -715,27 +716,20 @@ fn run_verify_cmd(cmd: &[String], path: &Path) -> bool {
 
 
 /// Resolve a folder link (target ending with /) against the workspace and extra folders.
-fn resolve_folder_link(
-    source_path: &Path,
+fn resolve_folder_link<'a>(
+    source_dir: &Path,
     target: &str,
     root: &Path,
-    mounts: &[ResolvedMount],
-) -> Option<ResolvedDestination> {
+    mounts: &'a [ResolvedMount],
+) -> Option<(PathBuf, Option<&'a ResolvedMount>)> {
     // Strip anchor and trailing / to get the actual directory path
     let (path_part, _anchor) = crate::resolution::path::split_anchor(target);
     let target_dir = path_part.trim_end_matches('/');
 
-    let source_dir = source_path.parent().unwrap_or(root);
-
     // For absolute paths (starting with /), resolve from root
     let resolved = resolve_explicit_path(root, source_dir, target_dir);
     if resolved.is_dir() {
-        return Some(ResolvedDestination {
-            path: resolved,
-            kind: DestinationKind::Directory,
-            name: target_dir.to_string(),
-            range: None,
-        });
+        return Some((resolved, None));
     }
 
     // Check in mount roots for absolute paths (RFC 0010): try a direct join to
@@ -745,24 +739,14 @@ fn resolve_folder_link(
         for mount in mounts {
             let candidate = mount.root.join(rel);
             if candidate.is_dir() {
-                return Some(ResolvedDestination {
-                    path: candidate,
-                    kind: DestinationKind::Directory,
-                    name: target_dir.to_string(),
-                    range: None,
-                });
+                return Some((candidate, Some(mount)));
             }
             if let Some(prefix) = &mount.prefix {
                 let prefix_rel = prefix.trim_start_matches('/');
                 if let Some(rest) = rel.strip_prefix(prefix_rel) {
                     let candidate = mount.root.join(rest.trim_start_matches('/'));
                     if candidate.is_dir() {
-                        return Some(ResolvedDestination {
-                            path: candidate,
-                            kind: DestinationKind::Directory,
-                            name: target_dir.to_string(),
-                            range: None,
-                        });
+                        return Some((candidate, Some(mount)));
                     }
                 }
             }
@@ -846,14 +830,25 @@ fn resolve_wiki_ref(
             });
             return;
         }
-        if let Some(destination) = resolve_folder_link(&doc.path, target, &ctx.input.root, &ctx.input.mounts) {
+        if let Some((path, _mount)) = resolve_folder_link(
+            doc.path.parent().unwrap_or(ctx.input.root.as_path()),
+            target,
+            &ctx.input.root,
+            &ctx.input.mounts,
+        ) {
+            let (folder_part, _anchor) = crate::resolution::path::split_anchor(target);
             ctx.graph.resolved_references.push(ResolvedReference {
                 source_path: doc.path.clone(),
                 occurrence_id: symbol.id,
                 full_range: symbol.full_range,
                 name_range: symbol.name_range,
                 reference: reference.clone(),
-                destinations: vec![destination],
+                destinations: vec![ResolvedDestination {
+                    path,
+                    kind: DestinationKind::Directory,
+                    name: folder_part.trim_end_matches('/').to_string(),
+                    range: None,
+                }],
             });
         } else {
             ctx.graph.unresolved_references.push(UnresolvedReference {
@@ -1016,14 +1011,25 @@ fn resolve_inline_ref(
             });
             return;
         }
-        if let Some(destination) = resolve_folder_link(&doc.path, target, &ctx.input.root, &ctx.input.mounts) {
+        if let Some((path, _mount)) = resolve_folder_link(
+            doc.path.parent().unwrap_or(ctx.input.root.as_path()),
+            target,
+            &ctx.input.root,
+            &ctx.input.mounts,
+        ) {
+            let (folder_part, _anchor) = crate::resolution::path::split_anchor(target);
             ctx.graph.resolved_references.push(ResolvedReference {
                 source_path: doc.path.clone(),
                 occurrence_id: symbol.id,
                 full_range: symbol.full_range,
                 name_range: symbol.name_range,
                 reference: reference.clone(),
-                destinations: vec![destination],
+                destinations: vec![ResolvedDestination {
+                    path,
+                    kind: DestinationKind::Directory,
+                    name: folder_part.trim_end_matches('/').to_string(),
+                    range: None,
+                }],
             });
         } else {
             ctx.graph.unresolved_references.push(UnresolvedReference {
@@ -1168,51 +1174,21 @@ fn find_doc_matches(
     is_wiki: bool,
 ) -> Vec<ResolvedDestination> {
     let source_dir = source_path.parent().unwrap_or(root);
-    let source_dir = source_dir.to_path_buf();
-    let target_slug = Slug::from_heading_text(target);
-    let explicit_path = resolve_explicit_path(root, &source_dir, target);
-    let explicit_no_ext = path_without_extension(&explicit_path);
-    // For a workspace-absolute target (`/kb/notes/foo`), its namespace path is
-    // the target without the leading slash. This is how a mount `prefix` (a
-    // virtual directory at the workspace root) is reached (RFC 0010).
-    let target_namespace_no_ext = target
-        .strip_prefix('/')
-        .map(|value| path_without_extension(Path::new(value)));
-
     let mut destinations = Vec::new();
     let mut seen = HashSet::new();
     for doc in docs {
-        // `namespace_rel_path` equals `rel_path` for primary docs and is
-        // `prefix/rel` (or `rel`) for mounted docs, so matching on it is
-        // co-equal across primary + mounted docs (RFC 0010).
-        let ns_no_ext = path_without_extension(&doc.namespace_rel_path);
-        let matches = if explicit_only || is_explicit_path(target) {
-            // Path-based matching:
-            //  (a) filesystem match (markdown links, source-relative);
-            //  (b) resolved-path namespace match;
-            //  (c) workspace-absolute namespace match (mount prefix access).
-            let fs_match = doc.path == explicit_path;
-            let rel_ns_match = ns_no_ext.eq_ignore_ascii_case(&explicit_no_ext);
-            let abs_ns_match = target_namespace_no_ext
-                .as_ref()
-                .is_some_and(|value| value.eq_ignore_ascii_case(&ns_no_ext));
-            // A wiki target containing `/` may actually be a title (e.g.
-            // "Team knowledge transfer (QA/DB)"); fall back to title-slug
-            // matching, co-equal across primary + mounted docs. Markdown links
-            // are paths only (no title fallback).
-            let title_match = is_wiki && doc.title_slug == target_slug;
-            fs_match || rel_ns_match || abs_ns_match || title_match
-        } else {
-            doc.file_stem.eq_ignore_ascii_case(target)
-                || doc.title_slug == target_slug
-                || ns_no_ext.eq_ignore_ascii_case(target)
-                || doc
-                    .namespace_rel_path
-                    .to_string_lossy()
-                    .replace('\\', "/")
-                    .eq_ignore_ascii_case(target)
-        };
-        if matches && seen.insert(doc.path.clone()) {
+        // Matching rules are single-sourced in `query::match_document_kinds`
+        // (shared with the `resolve` subcommand, RFC 0012).
+        let matched = !query::match_document_kinds(
+            doc,
+            source_dir,
+            root,
+            target,
+            explicit_only,
+            is_wiki,
+        )
+        .is_empty();
+        if matched && seen.insert(doc.path.clone()) {
             destinations.push(ResolvedDestination {
                 path: doc.path.clone(),
                 kind: DestinationKind::Document,
@@ -1338,7 +1314,10 @@ fn hint_payload_for(ctx: &ResolveRefContext<'_>, target: &str) -> Option<Vec<Pat
 
 #[cfg(test)]
 mod tests {
-    use super::is_explicit_path;
+    use super::query;
+    use super::conn::ResolvedDocument;
+    use super::{find_doc_matches, index_document, is_explicit_path, ResolveDocument};
+    use std::path::PathBuf;
 
     /// A target ending in a normal extension (e.g. `file.md`) is an explicit path.
     #[test]
@@ -1389,5 +1368,58 @@ mod tests {
         assert!(!is_explicit_path(".gitignore"));
         // Only the dot.
         assert!(!is_explicit_path("."));
+    }
+
+    /// Parity guard for the `match_document_kinds` refactor (RFC 0012): for a
+    /// corpus of (doc, target) pairs, the documents selected by
+    /// `find_doc_matches` equal those with ≥1 match kind, in the same order.
+    #[test]
+    fn find_doc_matches_parity_with_match_document_kinds() {
+        let parse_options = crate::parser::ParseOptions::default();
+        let root = PathBuf::from("/root");
+        let docs: Vec<ResolvedDocument> = [
+            ("avon.md", "# Avon\n"),
+            ("notes/avon.md", "# Avon 2025 Review\n"),
+            ("notes/other.md", "# Avon\n"),
+            ("qa/db-transfer.md", "# Team knowledge transfer (QA/DB)\n"),
+        ]
+        .into_iter()
+        .map(|(rel, text)| {
+            let path = root.join(rel);
+            let rel_path = PathBuf::from(rel);
+            let structure = crate::parser::parse_document(text, parse_options);
+            index_document(
+                &ResolveDocument::primary(path, rel_path, structure),
+                &root,
+            )
+        })
+        .collect();
+        let source_dir = root.clone();
+
+        let targets = [
+            "avon", // stem of root avon.md; title of notes/other.md → two docs
+            "Avon", // case-insensitive stem + title
+            "avon-2025-review", // title slug of notes/avon.md
+            "/notes/avon.md", // explicit workspace-absolute path
+            "notes/avon", // explicit relative path without extension
+            "avon.md", // explicit file-like (source-relative)
+            "Team knowledge transfer (QA/DB)", // title containing `/`
+            "nope", // no match
+        ];
+        for target in targets {
+            let via_find: Vec<PathBuf> = find_doc_matches(&docs, &root.join("src.md"), &root, target, false, true)
+                .into_iter()
+                .map(|destination| destination.path)
+                .collect();
+            let via_kinds: Vec<PathBuf> = docs
+                .iter()
+                .filter(|doc| {
+                    !query::match_document_kinds(doc, &source_dir, &root, target, false, true)
+                        .is_empty()
+                })
+                .map(|doc| doc.path.clone())
+                .collect();
+            assert_eq!(via_find, via_kinds, "parity for target {target:?}");
+        }
     }
 }

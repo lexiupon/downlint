@@ -110,6 +110,12 @@ impl UriResolver {
         self.mappings.get(index).map(|m| m.auto_verify).unwrap_or(false)
     }
 
+    /// The canonical prefix of the mapping at `index` (for reporting which
+    /// `[[schemas]]` entry matched, e.g. in the `resolve` subcommand).
+    pub fn prefix_for(&self, index: usize) -> &str {
+        self.mappings.get(index).map(|m| m.canonical_prefix.as_str()).unwrap_or("")
+    }
+
     /// The schema at `index`'s custom verification command, if any.
     pub fn verify_cmd_for(&self, index: usize) -> Option<&[String]> {
         self.mappings.get(index).and_then(|m| m.verify_cmd.as_deref())

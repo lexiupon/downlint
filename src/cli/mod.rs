@@ -1,6 +1,7 @@
 pub mod check;
 pub mod init;
 pub mod rename;
+pub mod resolve;
 
 use crate::diagnostics::DiagnosticSeverity;
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
@@ -41,6 +42,10 @@ enum Command {
     /// Rewrite a logical link identifier across the workspace. No disk move.
     #[command(name = "rename-link", about = "Rewrite a link-target identifier across the workspace")]
     RenameLink(RenameLinkArgs),
+    /// Show what a link target resolves to: documents, attachments, folders,
+    /// and URI-scheme mappings.
+    #[command(name = "resolve", about = "Show what a link target resolves to (documents, attachments, folders, URI mappings)")]
+    Resolve(ResolveArgs),
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -160,6 +165,30 @@ struct RenameLinkArgs {
     server: bool,
 }
 
+#[derive(Args, Clone, Debug, Default)]
+struct ResolveArgs {
+    /// The link target to resolve (wiki-link target grammar: title/stem,
+    /// explicit path, folder target, optional #anchor, or scheme://…).
+    target: String,
+    #[arg(long)]
+    root: Option<PathBuf>,
+    /// Resolve relative targets as if the link were in this document.
+    #[arg(long)]
+    from: Option<PathBuf>,
+    #[arg(long, default_value = "text")]
+    format: FormatArg,
+    /// Also list prefix candidates when wiki.obsidian_prefix is off (advisory).
+    #[arg(long = "include-prefix", action = ArgAction::SetTrue)]
+    include_prefix: bool,
+    /// Permit subprocess execution of a `[[schemas]]` `verify_cmd`. Without
+    /// this flag, `verify_cmd` is skipped. Note: enabling this flag means
+    /// `.downlint.toml` controls which commands run.
+    #[arg(long = "allow-uri-sync", action = ArgAction::SetTrue)]
+    allow_uri_sync: bool,
+    #[arg(long, short = 'v', default_value_t = 2)]
+    verbose: u8,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 enum FormatArg {
     #[default]
@@ -231,6 +260,20 @@ pub async fn run() -> i32 {
                 dry_run: args.dry_run,
                 verbose: args.verbose,
                 quiet: args.quiet,
+            })
+        }
+        Some(Command::Resolve(args)) => {
+            init_tracing(args.verbose);
+            resolve::run_resolve(resolve::ResolveOptions {
+                root: args.root,
+                from: args.from,
+                format: match args.format {
+                    FormatArg::Text => check::OutputFormat::Text,
+                    FormatArg::Json => check::OutputFormat::Json,
+                },
+                include_prefix: args.include_prefix,
+                allow_uri_sync: args.allow_uri_sync,
+                target: args.target,
             })
         }
         None => {
