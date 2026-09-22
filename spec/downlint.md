@@ -32,7 +32,7 @@ document does not restate them.
 
 ### 3.1 CLI
 
-Seven subcommands. `downlint` with no subcommand runs the check.
+Eight subcommands. `downlint` with no subcommand runs the check.
 
 | Command | Purpose |
 |---|---|
@@ -42,6 +42,7 @@ Seven subcommands. `downlint` with no subcommand runs the check.
 | `downlint rename-file` | Move a markdown file or attachment on disk and rewrite every link pointing at it. |
 | `downlint rename-link` | Rewrite a logical link-target identifier workspace-wide (no disk move). |
 | `downlint resolve <TARGET>` | Show what a link target resolves to: documents, attachments, folders, URI mappings. |
+| `downlint graph <QUERY>` | Read-only link-graph queries: `backlinks`, `links`, `orphans`, `deadends`, `unresolved`. |
 
 **`check`** — key flags (defaults in parentheses):
 
@@ -98,6 +99,47 @@ behavior and introduces no new diagnostics.
 - **Text output**: `{status} — {n} destination(s):` followed by one line per
   destination. **JSON output**: a single object with `target`, `anchor`,
   `status`, `destinations[]`, `prefix_candidates[]`, and `scheme`.
+
+**`graph`** — read-only link-graph queries (RFC 0015). Projects the existing
+resolution graph into navigation reports. It introduces no new diagnostics and
+changes no resolution semantics. The graph is built **complete**: every
+document's links are resolved, not just the linted ones — a mount with
+`lint = false` is targets-only for `check`, but its links still appear here.
+
+| Query | Lists |
+|---|---|
+| `backlinks <FILE>` | Every reference in any note that resolves to `FILE` (one line per occurrence). |
+| `links <FILE>` | All of `FILE`'s outgoing references, each with its resolution status. |
+| `orphans` | Notes with no incoming document link. |
+| `deadends` | Notes with no outgoing document link. |
+| `unresolved` | Every broken link, as `source:line:col  target`.
+
+- **`<FILE>`** (backlinks/links) names a document by workspace-relative path
+  (primary) or namespace path (mounted; the `as` prefix with its leading `/`
+  stripped), matched case-insensitive — the same rules as `resolve --from`.
+  A `<FILE>` not in the index is an error (exit 1). The path shown in
+  `backlinks` output is exactly what you pass back in.
+- **Document link**: a reference counts as a link to a note when its
+  destination is an indexed document, reached directly or via a heading
+  (`[[Note#H]]`). Attachments, folders, tags, and link definitions are not note
+  links. Ambiguous references are not confirmed links to any note (they
+  contribute to no query; `check` reports them as `link/ambiguous`).
+- **`links` vs `deadends`**: `links <A>` shows *all* outgoing references;
+  `deadends` counts *document links* only. A note whose only outgoing references
+  are broken or non-document targets appears in both `links <A>` and `deadends`.
+- **Self-links** count in both directions (a self-linking note is neither an
+  orphan nor a deadend).
+- **Flags**: `--root <DIR>` (override workspace root; may follow the subcommand).
+  No `--stdin` (queries need the full index) and no `--allow-uri-sync` (a
+  read-only query never runs a schema's `verify_cmd`; URI targets are stat-only).
+- **Exit codes**: `backlinks`/`links` — `0` `<FILE>` in index (list may be
+  empty) · `1` `<FILE>` not in index · `2` bad args / config error.
+  `orphans`/`deadends`/`unresolved` — `0` none found · `1` found · `2` bad args /
+  config error (so `downlint graph orphans || echo clean` gates CI).
+- **Output**: one line per result, sorted, 1-based. `backlinks`:
+  `{source}:{line}:{col}`. `links`: `{line}:{col}  {target}  →  {destination | <unresolved> | <ambiguous>}`.
+  `orphans`/`deadends`: one note path per line. `unresolved`:
+  `{source}:{line}:{col}  {target}`. Empty result → no output.
 
 **`init`** — scaffold a `.downlint.toml` in the workspace root (cwd, or `--root <DIR>`).
 Common options are written active (at their defaults) so the file doubles as a reference;
@@ -186,6 +228,8 @@ New paths are computed relative to each referencing document (cross-subtree move
   references, string-only F2 rename; `didRenameFiles` keeps indexes consistent.
 - **KB maintenance**: `rename-file` / `rename-link` to evolve the base; `--dry-run` to
   preview; the blocking rule forces cleanup of pre-existing diagnostics first.
+- **Graph navigation**: `graph backlinks` / `graph links` for per-note link panels;
+  `graph orphans` / `graph deadends` / `graph unresolved` for KB audits and CI gates.
 - **Cloud assets**: declare `[[schemas]]` to map a URI to a local folder;
   `check` stats the resolved path and (per `auto_verify`) flags evicted placeholders.
 - **Quick single-doc check**: `echo '# Title' | downlint -`.

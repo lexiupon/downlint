@@ -1,4 +1,5 @@
 pub mod check;
+pub mod graph;
 pub mod init;
 pub mod rename;
 pub mod resolve;
@@ -46,6 +47,13 @@ enum Command {
     /// and URI-scheme mappings.
     #[command(name = "resolve", about = "Show what a link target resolves to (documents, attachments, folders, URI mappings)")]
     Resolve(ResolveArgs),
+    /// Read-only link-graph queries: backlinks, links, orphans, deadends,
+    /// unresolved.
+    #[command(
+        name = "graph",
+        about = "Query the link graph (backlinks, links, orphans, deadends, unresolved)"
+    )]
+    Graph(GraphArgs),
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -191,6 +199,18 @@ struct ResolveArgs {
     verbose: u8,
 }
 
+#[derive(Args, Clone, Debug)]
+struct GraphArgs {
+    /// Global so it can follow the subcommand (`graph backlinks <f> --root …`),
+    /// matching `resolve`.
+    #[arg(long, global = true)]
+    root: Option<PathBuf>,
+    #[arg(long, short = 'v', default_value_t = 2, global = true)]
+    verbose: u8,
+    #[command(subcommand)]
+    query: graph::GraphQuery,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 enum FormatArg {
     #[default]
@@ -276,6 +296,13 @@ pub async fn run() -> i32 {
                 include_prefix: args.include_prefix,
                 allow_uri_sync: args.allow_uri_sync,
                 target: args.target,
+            })
+        }
+        Some(Command::Graph(args)) => {
+            init_tracing(args.verbose);
+            graph::run_graph(graph::GraphOptions {
+                root: args.root,
+                query: args.query,
             })
         }
         None => {
