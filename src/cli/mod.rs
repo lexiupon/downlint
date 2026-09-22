@@ -1,5 +1,6 @@
 pub mod check;
 pub mod graph;
+pub mod info;
 pub mod init;
 pub mod rename;
 pub mod resolve;
@@ -54,6 +55,13 @@ enum Command {
         about = "Query the link graph (backlinks, links, orphans, deadends, unresolved)"
     )]
     Graph(GraphArgs),
+    /// Show what downlint sees: the resolved workspace (mounts, schemas,
+    /// document counts, conflicts).
+    #[command(
+        name = "info",
+        about = "Show the resolved workspace (mounts, schemas, documents, conflicts)"
+    )]
+    Info(InfoArgs),
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -214,6 +222,17 @@ struct GraphArgs {
     query: graph::GraphQuery,
 }
 
+#[derive(Args, Clone, Debug)]
+struct InfoArgs {
+    #[arg(long)]
+    root: Option<PathBuf>,
+    #[arg(long, short = 'v', default_value_t = 2)]
+    verbose: u8,
+    /// Output format: `text` (default) or `json`.
+    #[arg(long, default_value = "text")]
+    format: FormatArg,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 enum FormatArg {
     #[default]
@@ -306,6 +325,16 @@ pub async fn run() -> i32 {
             graph::run_graph(graph::GraphOptions {
                 root: args.root,
                 query: args.query,
+                format: match args.format {
+                    FormatArg::Text => check::OutputFormat::Text,
+                    FormatArg::Json => check::OutputFormat::Json,
+                },
+            })
+        }
+        Some(Command::Info(args)) => {
+            init_tracing(args.verbose);
+            info::run_info(info::InfoOptions {
+                root: args.root,
                 format: match args.format {
                     FormatArg::Text => check::OutputFormat::Text,
                     FormatArg::Json => check::OutputFormat::Json,

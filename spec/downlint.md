@@ -32,7 +32,7 @@ document does not restate them.
 
 ### 3.1 CLI
 
-Eight subcommands. `downlint` with no subcommand runs the check.
+Nine subcommands. `downlint` with no subcommand runs the check.
 
 | Command | Purpose |
 |---|---|
@@ -43,6 +43,7 @@ Eight subcommands. `downlint` with no subcommand runs the check.
 | `downlint rename-link` | Rewrite a logical link-target identifier workspace-wide (no disk move). |
 | `downlint resolve <TARGET>` | Show what a link target resolves to: documents, attachments, folders, URI mappings. |
 | `downlint graph <QUERY>` | Read-only link-graph queries: `backlinks`, `links`, `orphans`, `deadends`, `unresolved`. |
+| `downlint info` | Show what downlint sees: the resolved workspace (mounts, schemas, documents, conflicts). |
 
 **`check`** — key flags (defaults in parentheses):
 
@@ -152,6 +153,66 @@ document's links are resolved, not just the linted ones — a mount with
   - `orphans` / `deadends`: `{"path"}`
   - `unresolved`: `{"source", "line", "col", "target"}`
 
+**`info`** — the resolved-workspace report (RFC 0016). A read-only, *descriptive*
+view of what downlint sees: it projects the **resolved** workspace (not the config
+file) into a report. It builds the index and resolved mounts but never resolves
+links, so it introduces no diagnostics and changes no resolution semantics. It
+always operates on the full workspace (like `graph`), never a single file.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--root <DIR>` | inferred | Override workspace root. |
+| `--format <text\|json>` | `text` | Output format. |
+
+- **Report sections** (top to bottom): header (version, workspace root, config
+  file or `(defaults)`, file extensions); **mounts** (one line each: the `as`
+  prefix or `(none)`, the resolved absolute `path`, `lint`, the document count,
+  a presence marker); **schemas** (one line each: the `uri` prefix, the expanded
+  absolute `to`, `auto_verify`, whether a `verify_cmd` is set, a presence
+  marker); **documents** (total / primary / mounted); **conflicts** (one line per
+  namespace collision, or `none`).
+- **Presence marker**: `✓` when the folder exists on disk, `✗ missing` when it
+  does not. For a mount this is the resolved `path`; for a schema the expanded
+  `to`. These markers are **informational** — they never affect the exit code.
+- **Document counts**: a document is *mounted* when it was loaded from a mount
+  (attributed to that mount's `as`, or `path` when there is no `as`); otherwise
+  *primary*. `total = primary + mounted`. A `lint = false` mount's documents are
+  still counted (they are indexed, just not linted).
+- **Exit codes**: `0` workspace loaded and report printed — **even if** some
+  mounts/schemas point at missing folders (shown as `✗ missing`) · `2` bad args /
+  config error (no workspace found, config parse/validation failure, or a schema
+  `to` that cannot be expanded because an environment variable is unset). There is
+  **no exit `1`**: `info` never "finds" a problem the way `check`/`graph` do.
+  (A validating `doctor` command — exit 1 on problems — is a possible follow-up.)
+- **Security**: `info` never calls the link resolver, so a schema's `verify_cmd`
+  is never executed and no URI reference is resolved. There is no
+  `--allow-uri-sync` flag.
+- **Text output** (default):
+  ```
+  downlint 0.11.0
+  workspace   /Users/jiacao/notes
+  config      /Users/jiacao/notes/.downlint.toml
+  extensions  md, markdown
+
+  mounts (2)
+    /kb       /Users/jiacao/kb       lint=yes   42 docs  ✓
+    (none)    /Users/jiacao/archive  lint=no     7 docs  ✓
+
+  schemas (1)
+    icloud://assets/  →  /Users/jiacao/Library/…/assets  auto_verify=yes  verify_cmd=no  ✓
+
+  documents  56 total  (47 primary · 9 mounted)
+  conflicts  none
+  ```
+  An empty section renders its header with a count of `0` and no rows.
+- **JSON output** (`--format json`): a single pretty-printed object
+  `{version, workspace, config, file_extensions, mounts[], schemas[], documents,
+  conflicts[]}`. `config` is `null` when no `.downlint.toml` was found;
+  `mounts[].as` is `null` when the mount has no `as`. `mounts[]` entries are
+  `{as, path, lint, docs, exists}`; `schemas[]` entries are `{uri, to, expanded,
+  auto_verify, verify_cmd, exists}`; `documents` is `{total, primary, mounted}`;
+  `conflicts[]` entries are `{mount, detail}`. Empty sections are `[]`.
+
 **`init`** — scaffold a `.downlint.toml` in the workspace root (cwd, or `--root <DIR>`).
 Common options are written active (at their defaults) so the file doubles as a reference;
 advanced options are commented out for opt-in. Refuses to overwrite an existing
@@ -241,6 +302,9 @@ New paths are computed relative to each referencing document (cross-subtree move
   preview; the blocking rule forces cleanup of pre-existing diagnostics first.
 - **Graph navigation**: `graph backlinks` / `graph links` for per-note link panels;
   `graph orphans` / `graph deadends` / `graph unresolved` for KB audits and CI gates.
+- **Workspace introspection**: `info` to see what downlint sees — resolved mounts
+  (paths, `as` prefixes, doc counts), schemas (expanded `to`, presence), and namespace
+  conflicts. The first thing to run when debugging mount/schema configuration.
 - **Cloud assets**: declare `[[schemas]]` to map a URI to a local folder;
   `check` stats the resolved path and (per `auto_verify`) flags evicted placeholders.
 - **Quick single-doc check**: `echo '# Title' | downlint -`.
