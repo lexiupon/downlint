@@ -67,13 +67,92 @@ pub fn percent_decode(input: &str) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-pub fn resolve_explicit_path(root: &Path, source_dir: &Path, target: &str) -> PathBuf {
+pub fn resolve_explicit_path(
+    root: &Path,
+    source_dir: &Path,
+    target: &str,
+    is_wiki: bool,
+) -> PathBuf {
     let decoded = percent_decode(target);
-    if decoded.starts_with('/') {
-        root.join(decoded.trim_start_matches('/'))
+    let base = resolution_base(&decoded, source_dir, root, is_wiki);
+    // Strip a leading `/` so an absolute target joins onto the root rather than
+    // replacing it (`Path::join` with an absolute path discards the base).
+    let rel = decoded.trim_start_matches('/');
+    normalize_path(&base.join(rel))
+}
+
+/// The directory a path target resolves against (RFC 0013). Strict,
+/// prefix-driven, no fallback:
+/// - `./…` / `../…` → the containing document's directory
+/// - `/…` → the workspace root
+/// - bare wiki `…/…` (contains `/`, no prefix) → the workspace root
+/// - otherwise (markdown bare path / basename) → the containing document's dir
+pub fn resolution_base<'a>(
+    decoded: &str,
+    source_dir: &'a Path,
+    root: &'a Path,
+    is_wiki: bool,
+) -> &'a Path {
+    if decoded.starts_with("./") || decoded.starts_with("../") {
+        source_dir
+    } else if decoded.starts_with('/') {
+        root
+    } else if is_wiki && decoded.contains('/') {
+        root
     } else {
-        source_dir.join(decoded)
+        source_dir
     }
+}
+
+/// True when a path target resolves against the workspace root (RFC 0013):
+/// a leading `/`, or a bare wiki path (contains `/`, no `./`/`../` prefix).
+/// Root-relative targets are the ones that may reach a mount via its `prefix`
+/// (RFC 0010).
+pub fn is_root_relative(decoded: &str, is_wiki: bool) -> bool {
+    decoded.starts_with('/')
+        || (is_wiki
+            && decoded.contains('/')
+            && !decoded.starts_with("./")
+            && !decoded.starts_with("../"))
+}
+
+/// Lexically normalize a path: drop `.` components and resolve `..` against the
+/// preceding component (filesystem-free). A `..` with nothing to cancel is kept,
+/// so the result may point above the base — callers simply find no match.
+pub fn normalize_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut components: Vec<Component<'_>> = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(components.last(), Some(Component::Normal(_))) {
+                    components.pop();
+                } else {
+                    components.push(component);
+                }
+            }
+            other => components.push(other),
+        }
+    }
+    components.iter().collect()
+}
+
+/// True if two `/`-separated path strings refer to the same file, treating a
+/// trailing `.md` as optional when `is_wiki` (Obsidian rule: `.md` is optional
+/// for markdown, required otherwise). Case-insensitive.
+pub fn path_md_optional_eq(a: &str, b: &str, is_wiki: bool) -> bool {
+    let a = a.replace('\\', "/").to_ascii_lowercase();
+    let b = b.replace('\\', "/").to_ascii_lowercase();
+    if a == b {
+        return true;
+    }
+    if !is_wiki {
+        return false;
+    }
+    let a_no_ext = Path::new(&a).extension().is_none();
+    let b_no_ext = Path::new(&b).extension().is_none();
+    (format!("{a}.md") == b && a_no_ext) || (format!("{b}.md") == a && b_no_ext)
 }
 
 fn is_scheme_char(ch: char) -> bool {

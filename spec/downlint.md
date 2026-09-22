@@ -69,14 +69,15 @@ Seven subcommands. `downlint` with no subcommand runs the check.
 
 **`resolve`** — target resolution query (RFC 0012). Given a link target, list
 **every** destination it resolves to, with the reason each matched. It uses the
-existing matching rules exactly (RES-03/04/05/06/07) — it predicts `check`'s
+existing matching rules exactly (RES-03/04/05/06/07, including the RFC 0013
+Obsidian-compatible path interpretation) — it predicts `check`'s
 behavior and introduces no new diagnostics.
 
 | Flag | Default | Effect |
 |---|---|---|
 | `<TARGET>` | *(required)* | The link target (wiki-link target grammar: title/stem, explicit path, folder target, optional `#anchor`, or `scheme://…`). An empty target, or a target consisting only of `#anchor`, is a bad argument. |
 | `--root <DIR>` | inferred | Override workspace root. |
-| `--from <DOC>` | workspace root | Resolve relative targets as if the link were in this document (must name a document in the index — primary or mounted — else exit 2). |
+| `--from <DOC>` | workspace root | Resolve **source-relative** targets (`./…`/`../…`) as if the link were in this document (must name a document in the index — primary or mounted — else exit 2). Bare wiki `path/file` and `/…` targets are root-relative and ignore `--from` (RFC 0013). |
 | `--format <text\|json>` | `text` | Output format. |
 | `--include-prefix` | off | Also list prefix candidates when `wiki.obsidian_prefix` is off (advisory: never affects status or exit code). |
 | `--allow-uri-sync` | off | Permit `verify_cmd` subprocess execution for URI targets (safety gate). |

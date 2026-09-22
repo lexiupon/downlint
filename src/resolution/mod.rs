@@ -12,7 +12,10 @@ use crate::resolution::conn::{
     AmbiguousReference, DestinationKind, ResolvedDestination, ResolvedDocument, ResolvedReference,
     UnresolvedReference,
 };
-use crate::resolution::path::{has_scheme, is_external_web_scheme, is_folder_link_target, resolve_explicit_path, scheme_of};
+use crate::resolution::path::{
+    has_scheme, is_external_web_scheme, is_folder_link_target, is_root_relative,
+    resolve_explicit_path, scheme_of,
+};
 use crate::resolution::prefix::PrefixIndex;
 use crate::resolution::uri::{UriOutcome, UriResolver};
 use crate::utils::{
@@ -721,21 +724,22 @@ fn resolve_folder_link<'a>(
     target: &str,
     root: &Path,
     mounts: &'a [ResolvedMount],
+    is_wiki: bool,
 ) -> Option<(PathBuf, Option<&'a ResolvedMount>)> {
-    // Strip anchor and trailing / to get the actual directory path
+    // Strip the anchor; keep the trailing "/" so base selection sees a bare
+    // wiki "folder/" as root-relative (RFC 0013).
     let (path_part, _anchor) = crate::resolution::path::split_anchor(target);
-    let target_dir = path_part.trim_end_matches('/');
 
-    // For absolute paths (starting with /), resolve from root
-    let resolved = resolve_explicit_path(root, source_dir, target_dir);
+    let resolved = resolve_explicit_path(root, source_dir, path_part, is_wiki);
     if resolved.is_dir() {
         return Some((resolved, None));
     }
 
-    // Check in mount roots for absolute paths (RFC 0010): try a direct join to
-    // the mount root, and (when the mount has a prefix) strip the prefix first.
-    if target_dir.starts_with('/') {
-        let rel = target_dir.trim_start_matches('/');
+    // Check in mount roots for root-relative targets (RFC 0010, 0013): try a
+    // direct join to the mount root, and (when the mount has a prefix) strip
+    // the prefix first.
+    if is_root_relative(path_part, is_wiki) {
+        let rel = path_part.trim_matches('/');
         for mount in mounts {
             let candidate = mount.root.join(rel);
             if candidate.is_dir() {
@@ -835,6 +839,7 @@ fn resolve_wiki_ref(
             target,
             &ctx.input.root,
             &ctx.input.mounts,
+            true,
         ) {
             let (folder_part, _anchor) = crate::resolution::path::split_anchor(target);
             ctx.graph.resolved_references.push(ResolvedReference {
@@ -905,7 +910,7 @@ fn resolve_wiki_ref(
                 name: String::new(),
                 range: None,
             };
-            finalize_doc_or_attachment(ctx, target, heading, vec![dest]);
+            finalize_doc_or_attachment(ctx, target, heading, vec![dest], true);
             return;
         }
         if prefix_candidates.len() > 1 {
@@ -931,7 +936,7 @@ fn resolve_wiki_ref(
         }
     }
 
-    finalize_doc_or_attachment(ctx, target, heading, destinations);
+    finalize_doc_or_attachment(ctx, target, heading, destinations, true);
 }
 
 fn resolve_inline_ref(
@@ -1016,6 +1021,7 @@ fn resolve_inline_ref(
             target,
             &ctx.input.root,
             &ctx.input.mounts,
+            false,
         ) {
             let (folder_part, _anchor) = crate::resolution::path::split_anchor(target);
             ctx.graph.resolved_references.push(ResolvedReference {
@@ -1049,7 +1055,7 @@ fn resolve_inline_ref(
 
 
     let destinations = find_doc_matches(all_docs, &doc.path, &ctx.input.root, target, true, false);
-    finalize_doc_or_attachment(ctx, target, anchor, destinations);
+    finalize_doc_or_attachment(ctx, target, anchor, destinations, false);
 }
 
 fn finalize_doc_or_attachment(
@@ -1057,13 +1063,14 @@ fn finalize_doc_or_attachment(
     target: &str,
     anchor: Option<&str>,
     mut destinations: Vec<ResolvedDestination>,
+    is_wiki: bool,
 ) {
     let doc = ctx.doc;
     let symbol = ctx.symbol;
     let reference = ctx.reference;
     if destinations.is_empty() && is_attachment_candidate_path(target) {
         let source_dir = doc.path.parent().unwrap_or(ctx.input.root.as_path());
-        let path = resolve_explicit_path(&ctx.input.root, source_dir, target);
+        let path = resolve_explicit_path(&ctx.input.root, source_dir, target, is_wiki);
         if path.exists() {
             destinations.push(ResolvedDestination {
                 path,

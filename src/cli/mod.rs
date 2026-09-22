@@ -172,7 +172,9 @@ struct ResolveArgs {
     target: String,
     #[arg(long)]
     root: Option<PathBuf>,
-    /// Resolve relative targets as if the link were in this document.
+    /// Resolve source-relative targets (`./…`/`../…`) as if the link were in
+    /// this document. Bare wiki `path/file` and `/…` targets are root-relative
+    /// and ignore this flag (RFC 0013).
     #[arg(long)]
     from: Option<PathBuf>,
     #[arg(long, default_value = "text")]

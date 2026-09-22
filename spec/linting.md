@@ -63,6 +63,7 @@ as described in RFC 2119.
 | **document stem** | The file name of a document without its extension. |
 | **heading ID** | The slug of a heading, per RES-01. |
 | **explicit path** | A target that is slash-based or an unambiguous file name, per LNK-02. |
+| **bare wiki path** | A wiki `path/file` target (contains `/`, no `./`/`../`/leading `/`), resolved against the workspace root (RFC 0013). |
 | **explicit file-like target** | An explicit path, or a same-directory basename with an extension (e.g. `data.xlsx`). |
 | **resolved** | A link with exactly one destination. **Ambiguous**: more than one. **Broken**: none. |
 | **occurrence** | Identity of a single link instance. Two identical links at different ranges are distinct occurrences and are diagnosed independently. |
@@ -122,12 +123,14 @@ Tests: `parser/scanner.rs` code-span masking tests; `obsidian_prefix_alias_form_
 
 A target is one of:
 
-- **relative path** — resolved against the containing document's directory
-  (`[x](next.md)` from `docs/guide/intro.md` → `docs/guide/next.md`)
+- **relative path** — a markdown path, resolved against the containing document's
+  directory (`[x](next.md)` from `docs/guide/intro.md` → `docs/guide/next.md`)
 - **workspace-absolute path** — leading `/`, resolved against the workspace root
   (`[x](/README.md)` → `<root>/README.md`)
 - **dot-relative path** — `./doc`, `../doc`; explicit, anchored at the source document
-  directory, `./` normalized away after anchoring
+  directory, `.`/`..` normalized away after anchoring
+- **bare wiki path** — a wiki `path/file` (contains `/`, no `./`/`../`/leading `/`),
+  resolved against the workspace root (RFC 0013)
 - **in-page anchor** — `#section` (empty document part)
 - **cross-document anchor** — `path#section`: the path resolves first, then the section
   inside the target document
@@ -201,11 +204,22 @@ Tests: `slug_preserves_cjk_and_strips_punctuation`, `slug_generation_with_accent
 
 ### 3.2 RES-02 — Resolution Base
 
-- Relative targets resolve against the **containing document's directory**.
+The resolution base for a path target is decided by its prefix — a strict,
+prefix-driven rule with no fallback (RFC 0013, Obsidian-compatible):
+
+- `./…` and `../…` targets resolve against the **containing document's directory**.
+- Workspace-absolute targets (`/…`) resolve against the **workspace root**.
+- A **bare wiki** path target (`path/file`, contains `/`, no `./`/`../`/leading `/`)
+  resolves against the **workspace root** (RFC 0013).
+- A **markdown** bare path target and any basename target resolve against the
+  **containing document's directory** (standard markdown, source-relative).
+
+The `.` and `..` components of a resolved path are normalized lexically before
+comparison (RFC 0013); a path that normalizes above the root matches nothing.
+
 - The stdin document's directory is the **workspace root**: relative targets in
   `--stdin` input resolve against the root, and the full workspace (documents and
   attachments) is indexed for resolution, with workspace documents as targets only.
-- Workspace-absolute targets (`/…`) resolve against the **workspace root**.
 - Targets are percent-decoded (RFC 3986, UTF-8); malformed escapes are kept literal.
 - Backslashes in link targets are treated as path separators (normalized to `/` internally).
 - Stem and path comparisons are **ASCII case-insensitive** in memory, regardless of
@@ -216,7 +230,11 @@ Tests: `slug_preserves_cjk_and_strips_punctuation`, `slug_generation_with_accent
 
 Tests: `inline_link_with_non_ascii_filename_resolves_correctly`,
 `wiki_link_with_mojibake_does_not_match_correct_title`,
-`percent_encoded_target_decodes_to_filesystem_path`.
+`percent_encoded_target_decodes_to_filesystem_path`,
+`bare_wiki_path_resolves_root_relative`,
+`bare_wiki_path_deterministic_regardless_of_source`,
+`dot_relative_wiki_path_resolves_as_document`,
+`markdown_bare_path_stays_source_relative`.
 
 ### 3.3 RES-03 — Document Matching
 
@@ -227,9 +245,15 @@ For a **non-explicit** wiki target, a document matches when ANY of:
 3. workspace-relative path without extension equals the target (ASCII case-insensitive)
 4. full workspace-relative path (backslashes → `/`) equals the target (ASCII case-insensitive)
 
-For an **explicit** target, matching is path-based only: exact path equality or
-relative-path-without-extension equality. A path-like target may additionally fall back
-to a title-slug match (so a mounted document can be reached by an explicit path).
+For an **explicit** target, matching is path-based only (RFC 0013): the resolved
+candidate (per RES-02, `.`/`..` normalized) is compared against the document's
+filesystem path, with the **`.md` suffix optional for wiki targets** (a `.md`
+document matches a candidate with or without the `.md` suffix; a non-`.md` file
+requires the exact path). A **root-relative** target (RES-02) additionally matches
+the document's namespace path, which is how a mount `prefix` (a virtual directory
+at the workspace root) is reached (RFC 0010). A path-like wiki target may
+additionally fall back to a title-slug match (so a mounted document can be reached
+by an explicit path). Markdown path targets match exactly (extension required).
 
 **Title.** When `core.title_from_heading` is true (default), the document's first H1 is its
 title; otherwise the file stem. Title-only wiki links (`[[|My Title]]`) resolve by title
@@ -320,6 +344,10 @@ target:
 Targets without a path separator and without an extension (e.g. `intro`) never trigger the
 attachment fallback. External web schemes (LNK-03) are still skipped.
 
+*(RFC 0013: a markdown file that matches an indexed document resolves as a **document**
+(step 1), so the attachment fallback effectively applies to non-markdown files and to
+file-like paths that match no indexed document.)*
+
 Tests: `explicit_file_like_targets_resolve_as_attachments_without_config`,
 `missing_explicit_file_like_targets_emit_broken_link_diagnostics`,
 `explicit_markdown_document_paths_resolve_as_documents_and_headings`,
@@ -396,10 +424,11 @@ A mounted document's *namespace path* is `prefix/rel` when a `prefix` is set, el
 
 **Reachability.**
 
-- **Relative** targets (markdown links, and wiki targets with path syntax) resolve against
-  the containing document's directory and do **not** cross into a mount.
-- **Workspace-absolute** targets (`/…`) resolve against the workspace root, or against a
-  mount whose `prefix` matches (the prefix is a virtual directory at the workspace root).
+- **Source-relative** targets — markdown links, and wiki `./…`/`../…` targets — resolve
+  against the containing document's directory and do **not** cross into a mount.
+- **Root-relative** targets — workspace-absolute (`/…`) and bare wiki `path/file` targets
+  (RFC 0013) — resolve against the workspace root, or against a mount whose `prefix`
+  matches (the prefix is a virtual directory at the workspace root).
 - **Bare stem / title** wiki targets (`[[Title]]`) resolve across the whole namespace
   (primary + all mounts).
 
@@ -728,6 +757,7 @@ produced.
 | 2026-09-21 | 0010 (Phase 2) | RES-07 re-scoped from “External URI Mapping” (warming) to “Schemes” (rewrite + stat + verify): `[uri]` / `[[uri.mappings]]` replaced by `[[schemas]]` (`prefix`, `root`, optional `auto_verify` bool default `true`, optional `verify_cmd`); warming removed (`warm_cmd` / `warm_required` / `warm_timeout` dropped); no caching; the `warm-uri-mappings` subcommand removed; `auto_verify` is now a per-schema bool running vendor-specific heuristics only (the generic 0-byte + recent-mtime heuristic dropped); `verify_cmd` gated by `--allow-uri-sync`. Diagnostics `uri/sync-skipped`, `uri/sync-failed`, `uri/batch-clamped` tombstoned; `uri/no-mapping` kept (re-scoped to schemes). |
 | 2026-09-21 | 0011 | RES-08 `mount/conflict` re-scoped from a coarse top-level-entry check (prefix/folder name match) to a fine-grained **namespace-path collision**: a same-path file collision, or a file/folder sharing a name (stem) at the same location. Sharing a top-level name alone is no longer a conflict (a mount merges into an existing folder when no file collides). `MountConflictKind::{Prefix,Folder}` replaced by a single `PathCollision`. Conflicting mount file(s) are targets only (not linted). `link/ambiguous` is explicitly *not* a mount conflict. |
 | 2026-09-22 | 0012 | Added the `downlint resolve` target resolution query (spec/downlint.md §3.1): a read-only projection of the existing matching rules (RES-03/04/05/06/07) — no new diagnostics, no new matching semantics. The per-document matching rules are single-sourced (`match_document_kinds`), shared by link resolution and the query; `find_doc_matches` is rebuilt on top with unchanged behavior. |
+| 2026-09-23 | 0013 | Obsidian-compatible path resolution. RES-02 re-scoped to a strict prefix-driven base rule (no fallback): `./…`/`../…` → containing document's directory; `/…` and **bare wiki** `path/file` → workspace root; markdown bare paths/basenames → containing document's directory (unchanged). `.`/`..` normalized lexically before comparison. RES-03 explicit matching re-scoped: the resolved candidate is compared with the **`.md` suffix optional for wiki targets** (fixes the previously-dead extensionless rule); root-relative targets also match the namespace path (mount `prefix` access, now for bare wiki paths too, not only `/…`). RES-06: a markdown file matching an indexed document resolves as a document (attachment fallback is for non-markdown / unmatched file-like paths). LNK-02 adds the **bare wiki path** form. Consequences: extensionless and dot-relative wiki path links resolve; `[[../x.md]]` resolves as a document (not attachment) and its anchor is validated. |
 
 **Known coverage gaps** (clauses without tests yet): scheme-target + anchor →
 `link/broken-anchor`.

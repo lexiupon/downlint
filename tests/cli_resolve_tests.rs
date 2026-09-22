@@ -190,17 +190,17 @@ fn resolve_mount_attribution() {
         .stdout(predicate::str::contains("(mount: "));
 }
 
-/// `--from notes/a.md` + `../shared/b.md` resolves against `notes/` (attachment
-/// fallback, RES-06 — the same behavior `check` has for dot-relative links);
-/// without `--from` the same target is `broken` (relative against the root,
-/// outside the workspace).
+/// `--from notes/a.md` + `../shared/b.md` normalizes to `shared/b.md` and
+/// resolves as a **document** (RFC 0013 — dot-relative links match the document,
+/// not the attachment fallback); without `--from` the same target is `broken`
+/// (relative against the root, outside the workspace).
 #[test]
 fn resolve_from_relative_context() {
     let temp = write_vault(&[("notes/a.md", "# A\n"), ("shared/b.md", "# B\n")]);
     resolve(temp.path(), "../shared/b.md", &["--from", "notes/a.md"])
         .success()
         .stdout(predicate::str::contains("resolved — 1 destination:"))
-        .stdout(predicate::str::contains("[attachment]"));
+        .stdout(predicate::str::contains("[path]"));
     resolve(temp.path(), "../shared/b.md", &[])
         .failure()
         .code(1)

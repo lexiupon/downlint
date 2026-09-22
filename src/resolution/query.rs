@@ -9,8 +9,9 @@
 use crate::resolution::auto_verify::{AutoVerifyOutcome, classify};
 use crate::resolution::conn::ResolvedDocument;
 use crate::resolution::path::{
-    has_scheme, is_external_web_scheme, is_folder_link_target, path_without_extension,
-    resolve_explicit_path, scheme_of, split_anchor,
+    has_scheme, is_external_web_scheme, is_folder_link_target, is_root_relative,
+    path_md_optional_eq, path_without_extension, percent_decode, resolve_explicit_path, scheme_of,
+    split_anchor,
 };
 use crate::resolution::slug::Slug;
 use crate::resolution::uri::UriOutcome;
@@ -162,13 +163,6 @@ pub fn match_document_kinds(
     is_wiki: bool,
 ) -> Vec<MatchKind> {
     let target_slug = Slug::from_heading_text(target);
-    let explicit_path = resolve_explicit_path(root, source_dir, target);
-    let explicit_no_ext = path_without_extension(&explicit_path);
-    // For a workspace-absolute target (`/kb/notes/foo`), its namespace path is
-    // the target without the leading slash (RFC 0010 mount prefix access).
-    let target_namespace_no_ext = target
-        .strip_prefix('/')
-        .map(|value| path_without_extension(Path::new(value)));
 
     // `namespace_rel_path` equals `rel_path` for primary docs and is
     // `prefix/rel` (or `rel`) for mounted docs, so matching on it is co-equal
@@ -176,17 +170,27 @@ pub fn match_document_kinds(
     let ns_no_ext = path_without_extension(&doc.namespace_rel_path);
 
     if explicit_only || is_explicit_path(target) {
-        // Path-based matching:
-        //  (a) filesystem match (markdown links, source-relative);
-        //  (b) resolved-path namespace match;
-        //  (c) workspace-absolute namespace match (mount prefix access).
+        // Path-based matching (RFC 0013): the resolved candidate (correct base
+        // per `resolution_base`, `.`/`..` normalized) is compared against the
+        // document's filesystem path, with the `.md` suffix optional for wiki
+        // targets. Root-relative targets additionally match the document's
+        // namespace path, which is how a mount `prefix` (a virtual directory at
+        // the workspace root) is reached (RFC 0010).
+        let explicit_path = resolve_explicit_path(root, source_dir, target, is_wiki);
+        let decoded = percent_decode(target);
         let mut kinds = Vec::new();
-        let fs_match = doc.path == explicit_path;
-        let rel_ns_match = ns_no_ext.eq_ignore_ascii_case(&explicit_no_ext);
-        let abs_ns_match = target_namespace_no_ext
-            .as_ref()
-            .is_some_and(|value| value.eq_ignore_ascii_case(&ns_no_ext));
-        if fs_match || rel_ns_match || abs_ns_match {
+        let fs_match = path_md_optional_eq(
+            &doc.path.to_string_lossy(),
+            &explicit_path.to_string_lossy(),
+            is_wiki,
+        );
+        let ns_match = if is_root_relative(&decoded, is_wiki) {
+            let target_ns = decoded.trim_start_matches('/');
+            path_md_optional_eq(&doc.namespace_rel_path.to_string_lossy(), target_ns, is_wiki)
+        } else {
+            false
+        };
+        if fs_match || ns_match {
             kinds.push(MatchKind::Path);
         }
         // A wiki target containing `/` may actually be a title (e.g.
@@ -276,7 +280,7 @@ pub fn resolve_target(
             };
         }
         if let Some((fs_path, mount)) =
-            super::resolve_folder_link(source_dir, target, &input.root, &input.mounts)
+            super::resolve_folder_link(source_dir, target, &input.root, &input.mounts, true)
         {
             let base = mount
                 .map(|m| m.root.as_path())
@@ -324,7 +328,7 @@ pub fn resolve_target(
     // Attachment fallback (RES-06): file-like targets only, after document
     // resolution.
     if destinations.is_empty() && is_attachment_candidate_path(path_part) {
-        let fs_path = resolve_explicit_path(&input.root, source_dir, path_part);
+        let fs_path = resolve_explicit_path(&input.root, source_dir, path_part, true);
         if fs_path.exists() {
             destinations.push(TargetDestination {
                 path: fs_path

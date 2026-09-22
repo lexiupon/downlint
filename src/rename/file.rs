@@ -317,6 +317,7 @@ fn resolve_link_doc(target: &str, document: &ResolvedDocument) -> PathBuf {
         std::path::Path::new(""),
         source_dir,
         target,
+        true,
     );
     // If the target has an extension already, return the direct path.
     if Path::new(target).extension().is_some() {
@@ -328,6 +329,7 @@ fn resolve_link_doc(target: &str, document: &ResolvedDocument) -> PathBuf {
             std::path::Path::new(""),
             source_dir,
             &format!("{target}.{ext}"),
+            true,
         );
         if candidate.exists() {
             return candidate;
@@ -345,6 +347,7 @@ fn link_resolves_to(decoded: &str, from_abs: &Path, document: &ResolvedDocument)
         std::path::Path::new(""),
         source_dir,
         decoded.split('#').next().unwrap_or(decoded),
+        true,
     );
     resolved.canonicalize().ok() == from_abs.canonicalize().ok()
         || resolved == *from_abs

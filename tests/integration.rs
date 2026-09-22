@@ -255,6 +255,157 @@ fn explicit_markdown_document_paths_resolve_as_documents_and_headings() {
 }
 
 // ============================================================================
+// RFC 0013 — Obsidian-compatible path resolution
+// ============================================================================
+
+/// RFC 0013: a bare wiki path `[[shared/b]]` resolves against the workspace
+/// root (not the containing document's directory), with `.md` optional.
+#[test]
+fn bare_wiki_path_resolves_root_relative() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    let source = write_document(root, "notes/a.md", "[[shared/b]]\n");
+    let target = write_document(root, "shared/b.md", "# B\n");
+
+    let graph = resolve_graph(root, vec![source, target.clone()]);
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
+
+    assert!(
+        diagnostics.iter().all(|d| d.code != DiagnosticCode::LinkBroken),
+        "expected bare wiki path to resolve root-relative, got: {diagnostics:?}"
+    );
+    let ref_ = graph
+        .resolved_references
+        .iter()
+        .find(|r| matches!(&r.reference, Ref::Wiki { target, .. } if target == "shared/b"))
+        .expect("expected resolved wiki reference");
+    assert_eq!(ref_.destinations.len(), 1);
+    assert_eq!(ref_.destinations[0].path, target.path);
+}
+
+/// RFC 0013: a bare wiki path resolves to the same document regardless of the
+/// containing document's location (determinism — the Obsidian rationale).
+#[test]
+fn bare_wiki_path_deterministic_regardless_of_source() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    let source_sub = write_document(root, "notes/a.md", "[[shared/b]]\n");
+    let source_root = write_document(root, "README.md", "[[shared/b]]\n");
+    let target = write_document(root, "shared/b.md", "# B\n");
+
+    let graph = resolve_graph(root, vec![source_sub, source_root, target.clone()]);
+    let refs: Vec<_> = graph
+        .resolved_references
+        .iter()
+        .filter(|r| matches!(&r.reference, Ref::Wiki { target, .. } if target == "shared/b"))
+        .collect();
+    assert_eq!(refs.len(), 2, "expected both sources to resolve, got: {refs:?}");
+    for r in &refs {
+        assert_eq!(r.destinations.len(), 1);
+        assert_eq!(r.destinations[0].path, target.path);
+    }
+}
+
+/// RFC 0013: `[[../shared/b]]` from `notes/` normalizes to `shared/b` and
+/// resolves as a **document** (not the attachment fallback).
+#[test]
+fn dot_relative_wiki_path_resolves_as_document() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    let source = write_document(root, "notes/a.md", "[[../shared/b]]\n");
+    let target = write_document(root, "shared/b.md", "# B\n");
+
+    let graph = resolve_graph(root, vec![source, target.clone()]);
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
+
+    assert!(
+        diagnostics.iter().all(|d| d.code != DiagnosticCode::LinkBroken),
+        "expected dot-relative wiki path to resolve, got: {diagnostics:?}"
+    );
+    let ref_ = graph
+        .resolved_references
+        .iter()
+        .find(|r| matches!(&r.reference, Ref::Wiki { target, .. } if target == "../shared/b"))
+        .expect("expected resolved wiki reference");
+    assert_eq!(ref_.destinations.len(), 1);
+    assert!(matches!(
+        ref_.destinations[0].kind,
+        ResolveDestinationKind::Document
+    ));
+    assert_eq!(ref_.destinations[0].path, target.path);
+}
+
+/// RFC 0013: anchors on dot-relative wiki links are validated (previously
+/// silently unvalidated because the link resolved as an attachment).
+#[test]
+fn dot_relative_wiki_anchor_validated() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    let source = write_document(root, "notes/a.md", "[[../shared/b.md#nope]]\n");
+    let target = write_document(root, "shared/b.md", "# B\n\n## Section\n");
+
+    let graph = resolve_graph(root, vec![source, target]);
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
+
+    assert!(
+        diagnostics.iter().any(|d| d.code == DiagnosticCode::LinkBrokenAnchor),
+        "expected broken-anchor for nonexistent section, got: {diagnostics:?}"
+    );
+}
+
+/// RFC 0013: markdown links keep standard source-relative semantics and require
+/// the extension — `[x](shared/b)` from `notes/` does not resolve to
+/// `shared/b.md`.
+#[test]
+fn markdown_bare_path_stays_source_relative() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    let source = write_document(root, "notes/a.md", "[x](shared/b)\n");
+    let target = write_document(root, "shared/b.md", "# B\n");
+
+    let graph = resolve_graph(root, vec![source, target]);
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
+
+    assert!(
+        diagnostics.iter().any(|d| d.code == DiagnosticCode::LinkBroken),
+        "expected markdown bare path (no ext) to be broken, got: {diagnostics:?}"
+    );
+}
+
+/// RFC 0013: `.md` is optional for wiki path targets — `[[shared/b]]` and
+/// `[[shared/b.md]]` both resolve to the same document.
+#[test]
+fn wiki_path_extension_optional() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    let source = write_document(root, "notes/a.md", "[[shared/b]]\n[[shared/b.md]]\n");
+    let target = write_document(root, "shared/b.md", "# B\n");
+
+    let graph = resolve_graph(root, vec![source, target.clone()]);
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
+
+    assert!(
+        diagnostics.iter().all(|d| d.code != DiagnosticCode::LinkBroken),
+        "expected both extension forms to resolve, got: {diagnostics:?}"
+    );
+    for t in ["shared/b", "shared/b.md"] {
+        let ref_ = graph
+            .resolved_references
+            .iter()
+            .find(|r| matches!(&r.reference, Ref::Wiki { target, .. } if target == t))
+            .unwrap_or_else(|| panic!("expected resolved wiki reference for {t}"));
+        assert_eq!(ref_.destinations.len(), 1);
+        assert_eq!(ref_.destinations[0].path, target.path);
+    }
+}
+
+// ============================================================================
 // Non-ASCII (accented Latin) character tests
 // ============================================================================
 
