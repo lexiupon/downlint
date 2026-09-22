@@ -82,12 +82,12 @@ pub struct ResolvedDocument {
     pub tags: HashMap<String, Vec<ResolvedDestination>>,
     /// The document's address in the combined namespace (RFC 0010). For a
     /// primary doc this equals `rel_path`; for a mounted doc it is
-    /// `prefix/rel_path` (when a `prefix` is set) or `rel_path` (otherwise).
+    /// `as/rel_path` (when `as` is set) or `rel_path` (otherwise).
     /// Path-based wiki targets are matched against this, co-equal across
     /// primary and mounted docs.
     pub namespace_rel_path: PathBuf,
     /// Attribution for diagnostics emitted from a mounted doc: the mount's
-    /// `prefix` (or `root` when there is no prefix). `None` for primary docs.
+    /// `as` (or `path` when there is no `as`). `None` for primary docs.
     pub mount: Option<String>,
     /// Whether this document's own links are linted. Primary docs are always
     /// sources; mounted docs are sources only when their mount has `lint = true`.
