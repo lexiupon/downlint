@@ -7,6 +7,25 @@ Pre-1.0 versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.10.0] — Graph `--format json`
+
+`downlint graph` now supports `--format <text|json>` (default `text`; the flag may
+follow the subcommand, like `--root`).
+
+### Added
+
+- **JSON output** for all five graph queries: a single pretty-printed envelope
+  `{"query": <name>, "results": [...]}` — plus `"file"` (the canonical namespace
+  path) for `backlinks`/`links`. `results` is `[]` when empty.
+  - `backlinks`: `{"source", "line", "col"}`
+  - `links`: `{"line", "col", "target", "status", "destination"}` — `status` is
+    `"resolved" | "unresolved" | "ambiguous"`; `destination` is the path(s) or `null`.
+  - `orphans` / `deadends`: `{"path"}`
+  - `unresolved`: `{"source", "line", "col", "target"}`
+- Exit codes are **independent of `--format`**; text output is byte-identical to
+  0.9.0. Errors (e.g. `<FILE>` not in the index) still go to stderr with no JSON
+  envelope on stdout.
+
 ## [0.9.0] — Graph Query Commands
 
 New `downlint graph <query>` — read-only link-graph queries that project the existing
