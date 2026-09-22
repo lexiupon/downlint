@@ -7,6 +7,37 @@ Pre-1.0 versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.9.0] — Graph Query Commands
+
+New `downlint graph <query>` — read-only link-graph queries that project the existing
+resolution graph into navigation reports. No new diagnostics; no resolution-semantics
+change.
+
+### Added
+
+| Query | Lists |
+|---|---|
+| `graph backlinks <FILE>` | Notes that link to `FILE` (one line per occurrence). |
+| `graph links <FILE>` | `FILE`'s outgoing links, each with its resolution status. |
+| `graph orphans` | Notes with no incoming document link. |
+| `graph deadends` | Notes with no outgoing document link. |
+| `graph unresolved` | Broken links as `source:line:col  target`. |
+
+- The graph is built **complete**: every document's links are resolved, not just the
+  linted ones — a `lint = false` mount's links are visible (the `check`/lint path is
+  untouched).
+- A *document link* is a reference whose destination is an indexed document, reached
+  directly or via a heading (`[[Note#H]]`); attachments, folders, tags, and link
+  definitions are not note links. Ambiguous references are not confirmed links to any
+  note.
+- `<FILE>` matches by workspace-relative or namespace path (same rules as
+  `resolve --from`); not-in-index is exit 1.
+- Exit codes: `backlinks`/`links` `0` in-index · `1` not-in-index · `2` error;
+  `orphans`/`deadends`/`unresolved` `0` none · `1` found · `2` error (CI-gateable,
+  e.g. `downlint graph orphans || echo clean`).
+- No `--stdin`, no `--allow-uri-sync` (a read-only query never runs a schema's
+  `verify_cmd`; URI targets are stat-only).
+
 ## [0.8.0] — Mounts/Schemas Config Field Rename
 
 The `[[mounts]]` and `[[schemas]]` keys are renamed so each is self-evident and the two
