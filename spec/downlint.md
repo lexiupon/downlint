@@ -129,17 +129,28 @@ document's links are resolved, not just the linted ones — a mount with
   are broken or non-document targets appears in both `links <A>` and `deadends`.
 - **Self-links** count in both directions (a self-linking note is neither an
   orphan nor a deadend).
-- **Flags**: `--root <DIR>` (override workspace root; may follow the subcommand).
+- **Flags**: `--root <DIR>` (override workspace root; may follow the subcommand) and
+  `--format <text|json>` (default `text`; may follow the subcommand).
   No `--stdin` (queries need the full index) and no `--allow-uri-sync` (a
   read-only query never runs a schema's `verify_cmd`; URI targets are stat-only).
 - **Exit codes**: `backlinks`/`links` — `0` `<FILE>` in index (list may be
   empty) · `1` `<FILE>` not in index · `2` bad args / config error.
   `orphans`/`deadends`/`unresolved` — `0` none found · `1` found · `2` bad args /
-  config error (so `downlint graph orphans || echo clean` gates CI).
-- **Output**: one line per result, sorted, 1-based. `backlinks`:
+  config error (so `downlint graph orphans || echo clean` gates CI). Exit codes are
+  **independent of `--format`**.
+- **Text output** (default): one line per result, sorted, 1-based. `backlinks`:
   `{source}:{line}:{col}`. `links`: `{line}:{col}  {target}  →  {destination | <unresolved> | <ambiguous>}`.
   `orphans`/`deadends`: one note path per line. `unresolved`:
   `{source}:{line}:{col}  {target}`. Empty result → no output.
+- **JSON output** (`--format json`): a single pretty-printed envelope
+  `{"query": <name>, "results": [...]}` — plus `"file"` (the canonical namespace
+  path) for `backlinks`/`links`. `results` is `[]` when empty. Per-query result
+  shapes:
+  - `backlinks`: `{"source", "line", "col"}`
+  - `links`: `{"line", "col", "target", "status", "destination"}` where `status` is
+    `"resolved" | "unresolved" | "ambiguous"` and `destination` is the path(s) or `null`.
+  - `orphans` / `deadends`: `{"path"}`
+  - `unresolved`: `{"source", "line", "col", "target"}`
 
 **`init`** — scaffold a `.downlint.toml` in the workspace root (cwd, or `--root <DIR>`).
 Common options are written active (at their defaults) so the file doubles as a reference;

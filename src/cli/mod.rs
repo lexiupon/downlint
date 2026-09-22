@@ -207,6 +207,9 @@ struct GraphArgs {
     root: Option<PathBuf>,
     #[arg(long, short = 'v', default_value_t = 2, global = true)]
     verbose: u8,
+    /// Output format: `text` (one line per result) or `json` (envelope).
+    #[arg(long, default_value = "text", global = true)]
+    format: FormatArg,
     #[command(subcommand)]
     query: graph::GraphQuery,
 }
@@ -303,6 +306,10 @@ pub async fn run() -> i32 {
             graph::run_graph(graph::GraphOptions {
                 root: args.root,
                 query: args.query,
+                format: match args.format {
+                    FormatArg::Text => check::OutputFormat::Text,
+                    FormatArg::Json => check::OutputFormat::Json,
+                },
             })
         }
         None => {

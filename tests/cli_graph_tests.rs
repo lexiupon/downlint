@@ -216,3 +216,92 @@ fn backlinks_without_file_fails() {
     let temp = write_vault(&[("notes/a.md", "# A\n")]);
     graph(temp.path(), &["backlinks"]).failure().code(2);
 }
+
+/// `--format json`: backlinks emits an envelope with `query`, `file`, and
+/// `results[]` of `{source, line, col}`; exit code matches text mode.
+#[test]
+fn backlinks_json_envelope() {
+    let temp = write_vault(&[
+        ("notes/target.md", "# Target\n"),
+        ("notes/a.md", "# A\n- [[Target]]\n"),
+    ]);
+    graph(
+        temp.path(),
+        &["backlinks", "notes/target.md", "--format", "json"],
+    )
+    .success()
+    .stdout(predicate::str::contains("\"query\": \"backlinks\""))
+    .stdout(predicate::str::contains("\"file\": \"notes/target.md\""))
+    .stdout(predicate::str::contains("\"results\""))
+    .stdout(predicate::str::contains("\"source\": \"notes/a.md\""))
+    .stdout(predicate::str::contains("\"line\": 2"));
+}
+
+/// `--format json`: links emits `status` + `destination` (null when unresolved).
+#[test]
+fn links_json_status_and_destination() {
+    let temp = write_vault(&[
+        ("notes/target.md", "# Target\n"),
+        ("notes/a.md", "# A\n- [[Target]]\n- [x](missing.md)\n"),
+    ]);
+    graph(
+        temp.path(),
+        &["links", "notes/a.md", "--format", "json"],
+    )
+    .success()
+    .stdout(predicate::str::contains("\"query\": \"links\""))
+    .stdout(predicate::str::contains("\"status\": \"resolved\""))
+    .stdout(predicate::str::contains("\"destination\": \"notes/target.md\""))
+    .stdout(predicate::str::contains("\"status\": \"unresolved\""))
+    .stdout(predicate::str::contains("\"destination\": null"));
+}
+
+/// `--format json`: orphans emits `results[]` of `{path}`; exit 1 when found.
+#[test]
+fn orphans_json_envelope() {
+    let temp = write_vault(&[
+        ("notes/hub.md", "# Hub\n- [[Alpha]]\n"),
+        ("notes/alpha.md", "# Alpha\n"),
+    ]);
+    graph(temp.path(), &["orphans", "--format", "json"])
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("\"query\": \"orphans\""))
+        .stdout(predicate::str::contains("\"path\": \"notes/hub.md\""))
+        .stdout(predicate::str::contains("\"file\"").not());
+}
+
+/// `--format json`: unresolved emits `{source, line, col, target}`.
+#[test]
+fn unresolved_json_envelope() {
+    let temp = write_vault(&[("notes/a.md", "# A\n- [[Gone]]\n")]);
+    graph(temp.path(), &["unresolved", "--format", "json"])
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("\"query\": \"unresolved\""))
+        .stdout(predicate::str::contains("\"source\": \"notes/a.md\""))
+        .stdout(predicate::str::contains("\"target\": \"Gone\""));
+}
+
+/// `--format json` is valid JSON (parses) and an empty result is `[]`.
+#[test]
+fn json_output_is_valid_and_empty_is_empty_array() {
+    let temp = write_vault(&[("notes/a.md", "# A\n- [[B]]\n"), ("notes/b.md", "# B\n")]);
+    let root = temp.path().to_str().unwrap().to_string();
+    let assert = downlint()
+        .args([
+            "graph",
+            "unresolved",
+            "--format",
+            "json",
+            "--root",
+            root.as_str(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"results\": []"));
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert_eq!(parsed["query"], "unresolved");
+    assert!(parsed["results"].as_array().unwrap().is_empty());
+}

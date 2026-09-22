@@ -8,12 +8,19 @@
 //! The graph is built *complete*: every document's links are resolved, not
 //! just the linted ones (a mount with `lint = false` is targets-only for
 //! `check`, but its links still matter for navigation).
+//!
+//! Output is `--format text` (default, one line per result) or `--format json`
+//! (a single envelope `{query, file?, results[]}`). Exit codes are
+//! independent of format.
 
+use crate::cli::check::OutputFormat;
 use crate::parser::Ref;
 use crate::resolution::conn::{DestinationKind, ResolvedDestination, ResolvedDocument};
 use crate::resolution::{ConnectionGraph, ResolveInput, resolve_links};
 use crate::utils::{PositionEncoding, Workspace, WorkspaceInput, discover_workspace};
 use clap::Subcommand;
+use serde::Serialize;
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -41,6 +48,7 @@ pub enum GraphQuery {
 pub struct GraphOptions {
     pub root: Option<PathBuf>,
     pub query: GraphQuery,
+    pub format: OutputFormat,
 }
 
 pub fn run_graph(options: GraphOptions) -> i32 {
@@ -69,98 +77,231 @@ pub fn run_graph(options: GraphOptions) -> i32 {
     let graph = resolve_links(input);
 
     match &options.query {
-        GraphQuery::Backlinks { file } => backlinks(&graph, &workspace, file),
-        GraphQuery::Links { file } => links(&graph, &workspace, file),
-        GraphQuery::Orphans => print_report(&orphan_paths(&graph)),
-        GraphQuery::Deadends => print_report(&deadend_paths(&graph)),
-        GraphQuery::Unresolved => print_report(&unresolved_rows(&graph)),
-    }
-}
-
-/// Print one path/row per line; exit 0 when empty, 1 when anything was found
-/// (so `downlint graph orphans || echo clean` works as a CI gate).
-fn print_report(lines: &[String]) -> i32 {
-    for line in lines {
-        println!("{line}");
-    }
-    if lines.is_empty() { 0 } else { 1 }
-}
-
-fn backlinks(graph: &ConnectionGraph, workspace: &Workspace, file: &Path) -> i32 {
-    let doc = match find_document(graph, workspace, file) {
-        Some(doc) => doc,
-        None => {
-            eprintln!(
-                "downlint: error: document not found in workspace: {}",
-                file.display()
-            );
-            return 1;
+        GraphQuery::Backlinks { file } => match backlinks_rows(&graph, &workspace, file) {
+            Ok((canonical, rows)) => {
+                emit("backlinks", Some(canonical), options.format, &rows, false)
+            }
+            Err(message) => {
+                eprintln!("downlint: error: {message}");
+                1
+            }
+        },
+        GraphQuery::Links { file } => match links_rows(&graph, &workspace, file) {
+            Ok((canonical, rows)) => emit("links", Some(canonical), options.format, &rows, false),
+            Err(message) => {
+                eprintln!("downlint: error: {message}");
+                1
+            }
+        },
+        GraphQuery::Orphans => {
+            let rows = orphan_rows(&graph);
+            emit("orphans", None, options.format, &rows, true)
         }
-    };
-    let mut rows: Vec<(String, u32, u32)> = Vec::new();
+        GraphQuery::Deadends => {
+            let rows = deadend_rows(&graph);
+            emit("deadends", None, options.format, &rows, true)
+        }
+        GraphQuery::Unresolved => {
+            let rows = unresolved_rows(&graph);
+            emit("unresolved", None, options.format, &rows, true)
+        }
+    }
+}
+
+/// A query result row: serializable to JSON and renderable as a text line.
+trait Row: Serialize {
+    fn text(&self) -> String;
+}
+
+/// Render rows as text (one line each) or a JSON envelope, and return the
+/// exit code. `found_is_error` selects the report convention (0 = none,
+/// 1 = found) vs. the per-file convention (always 0 once the file is found).
+fn emit<R: Row>(
+    query: &str,
+    file: Option<String>,
+    format: OutputFormat,
+    rows: &[R],
+    found_is_error: bool,
+) -> i32 {
+    match format {
+        OutputFormat::Text => {
+            for row in rows {
+                println!("{}", row.text());
+            }
+        }
+        OutputFormat::Json => {
+            let results: Vec<Value> = rows
+                .iter()
+                .map(|row| serde_json::to_value(row).unwrap_or(Value::Null))
+                .collect();
+            let mut body = json!({ "query": query, "results": results });
+            if let Some(file) = file {
+                body["file"] = json!(file);
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&body).unwrap_or_else(|_| "{}".into())
+            );
+        }
+    }
+    if found_is_error && !rows.is_empty() {
+        1
+    } else {
+        0
+    }
+}
+
+#[derive(Serialize)]
+struct BacklinkRow {
+    source: String,
+    line: u32,
+    col: u32,
+}
+impl Row for BacklinkRow {
+    fn text(&self) -> String {
+        format!("{}:{}:{}", self.source, self.line, self.col)
+    }
+}
+
+#[derive(Serialize)]
+struct LinkRow {
+    line: u32,
+    col: u32,
+    target: String,
+    /// `resolved` | `unresolved` | `ambiguous`.
+    status: String,
+    /// The destination path(s) for a resolved link; `null` otherwise.
+    destination: Option<String>,
+}
+impl Row for LinkRow {
+    fn text(&self) -> String {
+        let shown = match self.status.as_str() {
+            "resolved" => self.destination.clone().unwrap_or_default(),
+            "unresolved" => "<unresolved>".to_string(),
+            _ => "<ambiguous>".to_string(),
+        };
+        format!(
+            "{}:{}  {}  \u{2192}  {}",
+            self.line, self.col, self.target, shown
+        )
+    }
+}
+
+#[derive(Serialize)]
+struct PathRow {
+    path: String,
+}
+impl Row for PathRow {
+    fn text(&self) -> String {
+        self.path.clone()
+    }
+}
+
+#[derive(Serialize)]
+struct UnresolvedRow {
+    source: String,
+    line: u32,
+    col: u32,
+    target: String,
+}
+impl Row for UnresolvedRow {
+    fn text(&self) -> String {
+        format!(
+            "{}:{}:{}  {}",
+            self.source, self.line, self.col, self.target
+        )
+    }
+}
+
+/// Returns the canonical namespace path of `<FILE>` plus its backlink rows.
+fn backlinks_rows(
+    graph: &ConnectionGraph,
+    workspace: &Workspace,
+    file: &Path,
+) -> Result<(String, Vec<BacklinkRow>), String> {
+    let doc = find_document(graph, workspace, file)
+        .ok_or_else(|| format!("document not found in workspace: {}", file.display()))?;
+    let canonical = doc.namespace_rel_path.to_string_lossy().replace('\\', "/");
+    let mut rows: Vec<BacklinkRow> = Vec::new();
     for reference in &graph.resolved_references {
         if !has_document_edge_to(reference, &doc.path) {
             continue;
         }
         let (line, col) = line_col(graph, &reference.source_path, reference.full_range.start);
-        rows.push((doc_display(graph, &reference.source_path), line, col));
+        rows.push(BacklinkRow {
+            source: doc_display(graph, &reference.source_path),
+            line,
+            col,
+        });
     }
-    rows.sort();
-    for (source, line, col) in &rows {
-        println!("{source}:{line}:{col}");
-    }
-    0
+    rows.sort_by(|a, b| {
+        (a.source.as_str(), a.line, a.col).cmp(&(b.source.as_str(), b.line, b.col))
+    });
+    Ok((canonical, rows))
 }
 
-fn links(graph: &ConnectionGraph, workspace: &Workspace, file: &Path) -> i32 {
-    let doc = match find_document(graph, workspace, file) {
-        Some(doc) => doc,
-        None => {
-            eprintln!(
-                "downlint: error: document not found in workspace: {}",
-                file.display()
-            );
-            return 1;
-        }
-    };
+/// Returns the canonical namespace path of `<FILE>` plus its outgoing rows.
+fn links_rows(
+    graph: &ConnectionGraph,
+    workspace: &Workspace,
+    file: &Path,
+) -> Result<(String, Vec<LinkRow>), String> {
+    let doc = find_document(graph, workspace, file)
+        .ok_or_else(|| format!("document not found in workspace: {}", file.display()))?;
+    let canonical = doc.namespace_rel_path.to_string_lossy().replace('\\', "/");
     let root = &workspace.folder.root;
-    let mut rows: Vec<(u32, u32, String, String)> = Vec::new(); // (line, col, target, status)
+    let mut rows: Vec<LinkRow> = Vec::new();
 
     for reference in &graph.resolved_references {
         if reference.source_path != doc.path {
             continue;
         }
         let (line, col) = line_col(graph, &reference.source_path, reference.full_range.start);
-        let status = reference
+        let destination = reference
             .destinations
             .iter()
             .map(|dest| destination_display(graph, root, dest))
             .collect::<Vec<_>>()
             .join(", ");
-        rows.push((line, col, target_as_written(&reference.reference), status));
+        rows.push(LinkRow {
+            line,
+            col,
+            target: target_as_written(&reference.reference),
+            status: "resolved".to_string(),
+            destination: Some(destination),
+        });
     }
     for reference in &graph.unresolved_references {
         if reference.source_path != doc.path {
             continue;
         }
         let (line, col) = line_col(graph, &reference.source_path, reference.full_range.start);
-        rows.push((line, col, reference.target.clone(), "<unresolved>".into()));
+        rows.push(LinkRow {
+            line,
+            col,
+            target: reference.target.clone(),
+            status: "unresolved".to_string(),
+            destination: None,
+        });
     }
     for reference in &graph.ambiguous_references {
         if reference.source_path != doc.path {
             continue;
         }
         let (line, col) = line_col(graph, &reference.source_path, reference.full_range.start);
-        rows.push((line, col, reference.target.clone(), "<ambiguous>".into()));
+        rows.push(LinkRow {
+            line,
+            col,
+            target: reference.target.clone(),
+            status: "ambiguous".to_string(),
+            destination: None,
+        });
     }
-    rows.sort();
-    for (line, col, target, status) in &rows {
-        println!("{line}:{col}  {target}  \u{2192}  {status}");
-    }
-    0
+    rows.sort_by(|a, b| (a.line, a.col).cmp(&(b.line, b.col)));
+    Ok((canonical, rows))
 }
 
-fn orphan_paths(graph: &ConnectionGraph) -> Vec<String> {
+fn orphan_rows(graph: &ConnectionGraph) -> Vec<PathRow> {
     let linked: HashSet<&Path> = graph
         .resolved_references
         .iter()
@@ -172,11 +313,13 @@ fn orphan_paths(graph: &ConnectionGraph) -> Vec<String> {
         .documents
         .iter()
         .filter(|doc| !linked.contains(doc.path.as_path()))
-        .map(|doc| doc.namespace_rel_path.to_string_lossy().replace('\\', "/"))
+        .map(|doc| PathRow {
+            path: doc.namespace_rel_path.to_string_lossy().replace('\\', "/"),
+        })
         .collect()
 }
 
-fn deadend_paths(graph: &ConnectionGraph) -> Vec<String> {
+fn deadend_rows(graph: &ConnectionGraph) -> Vec<PathRow> {
     let linking: HashSet<&Path> = graph
         .resolved_references
         .iter()
@@ -187,25 +330,32 @@ fn deadend_paths(graph: &ConnectionGraph) -> Vec<String> {
         .documents
         .iter()
         .filter(|doc| !linking.contains(doc.path.as_path()))
-        .map(|doc| doc.namespace_rel_path.to_string_lossy().replace('\\', "/"))
+        .map(|doc| PathRow {
+            path: doc.namespace_rel_path.to_string_lossy().replace('\\', "/"),
+        })
         .collect()
 }
 
-fn unresolved_rows(graph: &ConnectionGraph) -> Vec<String> {
-    let mut rows: Vec<(String, u32, u32, String)> = Vec::new();
+fn unresolved_rows(graph: &ConnectionGraph) -> Vec<UnresolvedRow> {
+    let mut rows: Vec<UnresolvedRow> = Vec::new();
     for reference in &graph.unresolved_references {
         let (line, col) = line_col(graph, &reference.source_path, reference.full_range.start);
-        rows.push((
-            doc_display(graph, &reference.source_path),
+        rows.push(UnresolvedRow {
+            source: doc_display(graph, &reference.source_path),
             line,
             col,
-            reference.target.clone(),
-        ));
+            target: reference.target.clone(),
+        });
     }
-    rows.sort();
-    rows.into_iter()
-        .map(|(source, line, col, target)| format!("{source}:{line}:{col}  {target}"))
-        .collect()
+    rows.sort_by(|a, b| {
+        (a.source.as_str(), a.line, a.col, a.target.as_str()).cmp(&(
+            b.source.as_str(),
+            b.line,
+            b.col,
+            b.target.as_str(),
+        ))
+    });
+    rows
 }
 
 /// A document edge points at a note: the destination is an indexed document,
@@ -336,6 +486,23 @@ mod tests {
         }
     }
 
+    fn doc(path: &str, ns: &str) -> ResolvedDocument {
+        ResolvedDocument {
+            path: PathBuf::from(path),
+            rel_path: PathBuf::from(ns),
+            structure: crate::parser::parse_document("", Default::default()),
+            title_slug: Default::default(),
+            title_text: String::new(),
+            file_stem: String::new(),
+            link_defs: Default::default(),
+            headings: Default::default(),
+            tags: Default::default(),
+            namespace_rel_path: PathBuf::from(ns),
+            mount: None,
+            is_source: true,
+        }
+    }
+
     #[test]
     fn document_edge_kinds() {
         assert!(is_document_edge(&dest("/a.md", DestinationKind::Document)));
@@ -399,74 +566,38 @@ mod tests {
         // a.md links to b.md; c.md links nowhere; b.md links nowhere.
         let mut graph = ConnectionGraph::default();
         for (path, ns) in [("/a.md", "a.md"), ("/b.md", "b.md"), ("/c.md", "c.md")] {
-            graph.documents.push(ResolvedDocument {
-                path: PathBuf::from(path),
-                rel_path: PathBuf::from(ns),
-                structure: crate::parser::parse_document("", Default::default()),
-                title_slug: Default::default(),
-                title_text: String::new(),
-                file_stem: String::new(),
-                link_defs: Default::default(),
-                headings: Default::default(),
-                tags: Default::default(),
-                namespace_rel_path: PathBuf::from(ns),
-                mount: None,
-                is_source: true,
-            });
+            graph.documents.push(doc(path, ns));
         }
         graph.resolved_references.push(reference(
             "/a.md",
             vec![dest("/b.md", DestinationKind::Document)],
         ));
 
-        let orphans = orphan_paths(&graph);
+        let orphans: Vec<String> = orphan_rows(&graph).iter().map(|r| r.path.clone()).collect();
         assert_eq!(orphans, vec!["a.md", "c.md"]); // b.md is linked; a.md and c.md are not
-        let deadends = deadend_paths(&graph);
+        let deadends: Vec<String> = deadend_rows(&graph)
+            .iter()
+            .map(|r| r.path.clone())
+            .collect();
         assert_eq!(deadends, vec!["b.md", "c.md"]); // only a.md has an outgoing doc link
     }
 
     #[test]
     fn self_link_is_not_an_orphan() {
         let mut graph = ConnectionGraph::default();
-        graph.documents.push(ResolvedDocument {
-            path: PathBuf::from("/a.md"),
-            rel_path: PathBuf::from("a.md"),
-            structure: crate::parser::parse_document("", Default::default()),
-            title_slug: Default::default(),
-            title_text: String::new(),
-            file_stem: String::new(),
-            link_defs: Default::default(),
-            headings: Default::default(),
-            tags: Default::default(),
-            namespace_rel_path: PathBuf::from("a.md"),
-            mount: None,
-            is_source: true,
-        });
+        graph.documents.push(doc("/a.md", "a.md"));
         graph.resolved_references.push(reference(
             "/a.md",
             vec![dest("/a.md", DestinationKind::Document)],
         ));
-        assert!(orphan_paths(&graph).is_empty()); // self-link counts as incoming
-        assert!(deadend_paths(&graph).is_empty()); // self-link counts as outgoing
+        assert!(orphan_rows(&graph).is_empty()); // self-link counts as incoming
+        assert!(deadend_rows(&graph).is_empty()); // self-link counts as outgoing
     }
 
     #[test]
     fn unresolved_rows_format() {
         let mut graph = ConnectionGraph::default();
-        graph.documents.push(ResolvedDocument {
-            path: PathBuf::from("/a.md"),
-            rel_path: PathBuf::from("a.md"),
-            structure: crate::parser::parse_document("", Default::default()),
-            title_slug: Default::default(),
-            title_text: String::new(),
-            file_stem: String::new(),
-            link_defs: Default::default(),
-            headings: Default::default(),
-            tags: Default::default(),
-            namespace_rel_path: PathBuf::from("a.md"),
-            mount: None,
-            is_source: true,
-        });
+        graph.documents.push(doc("/a.md", "a.md"));
         graph.unresolved_references.push(UnresolvedReference {
             source_path: PathBuf::from("/a.md"),
             occurrence_id: 1,
@@ -483,6 +614,80 @@ mod tests {
             uri_no_mapping_hint: false,
         });
         let rows = unresolved_rows(&graph);
-        assert_eq!(rows, vec!["a.md:1:1  gone".to_string()]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].text(), "a.md:1:1  gone");
+    }
+
+    #[test]
+    fn row_text_rendering() {
+        assert_eq!(
+            BacklinkRow {
+                source: "a.md".into(),
+                line: 2,
+                col: 5,
+            }
+            .text(),
+            "a.md:2:5"
+        );
+        assert_eq!(
+            LinkRow {
+                line: 3,
+                col: 1,
+                target: "T".into(),
+                status: "resolved".into(),
+                destination: Some("t.md".into()),
+            }
+            .text(),
+            "3:1  T  \u{2192}  t.md"
+        );
+        assert_eq!(
+            LinkRow {
+                line: 3,
+                col: 1,
+                target: "T".into(),
+                status: "unresolved".into(),
+                destination: None,
+            }
+            .text(),
+            "3:1  T  \u{2192}  <unresolved>"
+        );
+        assert_eq!(
+            PathRow {
+                path: "x.md".into()
+            }
+            .text(),
+            "x.md"
+        );
+    }
+
+    #[test]
+    fn json_envelope_shape() {
+        let rows = vec![
+            BacklinkRow {
+                source: "a.md".into(),
+                line: 2,
+                col: 5,
+            },
+            BacklinkRow {
+                source: "b.md".into(),
+                line: 7,
+                col: 1,
+            },
+        ];
+        // Mimic emit()'s JSON body construction.
+        let results: Vec<Value> = rows
+            .iter()
+            .map(|row| serde_json::to_value(row).unwrap())
+            .collect();
+        let mut body = json!({ "query": "backlinks", "results": results });
+        body["file"] = json!("t.md");
+        let value: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&body).unwrap()).unwrap();
+        assert_eq!(value["query"], "backlinks");
+        assert_eq!(value["file"], "t.md");
+        assert_eq!(value["results"].as_array().unwrap().len(), 2);
+        assert_eq!(value["results"][0]["source"], "a.md");
+        assert_eq!(value["results"][0]["line"], 2);
+        assert_eq!(value["results"][1]["col"], 1);
     }
 }
