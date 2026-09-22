@@ -7,6 +7,32 @@ Pre-1.0 versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.13.0] — Background, debounced LSP re-indexing
+
+### Changed
+
+- **The LSP server now re-indexes in the background (debounced), not inline.**
+  Previously every `textDocument/didChange` (i.e. every keystroke) ran a full
+  `resolve_links` over the entire workspace *synchronously in the request loop*,
+  blocking every subsequent request — including completion — for the duration of
+  the index. On large workspaces this was seconds per keystroke (measured ~5 s on
+  a ~5,900-document vault). Re-indexing now runs on a debounced background thread
+  (~300 ms after the last edit), so typing and completion stay responsive. As a
+  result, diagnostics refresh ~300 ms after you stop editing rather than on every
+  keystroke; the initial index at `initialize` is still synchronous.
+
+### Performance
+
+- **Completion no longer deep-clones the entire `ConnectionGraph`.** The
+  completion handler passed an owned copy of the whole graph into the completion
+  engine on every request; it now borrows it. Faster on large graphs, identical
+  results.
+
+### Removed
+
+- The unused `indexing` flag / `is_indexing` helper in the LSP server (referenced
+  only by its own unit tests).
+
 ## [0.12.0] — LSP honors `[completion]` config
 
 ### Fixed
