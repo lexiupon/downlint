@@ -5,7 +5,7 @@ based on [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/) for post-1.0 releases.
 Pre-1.0 versions may include breaking changes.
 
-## [Unreleased]
+## [0.14.0] — LSP clears stale diagnostics when a link is fixed
 
 ### Fixed
 
