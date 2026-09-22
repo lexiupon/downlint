@@ -14,7 +14,9 @@ use crate::resolution::conn::{
 use crate::resolution::path::{has_scheme, is_external_web_scheme, is_folder_link_target, path_without_extension, resolve_explicit_path, scheme_of};
 use crate::resolution::prefix::PrefixIndex;
 use crate::resolution::uri::{UriOutcome, UriResolver};
-use crate::utils::{MountConflict, MountConflictKind, ResolvedMount, Workspace, WorkspaceMode};
+use crate::utils::{
+    DocumentSource, MountConflict, MountConflictKind, ResolvedMount, Workspace, WorkspaceMode,
+};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -124,7 +126,15 @@ impl ResolveInput {
             heading_ids: workspace.config.core.heading_ids.enable,
         };
 
-        // Primary docs: namespace path == rel_path, always sources.
+        // Primary docs: namespace path == rel_path. In stdin mode the piped
+        // `<stdin>.md` document is the only source; workspace docs are indexed
+        // as targets only (same mechanism as `lint = false` mounts). Otherwise
+        // all primary docs are sources.
+        let stdin_mode = workspace
+            .folder
+            .documents
+            .iter()
+            .any(|doc| doc.source == DocumentSource::Stdin);
         let mut documents: Vec<ResolveDocument> = workspace
             .folder
             .documents
@@ -137,7 +147,9 @@ impl ResolveInput {
                     structure: crate::parser::parse_document(doc.text.as_str(), parse_options),
                     namespace_rel_path: rel_path,
                     mount: None,
-                    is_source: true,
+                    is_source: stdin_mode
+                        .then(|| doc.source == DocumentSource::Stdin)
+                        .unwrap_or(true),
                 }
             })
             .collect();

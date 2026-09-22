@@ -66,7 +66,8 @@ as described in RFC 2119.
 | **explicit file-like target** | An explicit path, or a same-directory basename with an extension (e.g. `data.xlsx`). |
 | **resolved** | A link with exactly one destination. **Ambiguous**: more than one. **Broken**: none. |
 | **occurrence** | Identity of a single link instance. Two identical links at different ranges are distinct occurrences and are diagnosed independently. |
-| **single-file mode** | A folder containing a single document (or stdin input). Cross-file diagnostics are disabled (4.9). |
+| **single-file mode** | An explicit single file on disk. Cross-file diagnostics are disabled (4.9). |
+| **stdin document** | The synthetic `<stdin>.md` document created from `--stdin` input. It sits at the workspace root, is the sole lint source, and is resolved against the full workspace (RES-02). |
 
 ---
 
@@ -200,6 +201,9 @@ Tests: `slug_preserves_cjk_and_strips_punctuation`, `slug_generation_with_accent
 ### 3.2 RES-02 — Resolution Base
 
 - Relative targets resolve against the **containing document's directory**.
+- The stdin document's directory is the **workspace root**: relative targets in
+  `--stdin` input resolve against the root, and the full workspace (documents and
+  attachments) is indexed for resolution, with workspace documents as targets only.
 - Workspace-absolute targets (`/…`) resolve against the **workspace root**.
 - Targets are percent-decoded (RFC 3986, UTF-8); malformed escapes are kept literal.
 - Backslashes in link targets are treated as path separators (normalized to `/` internally).
@@ -514,8 +518,10 @@ Tests: `obsidian_prefix_multi_match_emits_link_ambiguous`.
 - **Suppressed** (no diagnostic):
   - external web schemes (LNK-03);
   - shortcut reference links — always;
-  - single-file mode: unresolved non-empty, non-folder, non-anchor targets are not
-    reported (cross-file diagnostics are disabled — 4.9).
+  - single-file mode (explicit file on disk): unresolved non-empty, non-folder,
+    non-anchor targets are not reported (cross-file diagnostics are disabled — 4.9).
+    Stdin is NOT single-file mode: the stdin document is resolved against the full
+    workspace and unresolved targets are reported.
 - **Produces** for: missing documents, missing explicit file-like attachments (RES-06),
   missing directories / file-instead-of-directory (RES-04), folder link + heading
   (RES-04), unmapped non-web URI schemes (RES-07), mapped-but-missing assets (RES-07).
@@ -581,13 +587,19 @@ Tests: `no_mapping_emits_hint_when_schemas_configured`,
   `uri/no-mapping` → `mount/conflict` → `heading/nbsp` (per document).
 - **Filtering**: after computation, diagnostics below `--min-severity` are dropped from
   output. CLI exit code reflects the filtered set.
-- **Single-file mode**: cross-file diagnostics are disabled. Unresolved non-empty,
-  non-folder, non-anchor targets are silently dropped (no `link/broken`); in-page anchors and
-  folder links are still diagnosed; `heading/nbsp` still runs.
+- **Single-file mode** (explicit file on disk): cross-file diagnostics are disabled.
+  Unresolved non-empty, non-folder, non-anchor targets are silently dropped (no
+  `link/broken`); in-page anchors and folder links are still diagnosed; `heading/nbsp`
+  still runs.
+- **Stdin** is workspace-anchored, not single-file: the full workspace is indexed
+  (documents as targets only), the stdin document is the sole source, and all of its
+  diagnostics are computed as in multi-file mode. Per-document rules (`heading/nbsp`)
+  run only on the stdin document — workspace documents are not diagnosed.
 - **Extra-folder documents** are not diagnosed from the primary session (RES-08).
 
 Tests: `obsidian_prefix_single_file_mode`, `no_uri_sync_mapping_means_skipped_diagnostic`
-(run-level aggregation).
+(run-level aggregation), `cli_single_file_on_disk_still_suppresses_cross_file_broken_links`,
+`cli_stdin_workspace_docs_are_targets_only`, `cli_stdin_heading_nbsp_in_workspace_doc_does_not_leak`.
 
 ---
 
@@ -715,5 +727,5 @@ produced.
 | 2026-09-21 | 0010 (Phase 2) | RES-07 re-scoped from “External URI Mapping” (warming) to “Schemes” (rewrite + stat + verify): `[uri]` / `[[uri.mappings]]` replaced by `[[schemas]]` (`prefix`, `root`, optional `auto_verify` bool default `true`, optional `verify_cmd`); warming removed (`warm_cmd` / `warm_required` / `warm_timeout` dropped); no caching; the `warm-uri-mappings` subcommand removed; `auto_verify` is now a per-schema bool running vendor-specific heuristics only (the generic 0-byte + recent-mtime heuristic dropped); `verify_cmd` gated by `--allow-uri-sync`. Diagnostics `uri/sync-skipped`, `uri/sync-failed`, `uri/batch-clamped` tombstoned; `uri/no-mapping` kept (re-scoped to schemes). |
 | 2026-09-21 | 0011 | RES-08 `mount/conflict` re-scoped from a coarse top-level-entry check (prefix/folder name match) to a fine-grained **namespace-path collision**: a same-path file collision, or a file/folder sharing a name (stem) at the same location. Sharing a top-level name alone is no longer a conflict (a mount merges into an existing folder when no file collides). `MountConflictKind::{Prefix,Folder}` replaced by a single `PathCollision`. Conflicting mount file(s) are targets only (not linted). `link/ambiguous` is explicitly *not* a mount conflict. |
 
-**Known coverage gaps** (clauses without tests yet): `heading/nbsp`; single-file-mode `link/broken`
-suppression; scheme-target + anchor → `link/broken-anchor`.
+**Known coverage gaps** (clauses without tests yet): scheme-target + anchor →
+`link/broken-anchor`.

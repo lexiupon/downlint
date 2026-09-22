@@ -117,6 +117,7 @@ fn run_check_once(options: &CheckOptions) -> Result<CheckResult, ConfigError> {
         &graph,
         &DiagnosticConfig {
             min_severity: options.min_severity,
+            source_only: options.stdin,
         },
     );
     Ok(CheckResult {

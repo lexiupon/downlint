@@ -53,7 +53,7 @@ Six subcommands. `downlint` with no subcommand runs the check.
 | `-v / --verbose <N>` | `2` | Logging to stderr (independent of `--min-severity`). |
 | `--fix` | off | Apply safe fixes in place (v1: `heading/nbsp` NBSP→space), then re-run. |
 | `-w / --watch` | off | Re-run after debounced file changes. |
-| `--stdin` (or `-`) | off | Check one document from stdin (single-file mode). |
+| `--stdin` (or `-`) | off | Check one document from stdin, resolved against the current workspace. The document is linted as `<stdin>.md` at the workspace root (relative links resolve against the root); workspace documents are indexed as targets only, so only the piped document is diagnosed. |
 | `--allow-uri-sync` | off | Permit a `[[schemas]]` `verify_cmd` subprocess execution (safety gate). |
 | `--no-uri-hints` | off | Suppress `uri/no-mapping`. |
 

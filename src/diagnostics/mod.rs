@@ -98,12 +98,17 @@ pub struct Diagnostic {
 #[derive(Clone, Debug)]
 pub struct DiagnosticConfig {
     pub min_severity: DiagnosticSeverity,
+    /// When true, per-document rules (e.g. `heading/nbsp`) run only on source
+    /// documents. The CLI sets this in stdin mode, where workspace documents
+    /// are indexed for link resolution but must not be diagnosed.
+    pub source_only: bool,
 }
 
 impl Default for DiagnosticConfig {
     fn default() -> Self {
         Self {
             min_severity: DiagnosticSeverity::Warning,
+            source_only: false,
         }
     }
 }
@@ -131,6 +136,9 @@ pub fn check_diagnostics(
     }
 
     for document in &graph.documents {
+        if config.source_only && !document.is_source {
+            continue;
+        }
         diagnostics.extend(rules::non_breaking_space(
             &document.path,
             document.structure.text.as_str(),

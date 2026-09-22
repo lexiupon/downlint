@@ -21,10 +21,12 @@ Things that are wrong, missing, or inconsistent relative to what should already 
 
 ### Diagnostics
 
-- [ ] **No test for `heading/nbsp`** (`spec/linting.md` §4.3). The NBSP-after-heading rule has no
-  test pinning it.
-- [ ] **No test for single-file-mode `link/broken` suppression** (`spec/linting.md` §4.2/§4.9).
-  Cross-file broken links are silently dropped in single-file mode; untested.
+- [x] **No test for `heading/nbsp`** (`spec/linting.md` §4.3). The NBSP-after-heading rule has no
+  test pinning it. — covered by `cli_stdin_heading_nbsp_in_piped_content_is_diagnosed` and
+  `cli_stdin_heading_nbsp_in_workspace_doc_does_not_leak` (`tests/cli_stdin_tests.rs`).
+- [x] **No test for single-file-mode `link/broken` suppression** (`spec/linting.md` §4.2/§4.9).
+  Cross-file broken links are silently dropped in single-file mode; untested. — covered by
+  `cli_single_file_on_disk_still_suppresses_cross_file_broken_links` (`tests/cli_stdin_tests.rs`).
 - [ ] **No test for URI-target + anchor → `link/broken-anchor`** (`spec/linting.md` §3.7/§4.4). Anchors
   on external assets always emit `link/broken-anchor`; untested.
 

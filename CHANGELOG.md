@@ -7,6 +7,18 @@ Pre-1.0 versions may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **`--stdin` is now a workspace-anchored check** (behavior change). Piped text is linted as a
+  synthetic `<stdin>.md` document at the workspace root and resolved against the full workspace —
+  documents, attachments, folder links, in-page anchors, URI schemes, and mount prefixes. Link
+  diagnostics are reported on `<stdin>.md` (e.g. `link/broken`), and the exit code follows the
+  usual contract (`0` clean / `1` issues found), so the output is scriptable:
+  `echo '- [[/assets/diagram.drawio]]' | downlint check --stdin`. Workspace documents are indexed
+  as targets only: their own diagnostics (broken links, `heading/nbsp`) do not surface in a stdin
+  check. Previously stdin ran in single-file mode and silently dropped all cross-file link
+  diagnostics. Single-file mode (an explicit file on disk) is unchanged.
+
 ### Fixed
 
 - **Markdown link destinations containing spaces** (e.g. cloud-storage filenames

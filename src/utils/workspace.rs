@@ -13,7 +13,7 @@ pub enum WorkspaceMode {
     MultiFile,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DocumentSource {
     Disk,
     Stdin,
@@ -92,7 +92,6 @@ pub fn discover_workspace(
     input: WorkspaceInput,
     root_override: Option<&Path>,
 ) -> Result<Workspace, crate::config::ConfigError> {
-    let stdin_mode = matches!(input, WorkspaceInput::Stdin { .. });
     let cwd = std::env::current_dir().map_err(crate::config::ConfigError::Io)?;
     let (target_path, stdin) = match input {
         WorkspaceInput::Path(path) => (
@@ -117,16 +116,23 @@ pub fn discover_workspace(
     let target_is_explicit_file = stdin.is_none() && target_path.is_file();
 
     let folder = if let Some(text) = stdin {
+        // Stdin is workspace-anchored: the full workspace is indexed so the
+        // piped document's links resolve against workspace documents and
+        // attachments. The synthetic `<stdin>.md` document (at the workspace
+        // root) is the only source that gets linted.
+        let mut documents =
+            collect_documents(&root, &config).map_err(crate::config::ConfigError::Io)?;
         let rel_path = PathBuf::from("<stdin>.md");
+        documents.push(WorkspaceDocument {
+            path: root.join(&rel_path),
+            rel_path,
+            text: Text::new(text),
+            source: DocumentSource::Stdin,
+        });
         DiscoveredFolder {
             root: root.clone(),
             config_path: find_project_config(&root),
-            documents: vec![WorkspaceDocument {
-                path: root.join(&rel_path),
-                rel_path,
-                text: Text::new(text),
-                source: DocumentSource::Stdin,
-            }],
+            documents,
             mounts: resolve_mounts(&root, &config),
         }
     } else if target_path.is_file() {
@@ -157,7 +163,10 @@ pub fn discover_workspace(
         }
     };
 
-    let mode = if stdin_mode || target_is_explicit_file {
+    // Stdin is MultiFile (the full workspace is indexed; the stdin document is
+    // the only source). SingleFile applies only to an explicit single file on
+    // disk, where cross-file diagnostics are suppressed.
+    let mode = if target_is_explicit_file {
         WorkspaceMode::SingleFile
     } else {
         WorkspaceMode::MultiFile

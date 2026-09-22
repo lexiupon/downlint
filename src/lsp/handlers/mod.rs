@@ -138,6 +138,7 @@ pub fn diagnostics(graph: &ConnectionGraph) -> Vec<(PathBuf, Value)> {
         graph,
         &DiagnosticConfig {
             min_severity: DiagnosticSeverity::Info,
+            source_only: false,
         },
     );
     let mut grouped: std::collections::HashMap<PathBuf, Vec<Value>> =

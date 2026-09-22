@@ -150,6 +150,7 @@ fn missing_file_yields_broken_link() {
 
     let config = DiagnosticConfig {
         min_severity: DiagnosticSeverity::Info,
+        source_only: false,
     };
     let opts = UriOptions::default();
     let diagnostics = run_diagnostics(&graph, &config);
@@ -170,6 +171,7 @@ fn no_mapping_emits_hint_when_schemas_configured() {
 
     let diag_config = DiagnosticConfig {
         min_severity: DiagnosticSeverity::Info,
+        source_only: false,
     };
     let opts = UriOptions::default();
     let diagnostics = run_diagnostics(&graph, &diag_config);
@@ -192,6 +194,7 @@ fn no_mapping_emits_no_hint_when_schemas_unconfigured() {
     assert_eq!(graph.unresolved_references.len(), 1);
     let diag_config = DiagnosticConfig {
         min_severity: DiagnosticSeverity::Info,
+        source_only: false,
     };
     let opts = UriOptions::default();
     let diagnostics = run_diagnostics(&graph, &diag_config);
@@ -218,6 +221,7 @@ fn no_uri_hints_flag_suppresses_uri_no_mapping_but_keeps_link_broken() {
 
     let diag_config = DiagnosticConfig {
         min_severity: DiagnosticSeverity::Info,
+        source_only: false,
     };
     let opts = UriOptions {
         allow_sync: false,
