@@ -7,6 +7,36 @@ Pre-1.0 versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.6.0] — Target Resolution Query
+
+New `downlint resolve` subcommand: given a link target, it reports every
+destination the target resolves to (and the rule each matched), so
+`link/ambiguous` and `link/broken` diagnostics can be debugged from the
+command line.
+
+### Added
+
+- **`downlint resolve <TARGET>`** — a read-only query that reports every destination a link
+  target resolves to, with the rule each matched by (`path`, `stem`, `title`, `prefix`,
+  `attachment`, `directory`), mirroring `check`'s resolution rules (RES-03/04/05/06/07). The
+  per-document matching rules are single-sourced in `resolution::query` and shared with link
+  resolution (parity-tested), so `resolve` predicts `check`'s behavior by construction.
+  - Statuses: `resolved` (one destination), `ambiguous` (multiple), `broken` (none), plus
+    URI-scheme statuses `external`, `unmapped`, `mapped-present`, `mapped-missing`, and
+    `mapped-placeholder` for `[[schemas]]` targets.
+  - Exit codes: `0` = safe to link as-is (one destination, external, or mapped-present),
+    `1` = none or multiple (or unmapped / mapped-missing / mapped-placeholder), `2` = bad
+    arguments or config error.
+  - Options: `--root` (workspace root; inferred when omitted), `--from <DOC>` (resolve
+    relative targets as if the link were in that document), `--format text|json`,
+    `--include-prefix` (list prefix candidates when `wiki.obsidian_prefix` is off — advisory
+    only, never changes the status), and `--allow-uri-sync` (permit `verify_cmd` execution
+    for URI targets).
+  - `TARGET#anchor` reports, per document destination, whether the heading/tag exists
+    (advisory — the exit code follows the destination count).
+  - JSON output: one object `{target, anchor, status, destinations[], prefix_candidates[],
+    scheme}` for scripting.
+
 ## [0.5.0] — Workspace-Anchored Stdin
 
 `downlint check --stdin` is now a workspace-anchored check: piped text is resolved
