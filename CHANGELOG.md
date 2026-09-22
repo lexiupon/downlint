@@ -7,6 +7,36 @@ Pre-1.0 versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.11.0] — Workspace `info` command
+
+New `downlint info`: a read-only, descriptive report of what downlint sees — the
+**resolved** workspace, not the config file. The first thing to run when debugging
+mount/schema configuration.
+
+### Added
+
+- **`downlint info`** — projects the resolved workspace into a report:
+  - **header**: version, workspace root, config file (or `(defaults)`), file extensions.
+  - **mounts**: one line each — the `as` prefix (or `(none)`), the resolved absolute
+    `path`, `lint`, the document count, and a presence marker.
+  - **schemas**: one line each — the `uri` prefix, the expanded absolute `to`,
+    `auto_verify`, whether a `verify_cmd` is set, and a presence marker.
+  - **documents**: total / primary / mounted.
+  - **conflicts**: one line per namespace collision (or `none`).
+- **`--format <text|json>`** (default `text`) — JSON emits a single object
+  `{version, workspace, config, file_extensions, mounts[], schemas[], documents,
+  conflicts[]}`.
+- **`--root <DIR>`** to override the workspace root.
+
+### Notes
+
+- `info` is **descriptive only**: exit `0` on a loaded workspace (even with missing
+  folders, shown as `✗ missing`) · exit `2` on a config error (no workspace, bad args,
+  or a schema `to` that cannot be expanded because an env var is unset). There is no
+  exit `1` — a validating `doctor` command is a possible follow-up.
+- `info` builds the index and resolved mounts but never resolves links, so a schema's
+  `verify_cmd` is never executed and no `--allow-uri-sync` flag exists.
+
 ## [0.10.0] — Graph `--format json`
 
 `downlint graph` now supports `--format <text|json>` (default `text`; the flag may
