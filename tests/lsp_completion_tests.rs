@@ -10,102 +10,13 @@
 //! configured `style` is observable in `textEdit.newText` (the inserted text).
 //! So the assertions target `newText`.
 
+mod common;
+
+use common::{LspClient, file_uri};
 use serde_json::{Value, json};
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
 use tempfile::TempDir;
-
-struct LspClient {
-    child: Child,
-    stdin: std::process::ChildStdin,
-    stdout: BufReader<std::process::ChildStdout>,
-}
-
-impl LspClient {
-    fn spawn() -> Self {
-        let bin = env!("CARGO_BIN_EXE_downlint");
-        let mut child = Command::new(bin)
-            .arg("server")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn downlint server");
-        let stdin = child.stdin.take().expect("stdin pipe");
-        let stdout = BufReader::new(child.stdout.take().expect("stdout pipe"));
-        LspClient {
-            child,
-            stdin,
-            stdout,
-        }
-    }
-
-    /// Send a request (`id = Some`) or a notification (`id = None`).
-    fn send(&mut self, method: &str, id: Option<u64>, params: serde_json::Value) {
-        let mut msg = json!({ "jsonrpc": "2.0", "method": method, "params": params });
-        if let Some(id) = id {
-            msg["id"] = json!(id);
-        }
-        let body = msg.to_string();
-        let frame = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
-        self.stdin.write_all(frame.as_bytes()).unwrap();
-        self.stdin.flush().unwrap();
-    }
-
-    /// Read frames until one carrying `expected_id` arrives, skipping
-    /// notifications (e.g. `publishDiagnostics`).
-    fn response(&mut self, expected_id: u64) -> serde_json::Value {
-        loop {
-            let body = read_frame(&mut self.stdout).expect("server closed stdout");
-            let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-            if value.get("id").and_then(|v| v.as_u64()) == Some(expected_id) {
-                return value;
-            }
-        }
-    }
-
-    /// Read and parse the next single LSP message (a response or a
-    /// notification), in arrival order. Used to assert the *ordering* of
-    /// messages (RFC 0017).
-    fn next_message(&mut self) -> serde_json::Value {
-        let body = read_frame(&mut self.stdout).expect("server closed stdout");
-        serde_json::from_str(&body).unwrap()
-    }
-}
-
-impl Drop for LspClient {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-/// Read one Content-Length-framed LSP message body as a string.
-fn read_frame(reader: &mut impl BufRead) -> Option<String> {
-    let mut content_length = None;
-    loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line).ok()? == 0 {
-            return None;
-        }
-        if line == "\r\n" {
-            break;
-        }
-        if let Some(value) = line.strip_prefix("Content-Length:") {
-            content_length = value.trim().parse::<usize>().ok();
-        }
-    }
-    let length = content_length?;
-    let mut body = vec![0u8; length];
-    reader.read_exact(&mut body).ok()?;
-    Some(String::from_utf8_lossy(&body).to_string())
-}
-
-fn file_uri(path: &Path) -> String {
-    format!("file://{}", path.display())
-}
 
 /// A workspace with the given `[completion]` TOML and two notes whose H1 titles
 /// differ from their file stems (so file-stem and title-slug produce different

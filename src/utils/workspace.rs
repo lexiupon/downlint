@@ -291,6 +291,86 @@ fn collect_documents(root: &Path, config: &Config) -> std::io::Result<Vec<Worksp
     Ok(docs)
 }
 
+/// The indexable document paths under `subtree` (a file or directory at or
+/// below `root`), applying the same filtering as `collect_documents`:
+/// hidden files, `.gitignore`, `core.ignore`, and the configured extension
+/// set. The walk is rooted at `root` and pruned to `subtree` via
+/// `filter_entry`, so `.gitignore` discovery matches the initial snapshot
+/// walk. Used by the LSP's disk-change reconciliation (RFC 0022).
+pub fn indexable_paths_under(root: &Path, subtree: &Path, config: &Config) -> Vec<PathBuf> {
+    let ext_set: HashSet<String> = config.core.file_extensions.iter().cloned().collect();
+    let mut builder = WalkBuilder::new(root);
+    builder.follow_links(true).hidden(false);
+
+    // Same root-symlink force-add as `collect_documents`, limited to the
+    // branch that can reach `subtree`.
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Ok(metadata) = path.symlink_metadata()
+                && metadata.file_type().is_symlink()
+                && (subtree == path || subtree.starts_with(&path))
+            {
+                let _ = builder.add(&path);
+            }
+        }
+    }
+
+    let mut override_builder = OverrideBuilder::new(root);
+    let mut exclude_patterns = Vec::new();
+    for pattern in &config.core.ignore {
+        if pattern.starts_with('!') {
+            if let Err(e) = override_builder.add(pattern) {
+                eprintln!("Warning: invalid ignore pattern '{}': {}", pattern, e);
+            }
+        } else {
+            exclude_patterns.push(pattern.clone());
+        }
+    }
+    if let Ok(overrides) = override_builder.build() {
+        builder.overrides(overrides);
+    }
+
+    // Keep an entry only when it is on the path to `subtree`, is `subtree`
+    // itself, or is under `subtree` — everything else is pruned, so the walk
+    // visits O(depth) directories plus the subtree's contents. The closure
+    // must be `'static`, so `subtree` is owned by it.
+    let subtree_owned = subtree.to_path_buf();
+    let builder = builder.filter_entry(move |entry| {
+        let path = entry.path();
+        subtree_owned.starts_with(path) || path.starts_with(&subtree_owned)
+    });
+
+    let mut paths = Vec::new();
+    for result in builder.build() {
+        let entry = match result {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let rel_path = path.strip_prefix(root).unwrap_or(path);
+        if exclude_patterns.iter().any(|p| {
+            globset::Glob::new(p.as_str())
+                .ok()
+                .map(|g| g.compile_matcher().is_match(rel_path))
+                .unwrap_or(false)
+        }) {
+            continue;
+        }
+        let Some(ext) = path.extension().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !ext_set.contains(ext) {
+            continue;
+        }
+        paths.push(path.to_path_buf());
+    }
+    paths
+}
+
 fn expand_root(root: &Path, value: &str) -> PathBuf {
     // Expand ~ to home directory; otherwise resolve relative to the workspace root.
     let expanded = if let Some(stripped) = value.strip_prefix("~/") {
@@ -324,10 +404,65 @@ fn resolve_mounts(root: &Path, config: &Config) -> Vec<ResolvedMount> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn infer_root_prefers_target_parent_without_markers() {
         let path = PathBuf::from("/tmp/demo/doc.md");
         assert_eq!(infer_root(&path), PathBuf::from("/tmp/demo"));
+    }
+
+    /// `indexable_paths_under` applies the same filtering as
+    /// `collect_documents` (RFC 0022): plain notes and hidden notes are
+    /// included (the snapshot walks with `hidden(false)`), while
+    /// `.gitignore`d files, `core.ignore`d files, and non-markdown files
+    /// are excluded.
+    #[test]
+    fn indexable_paths_under_applies_snapshot_filtering() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("notes")).unwrap();
+        fs::write(root.join("notes/plain.md"), "# Plain\n").unwrap();
+        fs::write(root.join("notes/.hidden.md"), "# Hidden\n").unwrap();
+        fs::write(root.join("notes/gitignored.md"), "# Gitignored\n").unwrap();
+        fs::write(root.join("notes/ignored-by-config.md"), "# Ignored\n").unwrap();
+        fs::write(root.join("notes/attachment.png"), "x").unwrap();
+        // A `.git` dir is required for the ignore crate to honor
+        // `.gitignore` files (same for the snapshot walk and this helper).
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join(".gitignore"), "gitignored.md\n").unwrap();
+
+        let mut config = Config::default();
+        // `core.ignore` patterns are relative to the workspace root.
+        config.core.ignore = vec!["notes/ignored-by-config.md".into()];
+
+        // File-level: a single plain note under the subtree.
+        let plain = root.join("notes/plain.md");
+        let found = indexable_paths_under(root, &plain, &config);
+        assert_eq!(found, vec![plain.clone()]);
+
+        // File-level: hidden notes are included (the snapshot walks with
+        // `hidden(false)`); each other excluded kind yields nothing.
+        let hidden = root.join("notes/.hidden.md");
+        assert_eq!(indexable_paths_under(root, &hidden, &config), vec![hidden.clone()]);
+        for excluded in [
+            "notes/gitignored.md",
+            "notes/ignored-by-config.md",
+            "notes/attachment.png",
+        ] {
+            let path = root.join(excluded);
+            assert_eq!(
+                indexable_paths_under(root, &path, &config),
+                Vec::<PathBuf>::new(),
+                "{excluded} should be excluded"
+            );
+        }
+
+        // Directory-level: the subtree reconcile sees the plain and hidden
+        // notes only.
+        let notes = root.join("notes");
+        let mut found = indexable_paths_under(root, &notes, &config);
+        found.sort();
+        assert_eq!(found, vec![hidden, plain]);
     }
 }

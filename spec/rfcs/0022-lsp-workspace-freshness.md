@@ -1,6 +1,6 @@
 # RFC 0022 — LSP workspace freshness: track created, changed, and deleted files without a restart
 
-**Status**: Proposed
+**Status**: Accepted (0.15.5)
 **Date**: 2026-09-23
 **Scope**: LSP server (`src/lsp/mod.rs`), `Workspace` document list
 (`src/utils/workspace.rs`), LSP capabilities. No changes to the parser,
