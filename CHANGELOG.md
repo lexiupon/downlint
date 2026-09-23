@@ -5,6 +5,38 @@ based on [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/) for post-1.0 releases.
 Pre-1.0 versions may include breaking changes.
 
+## [0.15.6] — Hidden files excluded by default (RFC 0023)
+
+### Fixed
+
+- **Hidden files and directories are now actually excluded by default**, as
+  RES-10 has always claimed. The walk ran `hidden(false)` since the initial
+  commit, so dotfiles and dot-directories were discovered, linted, and
+  resolvable as link targets — in an Obsidian-shaped vault that meant
+  `.trash/` (deleted notes) and `.obsidian/` (templates, plugin markdown)
+  stayed indexed: links to trashed notes silently resolved, trashed notes
+  were linted, and both polluted completions and the graph.
+
+### Changed
+
+- **New key `core.include_hidden`** (bool, default `false`) restores the
+  previous include-everything walk for users who keep notes in dotfiles or
+  dot-directories. It is the only way back: the walker's hidden filter takes
+  precedence over ignore rules, so a `.gitignore` or `core.ignore` negation
+  (`!…`) does not re-include a hidden file.
+- Force-added root symlinks are unaffected: an explicitly added hidden
+  symlink at the vault root is still traversed.
+- This is a behavior change: links to hidden files that previously resolved
+  now report `link/broken` unless `core.include_hidden = true` is set.
+
+### Unchanged
+
+- `.gitignore` discovery and `core.ignore` filtering for non-hidden files.
+- Attachment existence checks (RES-06) — a link to an existing hidden
+  attachment still resolves as an attachment.
+- LSP freshness mechanisms (RFC 0022) — reconciliation uses the same walk,
+  so snapshot and reconciliation stay in sync.
+
 ## [0.15.5] — LSP workspace freshness (RFC 0022)
 
 ### Fixed
