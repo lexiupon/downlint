@@ -10,7 +10,10 @@
 //! Uses `assert_cmd` to drive the compiled binary directly, mirroring
 //! `cli_stdin_tests.rs`.
 
+mod common;
+
 use assert_cmd::Command;
+use common::write_vault;
 use predicates::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,18 +23,6 @@ fn downlint() -> Command {
     Command::cargo_bin("downlint").expect("downlint binary should build")
 }
 
-fn write_vault(pairs: &[(&str, &str)]) -> TempDir {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    for (rel, content) in pairs {
-        let path = root.join(rel);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(&path, content).unwrap();
-    }
-    temp
-}
 
 /// Run `downlint link resolve <target> --root <root> [extra args]`.
 fn resolve(root: &Path, target: &str, extra_args: &[&str]) -> assert_cmd::assert::Assert {

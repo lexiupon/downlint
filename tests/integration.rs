@@ -345,7 +345,7 @@ fn dot_relative_wiki_anchor_validated() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
 
-    let source = write_document(root, "notes/a.md", "[[../shared/b.md#nope]]\n");
+    let source = write_document(root, "notes/a.md", "[[../shared/b.md#missing]]\n");
     let target = write_document(root, "shared/b.md", "# B\n\n## Section\n");
 
     let graph = resolve_graph(root, vec![source, target]);
@@ -1104,7 +1104,7 @@ fn obsidian_prefix_off_no_hint_no_match() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     let other = write_document(root, "notes/abc.md", "# abc\n");
-    let index = write_document(root, "notes/index.md", "[[xyz]]\n");
+    let index = write_document(root, "notes/index.md", "[[missing]]\n");
     let graph = resolve_graph_with_config(
         root,
         vec![other, index],
@@ -1735,7 +1735,7 @@ fn inline_anchor_tolerant_miss_still_emits_link_broken_anchor() {
         "\
 ## Overview
 
-[link](#nope-this-heading-does-not-exist)
+[link](#missing)
 ",
     );
     let graph = resolve_graph(root, vec![doc]);
@@ -1750,7 +1750,7 @@ fn inline_anchor_tolerant_miss_still_emits_link_broken_anchor() {
     assert!(
         link_broken_anchor[0]
             .message
-            .contains("nope-this-heading-does-not-exist"),
+            .contains("missing"),
         "link/broken-anchor message should contain the anchor text"
     );
 }
@@ -1949,7 +1949,7 @@ fn mount_lint_true_lints_and_attributes_internal_links() {
     let ext_tmp = TempDir::new().unwrap();
     let ext_root = ext_tmp.path().to_path_buf();
 
-    let target_md = "# Foo\n\n[[does-not-exist]]\n";
+    let target_md = "# Foo\n\n[[missing]]\n";
     let target_path = ext_root.join("foo.md");
     fs::write(&target_path, target_md).unwrap();
     let target_doc = ResolveDocument {
@@ -1998,7 +1998,7 @@ fn mount_lint_false_does_not_lint_internal_links() {
     let ext_tmp = TempDir::new().unwrap();
     let ext_root = ext_tmp.path().to_path_buf();
 
-    let target_md = "# Foo\n\n[[does-not-exist]]\n";
+    let target_md = "# Foo\n\n[[missing]]\n";
     let target_path = ext_root.join("foo.md");
     fs::write(&target_path, target_md).unwrap();
     let target_doc = ResolveDocument {
@@ -2052,7 +2052,7 @@ fn mount_distinct_files_under_shared_folder_no_conflict() {
     fs::write(primary_notes.join("a.md"), "# A\n").unwrap();
     let mount_notes = ext_root.join("notes");
     fs::create_dir_all(&mount_notes).unwrap();
-    fs::write(mount_notes.join("b.md"), "# B\n\n[[does-not-exist]]\n").unwrap();
+    fs::write(mount_notes.join("b.md"), "# B\n\n[[missing]]\n").unwrap();
 
     let workspace = downlint::utils::Workspace {
         folder: downlint::utils::DiscoveredFolder {
@@ -2252,7 +2252,7 @@ fn mount_folder_vs_file_name_conflict() {
     fs::write(root.join("kb.md"), "# KB\n").unwrap();
     let mount_kb = ext_root.join("kb");
     fs::create_dir_all(&mount_kb).unwrap();
-    fs::write(mount_kb.join("a.md"), "# A\n\n[[does-not-exist]]\n").unwrap();
+    fs::write(mount_kb.join("a.md"), "# A\n\n[[missing]]\n").unwrap();
 
     let workspace = downlint::utils::Workspace {
         folder: downlint::utils::DiscoveredFolder {
@@ -2358,7 +2358,7 @@ fn mount_conflict_suspends_lint_of_conflicting_file() {
     fs::write(primary_notes.join("a.md"), "# A\n").unwrap();
     let mount_notes = ext_root.join("notes");
     fs::create_dir_all(&mount_notes).unwrap();
-    fs::write(mount_notes.join("a.md"), "# A2\n\n[[does-not-exist]]\n").unwrap();
+    fs::write(mount_notes.join("a.md"), "# A2\n\n[[missing]]\n").unwrap();
 
     let workspace = downlint::utils::Workspace {
         folder: downlint::utils::DiscoveredFolder {

@@ -152,9 +152,9 @@ menu.
 ### CLI
 
 ```
-$ downlint file rename --from reports/2024-q1.md --to reports/q1.md
-$ downlint file rename --from assets/diagrams/old-flow.png \
-                       --to assets/diagrams/new-flow.png
+$ downlint file rename --from notes/report.md --to notes/topic.md
+$ downlint file rename --from assets/diagrams/image.png \
+                       --to assets/diagrams/topic.png
 $ downlint link rename --from report --to topic
 $ downlint file rename --from old.md --to new.md --dry-run
 ```
@@ -187,7 +187,7 @@ message lists every blocking diagnostic inline.
 ```
 $ downlint file rename --from report.md --to topic.md
 error: rename blocked — 1 occurrence has diagnostic `link/broken`
-  → docs/index.md:42  [[2024-q1]]  Broken link: '2024-q1' could not be resolved
+  → docs/index.md:42  [[missing]]  Broken link: 'missing' could not be resolved
 hint: fix the broken reference first, then re-run the rename.
 ```
 

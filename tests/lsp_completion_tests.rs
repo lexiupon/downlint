@@ -306,13 +306,13 @@ fn lsp_diagnostics_cleared_when_link_fixed() {
 
     let alpha = root.path().join("notes/alpha.md");
     let uri = file_uri(&alpha);
-    // Open alpha with a *complete* broken link (`[[broken]]` — no such note),
+    // Open alpha with a *complete* broken link (`[[missing]]` — no such note),
     // which the re-indexer resolves to a `link/broken` diagnostic.
     client.send(
         "textDocument/didOpen",
         None,
         json!({
-            "textDocument": { "uri": &uri, "languageId": "markdown", "version": 1, "text": "# Alpha Title\n\n[[broken]]\n" }
+            "textDocument": { "uri": &uri, "languageId": "markdown", "version": 1, "text": "# Alpha Title\n\n[[missing]]\n" }
         }),
     );
     // Wait for the initial broken-link diagnostic for alpha.

@@ -245,21 +245,21 @@ mod phase1_lsp_integration {
         assert_eq!(edits[0].get("newText").and_then(|v| v.as_str()), Some("topic"));
     }
 
-    /// F2 works on `[[nonexistent]]` (a broken link) just like on a
+    /// F2 works on `[[missing]]` (a broken link) just like on a
     /// resolved link — string-only has no notion of resolution state.
     #[test]
     fn lsp_rename_string_on_broken_link() {
-        let (_temp, root, docs) = vault(&[("index.md", "See [[nonexistent]].\n")]);
+        let (_temp, root, docs) = vault(&[("index.md", "See [[missing]].\n")]);
         let graph = build_graph(&root, docs);
         let path = PathBuf::from(root.join("index.md"));
-        let text = Text::new("See [[nonexistent]].\n");
-        let offset = text.as_str().find("nonexistent").unwrap();
+        let text = Text::new("See [[missing]].\n");
+        let offset = text.as_str().find("missing").unwrap();
         let hit = prepare_rename(&graph, &path, &text, offset).expect("expected rename hit");
         let range = match hit {
             PrepareRenameHit::LinkTarget { range, .. } => range,
             _ => panic!("expected link-target hit"),
         };
-        assert_eq!(text.slice(range), "nonexistent");
+        assert_eq!(text.slice(range), "missing");
     }
 
     /// F2 on `[[report|alias]]` only replaces the target string, not the
@@ -371,21 +371,21 @@ mod phase1_lsp_integration {
         );
     }
 
-    /// Cursor on a broken link (`[[nonexistent]]`) still offers
+    /// Cursor on a broken link (`[[missing]]`) still offers
     /// `refactor.rename.link-target` — useful for fixing typos that
     /// caused the broken link in the first place.
     #[test]
     fn code_action_link_target_offered_on_broken_link() {
-        let (_temp, root, docs) = vault(&[("index.md", "See [[nonexistent]].\n")]);
+        let (_temp, root, docs) = vault(&[("index.md", "See [[missing]].\n")]);
         let graph = build_graph(&root, docs);
         let path = PathBuf::from(root.join("index.md"));
-        let text = Text::new("See [[nonexistent]].\n");
-        let offset = text.as_str().find("nonexistent").unwrap();
+        let text = Text::new("See [[missing]].\n");
+        let offset = text.as_str().find("missing").unwrap();
         let actions = code_actions(
             &graph,
             &path,
             &text,
-            ByteRange::new(offset, offset + "nonexistent".len()),
+            ByteRange::new(offset, offset + "missing".len()),
         );
         assert!(
             actions
@@ -550,8 +550,8 @@ mod phase3_file_rename {
         }
     }
 
-    /// Markdown file rename preserves the heading anchor: `[[old#head]]`
-    /// becomes `[[new#head]]` (only the doc portion is replaced). The
+    /// Markdown file rename preserves the heading anchor: `[[report#section]]`
+    /// becomes `[[topic#section]]` (only the doc portion is replaced). The
     /// test setup includes a `## section` heading in `report.md` so the
     /// link resolves cleanly.
     #[test]

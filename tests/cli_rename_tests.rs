@@ -8,27 +8,17 @@
 //! goal and is currently a no-op returning exit code 3. Its tests live
 //! alongside when the server module lands.
 
+mod common;
+
 use assert_cmd::Command;
+use common::write_vault;
 use std::fs;
-use tempfile::TempDir;
 
 fn downlint() -> Command {
     // `assert_cmd::Command::cargo_bin` resolves the dev binary path.
     Command::cargo_bin("downlint").expect("downlint binary should build")
 }
 
-fn write_vault(pairs: &[(&str, &str)]) -> TempDir {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    for (rel, content) in pairs {
-        let path = root.join(rel);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(&path, content).unwrap();
-    }
-    temp
-}
 
 /// `file rename` rewrites the on-disk file and every referencing
 /// document. Verifies the standard happy path.
@@ -120,8 +110,8 @@ fn cli_rename_file_source_missing() {
 #[test]
 fn cli_rename_file_attachment() {
     let temp = write_vault(&[
-        ("photo.png", "fake-png-bytes"),
-        ("index.md", "see [[photo.png]]\n"),
+        ("image.png", "fake-png-bytes"),
+        ("index.md", "see [[image.png]]\n"),
     ]);
     let root = temp.path();
     downlint()
@@ -131,17 +121,17 @@ fn cli_rename_file_attachment() {
             "--root",
             root.to_str().unwrap(),
             "--from",
-            "photo.png",
+            "image.png",
             "--to",
-            "pic.png",
+            "topic.png",
         ])
         .assert()
         .success();
 
-    assert!(!root.join("photo.png").exists());
-    assert!(root.join("pic.png").exists());
+    assert!(!root.join("image.png").exists());
+    assert!(root.join("topic.png").exists());
     let index_content = fs::read_to_string(root.join("index.md")).unwrap();
-    assert!(index_content.contains("[[pic.png]]"));
+    assert!(index_content.contains("[[topic.png]]"));
 }
 
 /// `file rename` rejects extension-class changes (markdown → attachment)

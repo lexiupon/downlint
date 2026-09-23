@@ -11,7 +11,10 @@
 //! Uses `assert_cmd` to drive the compiled binary directly, mirroring
 //! `cli_resolve_tests.rs`.
 
+mod common;
+
 use assert_cmd::Command;
+use common::write_vault;
 use predicates::prelude::*;
 use std::fs;
 use std::path::Path;
@@ -21,18 +24,6 @@ fn downlint() -> Command {
     Command::cargo_bin("downlint").expect("downlint binary should build")
 }
 
-fn write_vault(pairs: &[(&str, &str)]) -> TempDir {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    for (rel, content) in pairs {
-        let path = root.join(rel);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(&path, content).unwrap();
-    }
-    temp
-}
 
 /// Run `downlint link <args...> --root <root>`.
 fn link(root: &Path, args: &[&str]) -> assert_cmd::assert::Assert {
@@ -120,10 +111,10 @@ fn graph_file_not_in_index_fails() {
 fn graph_shows_all_outgoing_with_status() {
     let temp = write_vault(&[
         ("notes/target.md", "# Target\n"),
-        ("notes/img.png", ""),
+        ("notes/image.png", ""),
         (
             "notes/a.md",
-            "# A\n- [[Target]]\n- [x](missing.md)\n- [pic](img.png)\n",
+            "# A\n- [[Target]]\n- [x](missing.md)\n- [pic](image.png)\n",
         ),
     ]);
     let (code, stdout) = graph_text(temp.path(), "notes/a.md");
@@ -131,7 +122,7 @@ fn graph_shows_all_outgoing_with_status() {
     let outgoing = section(&stdout, "outgoing");
     assert!(outgoing.iter().any(|line| line.contains("Target") && line.contains("notes/target.md")), "{outgoing:?}");
     assert!(outgoing.iter().any(|line| line.contains("missing.md") && line.contains("<unresolved>")), "{outgoing:?}");
-    assert!(outgoing.iter().any(|line| line.contains("img.png") && line.contains("notes/img.png")), "{outgoing:?}");
+    assert!(outgoing.iter().any(|line| line.contains("image.png") && line.contains("notes/image.png")), "{outgoing:?}");
 }
 
 /// Notes with no incoming links are listed under orphans; the hub (which
@@ -192,13 +183,13 @@ fn coverage_deadends_only_is_exit_1() {
 fn unresolved_lists_broken_links() {
     let temp = write_vault(&[(
         "notes/a.md",
-        "# A\n- [[Gone]]\n- [x](missing.md)\n",
+        "# A\n- [[missing]]\n- [x](missing.md)\n",
     )]);
     link(temp.path(), &["unresolved"])
         .failure()
         .code(1)
         .stdout(predicate::str::contains("notes/a.md:2"))
-        .stdout(predicate::str::contains("Gone"))
+        .stdout(predicate::str::contains("missing"))
         .stdout(predicate::str::contains("notes/a.md:3"))
         .stdout(predicate::str::contains("missing.md"));
 }
@@ -298,13 +289,13 @@ fn coverage_json_envelope() {
 /// `--format json`: `link unresolved` emits `{source, line, col, target}`.
 #[test]
 fn unresolved_json_envelope() {
-    let temp = write_vault(&[("notes/a.md", "# A\n- [[Gone]]\n")]);
+    let temp = write_vault(&[("notes/a.md", "# A\n- [[missing]]\n")]);
     link(temp.path(), &["unresolved", "--format", "json"])
         .failure()
         .code(1)
         .stdout(predicate::str::contains("\"query\": \"unresolved\""))
         .stdout(predicate::str::contains("\"source\": \"notes/a.md\""))
-        .stdout(predicate::str::contains("\"target\": \"Gone\""));
+        .stdout(predicate::str::contains("\"target\": \"missing\""));
 }
 
 /// `--format json` is valid JSON (parses) and an empty result is `[]`.

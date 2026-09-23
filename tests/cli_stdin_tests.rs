@@ -9,28 +9,17 @@
 //! Uses `assert_cmd` to drive the compiled binary directly, mirroring
 //! `cli_rename_tests.rs`.
 
+mod common;
+
 use assert_cmd::Command;
+use common::write_vault;
 use predicates::prelude::*;
-use std::fs;
-use tempfile::TempDir;
 
 fn downlint() -> Command {
     // `assert_cmd::Command::cargo_bin` resolves the dev binary path.
     Command::cargo_bin("downlint").expect("downlint binary should build")
 }
 
-fn write_vault(pairs: &[(&str, &str)]) -> TempDir {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    for (rel, content) in pairs {
-        let path = root.join(rel);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(&path, content).unwrap();
-    }
-    temp
-}
 
 /// Pipe a document to `downlint check --stdin --root <root>` and assert.
 fn check_stdin(root: &std::path::Path, stdin: &str) -> assert_cmd::assert::Assert {
@@ -60,7 +49,7 @@ fn cli_stdin_wiki_link_to_existing_attachment_resolves() {
 /// `<stdin>.md`: exit 1.
 #[test]
 fn cli_stdin_wiki_link_to_missing_attachment_is_broken() {
-    let temp = write_vault(&[("note.md", "# Note\n")]);
+    let temp = write_vault(&[(("report.md", "# Report\n"))]);
     check_stdin(
         temp.path(),
         "- [[/assets/20260523-us-short-code-lifecycle/does-not-exist.drawio]]\n",
@@ -74,8 +63,8 @@ fn cli_stdin_wiki_link_to_missing_attachment_is_broken() {
 /// A wiki link to an existing workspace note resolves: exit 0, no output.
 #[test]
 fn cli_stdin_wiki_link_to_existing_note_resolves() {
-    let temp = write_vault(&[("note.md", "# Note\n")]);
-    check_stdin(temp.path(), "- [[note]]\n")
+    let temp = write_vault(&[(("report.md", "# Report\n"))]);
+    check_stdin(temp.path(), "- [[report]]\n")
         .success()
         .stdout(predicate::str::is_empty());
 }
@@ -83,11 +72,11 @@ fn cli_stdin_wiki_link_to_existing_note_resolves() {
 /// A wiki link to a missing note is `link/broken`: exit 1.
 #[test]
 fn cli_stdin_wiki_link_to_missing_note_is_broken() {
-    let temp = write_vault(&[("note.md", "# Note\n")]);
-    check_stdin(temp.path(), "- [[missing-note]]\n")
+    let temp = write_vault(&[(("report.md", "# Report\n"))]);
+    check_stdin(temp.path(), "- [[missing]]\n")
         .failure()
         .stdout(predicate::str::contains(
-            "<stdin>.md:1:5: error: Broken link: 'missing-note' could not be resolved [link/broken]",
+            "<stdin>.md:1:5: error: Broken link: 'missing' could not be resolved [link/broken]",
         ));
 }
 
@@ -97,11 +86,11 @@ fn cli_stdin_wiki_link_to_missing_note_is_broken() {
 #[test]
 fn cli_stdin_workspace_docs_are_targets_only() {
     let temp = write_vault(&[
-        ("note.md", "# Note\n"),
-        ("broken.md", "# Broken\n- [[/assets/nope.png]]\n"),
+        (("report.md", "# Report\n")),
+        ("broken.md", "# Broken\n- [[/assets/missing.png]]\n"),
     ]);
     // Via stdin: only the piped document is diagnosed.
-    check_stdin(temp.path(), "- [[note]]\n")
+    check_stdin(temp.path(), "- [[report]]\n")
         .success()
         .stdout(predicate::str::is_empty());
     // Via directory check: the workspace doc's broken link is reported.
@@ -110,18 +99,18 @@ fn cli_stdin_workspace_docs_are_targets_only() {
         .assert()
         .failure()
         .stdout(predicate::str::contains(
-            "broken.md:2:5: error: Broken link: '/assets/nope.png' could not be resolved [link/broken]",
+            "broken.md:2:5: error: Broken link: '/assets/missing.png' could not be resolved [link/broken]",
         ));
 }
 
 /// In-page anchor misses are still diagnosed in stdin mode.
 #[test]
 fn cli_stdin_in_page_anchor_miss_is_broken_anchor() {
-    let temp = write_vault(&[("note.md", "# Note\n")]);
-    check_stdin(temp.path(), "# Heading\n- [[#nope]]\n")
+    let temp = write_vault(&[(("report.md", "# Report\n"))]);
+    check_stdin(temp.path(), "# Heading\n- [[#missing]]\n")
         .failure()
         .stdout(predicate::str::contains(
-            "<stdin>.md:2:6: warning: Broken anchor: '#nope' could not be resolved [link/broken-anchor]",
+            "<stdin>.md:2:6: warning: Broken anchor: '#missing' could not be resolved [link/broken-anchor]",
         ));
 }
 
@@ -129,7 +118,7 @@ fn cli_stdin_in_page_anchor_miss_is_broken_anchor() {
 /// `link/broken`, an existing directory resolves.
 #[test]
 fn cli_stdin_folder_links_still_diagnosed() {
-    let temp = write_vault(&[("note.md", "# Note\n"), ("assets/keep.txt", "")]);
+    let temp = write_vault(&[(("report.md", "# Report\n")), ("assets/keep.txt", "")]);
     check_stdin(temp.path(), "- [[/no-such-folder/]]\n")
         .failure()
         .stdout(predicate::str::contains(
@@ -143,7 +132,7 @@ fn cli_stdin_folder_links_still_diagnosed() {
 /// `heading/nbsp` runs on the piped document in stdin mode.
 #[test]
 fn cli_stdin_heading_nbsp_in_piped_content_is_diagnosed() {
-    let temp = write_vault(&[("note.md", "# Note\n")]);
+    let temp = write_vault(&[(("report.md", "# Report\n"))]);
     check_stdin(temp.path(), "#\u{a0}Bad Heading\n")
         .failure()
         .stdout(predicate::str::contains(
@@ -154,7 +143,7 @@ fn cli_stdin_heading_nbsp_in_piped_content_is_diagnosed() {
 /// `heading/nbsp` in a workspace document does not leak into a stdin check.
 #[test]
 fn cli_stdin_heading_nbsp_in_workspace_doc_does_not_leak() {
-    let temp = write_vault(&[("note.md", "# Note\n"), ("nbsp.md", "#\u{a0}Bad Heading\n")]);
+    let temp = write_vault(&[(("report.md", "# Report\n")), ("nbsp.md", "#\u{a0}Bad Heading\n")]);
     // The directory check reports the workspace doc's NBSP heading...
     downlint()
         .args(["check", "--root", temp.path().to_str().unwrap()])
@@ -164,7 +153,7 @@ fn cli_stdin_heading_nbsp_in_workspace_doc_does_not_leak() {
             "nbsp.md:1:2: warning: Non-breaking whitespace after heading marker [heading/nbsp]",
         ));
     // ...but the stdin check does not surface it.
-    check_stdin(temp.path(), "- [[note]]\n")
+    check_stdin(temp.path(), "- [[report]]\n")
         .success()
         .stdout(predicate::str::is_empty());
 }
@@ -174,8 +163,8 @@ fn cli_stdin_heading_nbsp_in_workspace_doc_does_not_leak() {
 #[test]
 fn cli_single_file_on_disk_still_suppresses_cross_file_broken_links() {
     let temp = write_vault(&[
-        ("note.md", "# Note\n"),
-        ("orphan.md", "# Orphan\n- [[missing-note]]\n"),
+        (("report.md", "# Report\n")),
+        ("orphan.md", "# Orphan\n- [[missing]]\n"),
     ]);
     downlint()
         .args([
