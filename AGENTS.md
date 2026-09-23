@@ -11,8 +11,9 @@ Guidance for coding agents working in this repo.
    commit**, so `Cargo.lock` is synced in the same commit. The lock has
    drifted twice (0.15.2, 0.15.3) because the build ran *after* the
    commit and regenerated the lock into an uncommitted change.
-4. Work happens on `dev`; `main` receives squash merges. No tags by
-   default; when tagging, use `vX.Y.Z` on the main squash commit.
+4. Work happens on `dev`; `main` receives squash merges. **Tag every
+   release**: `vX.Y.Z` on the main squash commit — the homebrew tap
+   formula (`lexiupon/homebrew-tap`) requires a tag per version.
 
 ## RFC process
 
