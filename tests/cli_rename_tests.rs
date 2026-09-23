@@ -1,5 +1,5 @@
-//! CLI subprocess tests for `downlint rename-file` and `downlint rename-link`
-//! — RFC 0009 §"CLI Subcommands".
+//! CLI subprocess tests for `downlint file rename` and `downlint link rename`
+//! — RFC 0009 (subcommands renamed by RFC 0018).
 //!
 //! Asserts on stdout/stderr/exit code for the rename subcommands. Uses
 //! `assert_cmd` to drive the compiled binary directly.
@@ -30,7 +30,7 @@ fn write_vault(pairs: &[(&str, &str)]) -> TempDir {
     temp
 }
 
-/// `rename-file` rewrites the on-disk file and every referencing
+/// `file rename` rewrites the on-disk file and every referencing
 /// document. Verifies the standard happy path.
 #[test]
 fn cli_rename_file_applies_text_first_then_disk() {
@@ -41,7 +41,8 @@ fn cli_rename_file_applies_text_first_then_disk() {
     let root = temp.path();
     downlint()
         .args([
-            "rename-file",
+            "file",
+            "rename",
             "--root",
             root.to_str().unwrap(),
             "--from",
@@ -74,7 +75,8 @@ fn cli_rename_file_dry_run() {
     let root = temp.path();
     downlint()
         .args([
-            "rename-file",
+            "file",
+            "rename",
             "--root",
             root.to_str().unwrap(),
             "--from",
@@ -93,14 +95,15 @@ fn cli_rename_file_dry_run() {
     assert!(index_content.contains("[[report]]"));
 }
 
-/// `rename-file` for a missing source returns exit code 3.
+/// `file rename` for a missing source returns exit code 3.
 #[test]
 fn cli_rename_file_source_missing() {
     let temp = write_vault(&[("index.md", "# Index\n")]);
     let root = temp.path();
     downlint()
         .args([
-            "rename-file",
+            "file",
+            "rename",
             "--root",
             root.to_str().unwrap(),
             "--from",
@@ -112,7 +115,7 @@ fn cli_rename_file_source_missing() {
         .code(3);
 }
 
-/// `rename-file` for an attachment (non-markdown extension) works — kind
+/// `file rename` for an attachment (non-markdown extension) works — kind
 /// is inferred from the extension.
 #[test]
 fn cli_rename_file_attachment() {
@@ -123,7 +126,8 @@ fn cli_rename_file_attachment() {
     let root = temp.path();
     downlint()
         .args([
-            "rename-file",
+            "file",
+            "rename",
             "--root",
             root.to_str().unwrap(),
             "--from",
@@ -140,7 +144,7 @@ fn cli_rename_file_attachment() {
     assert!(index_content.contains("[[pic.png]]"));
 }
 
-/// `rename-file` rejects extension-class changes (markdown → attachment)
+/// `file rename` rejects extension-class changes (markdown → attachment)
 /// with exit code 2 (Conflict).
 #[test]
 fn cli_rename_file_extension_class_rejected() {
@@ -148,7 +152,8 @@ fn cli_rename_file_extension_class_rejected() {
     let root = temp.path();
     downlint()
         .args([
-            "rename-file",
+            "file",
+            "rename",
             "--root",
             root.to_str().unwrap(),
             "--from",
@@ -160,7 +165,7 @@ fn cli_rename_file_extension_class_rejected() {
         .code(2);
 }
 
-/// `rename-link --from report --to topic` rewrites the link target
+/// `link rename --from report --to topic` rewrites the link target
 /// strings across the workspace.
 #[test]
 fn cli_rename_link_rewrites_workspace() {
@@ -171,7 +176,8 @@ fn cli_rename_link_rewrites_workspace() {
     let root = temp.path();
     downlint()
         .args([
-            "rename-link",
+            "link",
+            "rename",
             "--root",
             root.to_str().unwrap(),
             "--from",
@@ -191,7 +197,7 @@ fn cli_rename_link_rewrites_workspace() {
     );
 }
 
-/// `rename-link --dry-run` prints the plan without touching disk.
+/// `link rename --dry-run` prints the plan without touching disk.
 #[test]
 fn cli_rename_link_dry_run() {
     let temp = write_vault(&[
@@ -201,7 +207,8 @@ fn cli_rename_link_dry_run() {
     let root = temp.path();
     downlint()
         .args([
-            "rename-link",
+            "link",
+            "rename",
             "--root",
             root.to_str().unwrap(),
             "--from",
@@ -218,7 +225,7 @@ fn cli_rename_link_dry_run() {
     assert!(index_content.contains("[[report]]"));
 }
 
-/// `rename-link` exit code 2 when --to collides with an existing file.
+/// `link rename` exit code 2 when --to collides with an existing file.
 #[test]
 fn cli_rename_link_conflict_exact() {
     let temp = write_vault(&[
@@ -229,7 +236,8 @@ fn cli_rename_link_conflict_exact() {
     let root = temp.path();
     downlint()
         .args([
-            "rename-link",
+            "link",
+            "rename",
             "--root",
             root.to_str().unwrap(),
             "--from",
@@ -241,7 +249,7 @@ fn cli_rename_link_conflict_exact() {
         .code(2);
 }
 
-/// `rename-link --from "path/to/x"` (containing a slash) is rejected by
+/// `link rename --from "path/to/x"` (containing a slash) is rejected by
 /// the bare-identifier validation.
 #[test]
 fn cli_rename_link_validates_bare_identifier() {
@@ -249,7 +257,8 @@ fn cli_rename_link_validates_bare_identifier() {
     let root = temp.path();
     downlint()
         .args([
-            "rename-link",
+            "link",
+            "rename",
             "--root",
             root.to_str().unwrap(),
             "--from",

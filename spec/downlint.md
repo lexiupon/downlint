@@ -32,17 +32,21 @@ document does not restate them.
 
 ### 3.1 CLI
 
-Nine subcommands. `downlint` with no subcommand runs the check.
+Six top-level commands. `downlint` with no subcommand runs the check.
+(RFC 0018: the former `rename-file` / `rename-link` / `resolve` / `graph`
+subcommands were consolidated under the `file` and `link` command groups.)
 
 | Command | Purpose |
 |---|---|
 | `downlint [PATH]` (alias `check`) | Check a file or directory; print diagnostics; exit by severity. |
 | `downlint init` | Scaffold a `.downlint.toml` in the workspace root (refuses to overwrite without `--force`). |
 | `downlint server` | Run the LSP server over stdio. |
-| `downlint rename-file` | Move a markdown file or attachment on disk and rewrite every link pointing at it. |
-| `downlint rename-link` | Rewrite a logical link-target identifier workspace-wide (no disk move). |
-| `downlint resolve <TARGET>` | Show what a link target resolves to: documents, attachments, folders, URI mappings. |
-| `downlint graph <QUERY>` | Read-only link-graph queries: `backlinks`, `links`, `orphans`, `deadends`, `unresolved`. |
+| `downlint file rename` | Move a markdown file or attachment on disk and rewrite every link pointing at it. |
+| `downlint link rename` | Rewrite a logical link-target identifier workspace-wide (no disk move). |
+| `downlint link resolve <TARGET>` | Show what a link target resolves to: documents, attachments, folders, URI mappings. |
+| `downlint link graph <FILE>` | The link graph around a note: incoming (backlinks) and outgoing links. |
+| `downlint link coverage` | Notes with no incoming links (orphans) and no outgoing links (deadends). |
+| `downlint link unresolved` | Every broken link, as `source:line:col  target`. |
 | `downlint info` | Show what downlint sees: the resolved workspace (mounts, schemas, documents, conflicts). |
 
 **`check`** — key flags (defaults in parentheses):
@@ -101,63 +105,69 @@ behavior and introduces no new diagnostics.
   destination. **JSON output**: a single object with `target`, `anchor`,
   `status`, `destinations[]`, `prefix_candidates[]`, and `scheme`.
 
-**`graph`** — read-only link-graph queries (RFC 0015). Projects the existing
-resolution graph into navigation reports. It introduces no new diagnostics and
-changes no resolution semantics. The graph is built **complete**: every
-document's links are resolved, not just the linted ones — a mount with
-`lint = false` is targets-only for `check`, but its links still appear here.
+**`link graph` / `link coverage` / `link unresolved`** — read-only link
+queries (RFC 0015; consolidated under `link` by RFC 0018). Project the
+existing resolution graph into navigation reports. They introduce no new
+diagnostics and change no resolution semantics. The graph is built
+**complete**: every document's links are resolved, not just the linted ones
+— a mount with `lint = false` is targets-only for `check`, but its links
+still appear here.
 
 | Query | Lists |
 |---|---|
-| `backlinks <FILE>` | Every reference in any note that resolves to `FILE` (one line per occurrence). |
-| `links <FILE>` | All of `FILE`'s outgoing references, each with its resolution status. |
-| `orphans` | Notes with no incoming document link. |
-| `deadends` | Notes with no outgoing document link. |
-| `unresolved` | Every broken link, as `source:line:col  target`.
+| `link graph <FILE>` | **Incoming**: every reference in any note that resolves to `FILE` (one line per occurrence). **Outgoing**: all of `FILE`'s outgoing references, each with its resolution status. |
+| `link coverage` | **Orphans**: notes with no incoming document link. **Deadends**: notes with no outgoing document link. |
+| `link unresolved` | Every broken link, as `source:line:col  target`.
 
-- **`<FILE>`** (backlinks/links) names a document by workspace-relative path
+- **`<FILE>`** (`link graph`) names a document by workspace-relative path
   (primary) or namespace path (mounted; the `as` prefix with its leading `/`
-  stripped), matched case-insensitive — the same rules as `resolve --from`.
-  A `<FILE>` not in the index is an error (exit 1). The path shown in
-  `backlinks` output is exactly what you pass back in.
+  stripped), matched case-insensitive — the same rules as `link resolve
+  --from`. A `<FILE>` not in the index is an error (exit 1). The path shown
+  in the incoming section is exactly what you pass back in.
 - **Document link**: a reference counts as a link to a note when its
   destination is an indexed document, reached directly or via a heading
   (`[[Note#H]]`). Attachments, folders, tags, and link definitions are not note
   links. Ambiguous references are not confirmed links to any note (they
   contribute to no query; `check` reports them as `link/ambiguous`).
-- **`links` vs `deadends`**: `links <A>` shows *all* outgoing references;
-  `deadends` counts *document links* only. A note whose only outgoing references
-  are broken or non-document targets appears in both `links <A>` and `deadends`.
+- **Outgoing vs `deadends`**: the outgoing section of `link graph <A>` shows
+  *all* outgoing references; the deadends section of `link coverage` counts
+  *document links* only. A note whose only outgoing references are broken or
+  non-document targets appears in both.
 - **Self-links** count in both directions (a self-linking note is neither an
   orphan nor a deadend).
-- **Flags**: `--root <DIR>` (override workspace root; may follow the subcommand) and
-  `--format <text|json>` (default `text`; may follow the subcommand).
+- **Flags**: `--root <DIR>` (override workspace root) and `--format
+  <text|json>` (default `text`) follow each subcommand.
   No `--stdin` (queries need the full index) and no `--allow-uri-sync` (a
   read-only query never runs a schema's `verify_cmd`; URI targets are stat-only).
-- **Exit codes**: `backlinks`/`links` — `0` `<FILE>` in index (list may be
-  empty) · `1` `<FILE>` not in index · `2` bad args / config error.
-  `orphans`/`deadends`/`unresolved` — `0` none found · `1` found · `2` bad args /
-  config error (so `downlint graph orphans || echo clean` gates CI). Exit codes are
-  **independent of `--format`**.
-- **Text output** (default): one line per result, sorted, 1-based. `backlinks`:
-  `{source}:{line}:{col}`. `links`: `{line}:{col}  {target}  →  {destination | <unresolved> | <ambiguous>}`.
-  `orphans`/`deadends`: one note path per line. `unresolved`:
-  `{source}:{line}:{col}  {target}`. Empty result → no output.
-- **JSON output** (`--format json`): a single pretty-printed envelope
-  `{"query": <name>, "results": [...]}` — plus `"file"` (the canonical namespace
-  path) for `backlinks`/`links`. `results` is `[]` when empty. Per-query result
-  shapes:
-  - `backlinks`: `{"source", "line", "col"}`
-  - `links`: `{"line", "col", "target", "status", "destination"}` where `status` is
-    `"resolved" | "unresolved" | "ambiguous"` and `destination` is the path(s) or `null`.
-  - `orphans` / `deadends`: `{"path"}`
-  - `unresolved`: `{"source", "line", "col", "target"}`
+- **Exit codes**: `link graph` — `0` `<FILE>` in index (either or both
+  sections may be empty) · `1` `<FILE>` not in index · `2` bad args / config
+  error. `link coverage` — `0` both sections empty · `1` at least one section
+  non-empty · `2` bad args / config error (so `downlint link coverage ||
+  echo clean` gates CI). `link unresolved` — `0` none found · `1` found ·
+  `2` bad args / config error. Exit codes are **independent of `--format`**.
+- **Text output** (default): sectioned — a header with the row count, then
+  one indented line per result (sorted, 1-based); an empty section renders
+  its header with a count of `0` and no rows. `link graph`: `incoming (n)`
+  rows are `{source}:{line}:{col}`; `outgoing (n)` rows are
+  `{line}:{col}  {target}  →  {destination | <unresolved> | <ambiguous>}`.
+  `link coverage`: `orphans (n)` / `deadends (n)` are one note path per line.
+  `link unresolved` has no section header: one line per broken link,
+  `{source}:{line}:{col}  {target}`.
+- **JSON output** (`--format json`): a single pretty-printed envelope per
+  query. `link graph`: `{"query": "graph", "file": <canonical namespace
+  path>, "incoming": [...], "outgoing": [...]}` where `incoming[]` entries
+  are `{"source", "line", "col"}` and `outgoing[]` entries are `{"line",
+  "col", "target", "status", "destination"}` with `status` =
+  `"resolved" | "unresolved" | "ambiguous"` and `destination` the path(s) or
+  `null`. `link coverage`: `{"query": "coverage", "orphans": [{"path"}],
+  "deadends": [{"path"}]}`. `link unresolved`: `{"query": "unresolved",
+  "results": [{"source", "line", "col", "target"}]}`. Empty sections are `[]`.
 
 **`info`** — the resolved-workspace report (RFC 0016). A read-only, *descriptive*
 view of what downlint sees: it projects the **resolved** workspace (not the config
 file) into a report. It builds the index and resolved mounts but never resolves
 links, so it introduces no diagnostics and changes no resolution semantics. It
-always operates on the full workspace (like `graph`), never a single file.
+always operates on the full workspace (like `link`), never a single file.
 
 | Flag | Default | Effect |
 |---|---|---|
@@ -182,7 +192,7 @@ always operates on the full workspace (like `graph`), never a single file.
   mounts/schemas point at missing folders (shown as `✗ missing`) · `2` bad args /
   config error (no workspace found, config parse/validation failure, or a schema
   `to` that cannot be expanded because an environment variable is unset). There is
-  **no exit `1`**: `info` never "finds" a problem the way `check`/`graph` do.
+  **no exit `1`**: `info` never "finds" a problem the way `check`/`link` do.
   (A validating `doctor` command — exit 1 on problems — is a possible follow-up.)
 - **Security**: `info` never calls the link resolver, so a schema's `verify_cmd`
   is never executed and no URI reference is resolved. There is no
@@ -219,14 +229,14 @@ advanced options are commented out for opt-in. Refuses to overwrite an existing
 `.downlint.toml` unless `--force`. Exit `0` created · `2` already exists (no `--force`) or
 not a directory.
 
-**`rename-file` / `rename-link`** — required `--from` / `--to`; `--dry-run` prints the plan
+**`file rename` / `link rename`** — required `--from` / `--to`; `--dry-run` prints the plan
 without applying; `--root` as above.
 
 - **Exit codes**: `0` success (or no-op) · `1` blocked by a pre-existing Warning/Error
   diagnostic · `2` conflict (path/prefix collision, extension-class mismatch) · `3` bad
   arguments / config error / source not found.
-- `rename-file` infers markdown-vs-attachment from the source extension — the user never
-  picks. `rename-link` rewrites a bare identifier and moves nothing.
+- `file rename` infers markdown-vs-attachment from the source extension — the user never
+  picks. `link rename` rewrites a bare identifier and moves nothing.
 
 ### 3.2 LSP
 
@@ -273,14 +283,14 @@ defaults**; unknown keys are a hard parse error (fail-fast, exit 2).
 Downlint's core differentiator: rename something, and every reference is rewritten.
 
 **Four rename kinds** (two CLI subcommands; the CLI collapses file/attachment into
-`rename-file`):
+`file rename`):
 
 | Kind | Element | Trigger |
 |---|---|---|
-| File | a markdown document | `rename-file` / `refactor.rename.file` |
-| Attachment | a non-markdown asset (image, PDF, XLSX…) | `rename-file` / `refactor.rename.file` |
+| File | a markdown document | `file rename` / `refactor.rename.file` |
+| Attachment | a non-markdown asset (image, PDF, XLSX…) | `file rename` / `refactor.rename.file` |
 | Heading | H1–H6 heading text | `refactor.rename.heading` (LSP only — no CLI) |
-| Link target | a bare identifier, no disk move | `rename-link` / `refactor.rename.link-target` / F2 |
+| Link target | a bare identifier, no disk move | `link rename` / `refactor.rename.link-target` / F2 |
 
 **What gets rewritten** (file/attachment rename): the path portion of wiki links, markdown
 links, and reference definitions — preserving `|alias`, `#heading`, and URL fragments.
@@ -306,10 +316,10 @@ New paths are computed relative to each referencing document (cross-subtree move
   gate on errors only; `--color never` for logs.
 - **Editor**: `downlint server` over stdio — push diagnostics, completion, hover/definition/
   references, string-only F2 rename; `didRenameFiles` keeps indexes consistent.
-- **KB maintenance**: `rename-file` / `rename-link` to evolve the base; `--dry-run` to
+- **KB maintenance**: `file rename` / `link rename` to evolve the base; `--dry-run` to
   preview; the blocking rule forces cleanup of pre-existing diagnostics first.
-- **Graph navigation**: `graph backlinks` / `graph links` for per-note link panels;
-  `graph orphans` / `graph deadends` / `graph unresolved` for KB audits and CI gates.
+- **Link navigation**: `link graph` for per-note link panels (incoming + outgoing);
+  `link coverage` / `link unresolved` for KB audits and CI gates.
 - **Workspace introspection**: `info` to see what downlint sees — resolved mounts
   (paths, `as` prefixes, doc counts), schemas (expanded `to`, presence), and namespace
   conflicts. The first thing to run when debugging mount/schema configuration.

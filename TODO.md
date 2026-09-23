@@ -38,6 +38,16 @@ Things that are wrong, missing, or inconsistent relative to what should already 
 - [ ] **Heading rename has no usable path today** — it is LSP-only by decision (no CLI
   subcommand), but its code action is not executable (see Planned → LSP). Net effect:
   heading rename is currently unreachable end-to-end.
+- [ ] **Relative `--root` silently skips rename text edits** (found 2026-09-23 during the
+  RFC 0018 self-review; pre-existing). With an explicit *relative* `--root` (e.g. `--root .`),
+  `run_rename_file_inner` joins `--from`/`--to` against the uncanonicalized root, so the
+  plan's `old`/`new` paths are relative while the resolution graph's paths are canonical
+  absolute. The planner's reference matching misses → **no text edits are produced, but the
+  file move still happens** — the vault is left with moved files and stale links (exit 0).
+  Auto-discovered roots (no `--root`) and absolute `--root` are unaffected. Likely fix:
+  canonicalize the workspace root before joining in `src/cli/rename.rs`. Repro:
+  `mkdir v && cd v && echo '# R' > r.md && echo '[[r]]' > i.md && downlint file rename
+  --root . --from r.md --to t.md` → `i.md` still says `[[r]]`.
 
 ### CLI & docs
 

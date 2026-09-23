@@ -1,4 +1,4 @@
-//! CLI subprocess tests for `downlint resolve` — the target resolution query
+//! CLI subprocess tests for `downlint link resolve` — the target resolution query
 //! (RFC 0012).
 //!
 //! `resolve` reports every destination a link target resolves to, with the
@@ -33,9 +33,10 @@ fn write_vault(pairs: &[(&str, &str)]) -> TempDir {
     temp
 }
 
-/// Run `downlint resolve <target> --root <root> [extra args]`.
+/// Run `downlint link resolve <target> --root <root> [extra args]`.
 fn resolve(root: &Path, target: &str, extra_args: &[&str]) -> assert_cmd::assert::Assert {
     let mut args: Vec<String> = vec![
+        "link".into(),
         "resolve".into(),
         "--root".into(),
         root.to_str().unwrap().to_string(),
@@ -415,7 +416,7 @@ fn resolve_root_override_honored() {
     // From a different cwd, only --root can find the vault.
     downlint()
         .current_dir(&cwd_root)
-        .args(["resolve", "--root", &root_str, "Avon"])
+        .args(["link", "resolve", "--root", root_str.as_str(), "Avon"])
         .assert()
         .success()
         .stdout(predicate::str::contains("resolved — 1 destination:"));

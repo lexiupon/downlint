@@ -152,16 +152,16 @@ menu.
 ### CLI
 
 ```
-$ downlint rename-file --from reports/2024-q1.md --to reports/q1.md
-$ downlint rename-file --from assets/diagrams/old-flow.png \
-                      --to assets/diagrams/new-flow.png
-$ downlint rename-link --from report --to topic
-$ downlint rename-file --from old.md --to new.md --dry-run
+$ downlint file rename --from reports/2024-q1.md --to reports/q1.md
+$ downlint file rename --from assets/diagrams/old-flow.png \
+                       --to assets/diagrams/new-flow.png
+$ downlint link rename --from report --to topic
+$ downlint file rename --from old.md --to new.md --dry-run
 ```
 
-`rename-file` accepts any file on disk — markdown or attachment. The
+`file rename` accepts any file on disk — markdown or attachment. The
 kind-class is inferred from the source extension, so users don't have
-to think about it. `rename-link` rewrites a logical identifier
+to think about it. `link rename` rewrites a logical identifier
 workspace-wide without touching disk.
 
 Both subcommands accept `--dry-run` to print planned edits without
@@ -185,7 +185,7 @@ rewritten. `Information` and `Hint` diagnostics do not block. The error
 message lists every blocking diagnostic inline.
 
 ```
-$ downlint rename-file --from report.md --to topic.md
+$ downlint file rename --from report.md --to topic.md
 error: rename blocked — 1 occurrence has diagnostic `link/broken`
   → docs/index.md:42  [[2024-q1]]  Broken link: '2024-q1' could not be resolved
 hint: fix the broken reference first, then re-run the rename.

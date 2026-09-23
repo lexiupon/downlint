@@ -36,25 +36,19 @@ enum Command {
     #[command(name = "init", about = "Create a .downlint.toml config file in the workspace root")]
     Init(InitArgs),
     Server(ServerArgs),
-    /// Move a markdown file or attachment on disk and rewrite every link
-    /// that points at it. Kind-class (markdown vs attachment) is inferred
-    /// from the source file's extension.
-    #[command(name = "rename-file", about = "Rename a markdown file or attachment and rewrite references")]
-    RenameFile(RenameFileArgs),
-    /// Rewrite a logical link identifier across the workspace. No disk move.
-    #[command(name = "rename-link", about = "Rewrite a link-target identifier across the workspace")]
-    RenameLink(RenameLinkArgs),
-    /// Show what a link target resolves to: documents, attachments, folders,
-    /// and URI-scheme mappings.
-    #[command(name = "resolve", about = "Show what a link target resolves to (documents, attachments, folders, URI mappings)")]
-    Resolve(ResolveArgs),
-    /// Read-only link-graph queries: backlinks, links, orphans, deadends,
-    /// unresolved.
-    #[command(
-        name = "graph",
-        about = "Query the link graph (backlinks, links, orphans, deadends, unresolved)"
-    )]
-    Graph(GraphArgs),
+    /// File operations: rename a markdown file or attachment on disk.
+    #[command(name = "file", about = "File operations (rename a markdown file or attachment)")]
+    File {
+        #[command(subcommand)]
+        command: FileCommand,
+    },
+    /// Link operations: rename identifiers, resolve targets, query the link
+    /// graph.
+    #[command(name = "link", about = "Link operations (rename, resolve, graph, coverage, unresolved)")]
+    Link {
+        #[command(subcommand)]
+        command: LinkCommand,
+    },
     /// Show what downlint sees: the resolved workspace (mounts, schemas,
     /// document counts, conflicts).
     #[command(
@@ -62,6 +56,31 @@ enum Command {
         about = "Show the resolved workspace (mounts, schemas, documents, conflicts)"
     )]
     Info(InfoArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum FileCommand {
+    /// Move a markdown file or attachment on disk and rewrite every link
+    /// that points at it. Kind-class (markdown vs attachment) is inferred
+    /// from the source file's extension.
+    Rename(RenameFileArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum LinkCommand {
+    /// Rewrite a logical link identifier across the workspace. No disk move.
+    Rename(RenameLinkArgs),
+    /// Show what a link target resolves to: documents, attachments, folders,
+    /// and URI-scheme mappings.
+    Resolve(ResolveArgs),
+    /// Show the link graph around FILE: incoming (backlinks) and outgoing
+    /// links.
+    Graph(GraphArgs),
+    /// Notes with no incoming links (orphans) and no outgoing links
+    /// (deadends).
+    Coverage(LinkQueryArgs),
+    /// List links that point at notes that don't exist.
+    Unresolved(LinkQueryArgs),
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -111,7 +130,7 @@ struct ServerArgs {
     no_uri_hints: bool,
     /// Start the server in the background and exit immediately. Used by
     /// agent workflows that perform many renames in sequence. The server
-    /// runs as a planning service — CLI `rename-file` / `rename-link` with
+    /// runs as a planning service — CLI `file rename` / `link rename` with
     /// `--server` connect to it via TCP.
     #[arg(long = "detach", action = ArgAction::SetTrue)]
     detach: bool,
@@ -208,18 +227,22 @@ struct ResolveArgs {
 }
 
 #[derive(Args, Clone, Debug)]
-struct GraphArgs {
-    /// Global so it can follow the subcommand (`graph backlinks <f> --root …`),
-    /// matching `resolve`.
-    #[arg(long, global = true)]
+struct LinkQueryArgs {
+    #[arg(long)]
     root: Option<PathBuf>,
-    #[arg(long, short = 'v', default_value_t = 2, global = true)]
+    #[arg(long, short = 'v', default_value_t = 2)]
     verbose: u8,
-    /// Output format: `text` (one line per result) or `json` (envelope).
-    #[arg(long, default_value = "text", global = true)]
+    /// Output format: `text` (default) or `json` (envelope).
+    #[arg(long, default_value = "text")]
     format: FormatArg,
-    #[command(subcommand)]
-    query: graph::GraphQuery,
+}
+
+#[derive(Args, Clone, Debug)]
+struct GraphArgs {
+    /// The note (workspace-relative or mount namespace path).
+    file: PathBuf,
+    #[command(flatten)]
+    flags: LinkQueryArgs,
 }
 
 #[derive(Args, Clone, Debug)]
@@ -284,53 +307,79 @@ pub async fn run() -> i32 {
                 force: args.force,
             })
         }
-        Some(Command::RenameFile(args)) => {
-            init_tracing(args.verbose);
-            rename::run_rename_file(rename::RenameFileOptions {
-                root: args.root,
-                from: args.from,
-                to: args.to,
-                dry_run: args.dry_run,
-                verbose: args.verbose,
-                quiet: args.quiet,
-            })
-        }
-        Some(Command::RenameLink(args)) => {
-            init_tracing(args.verbose);
-            rename::run_rename_link(rename::RenameLinkOptions {
-                root: args.root,
-                from: args.from,
-                to: args.to,
-                dry_run: args.dry_run,
-                verbose: args.verbose,
-                quiet: args.quiet,
-            })
-        }
-        Some(Command::Resolve(args)) => {
-            init_tracing(args.verbose);
-            resolve::run_resolve(resolve::ResolveOptions {
-                root: args.root,
-                from: args.from,
-                format: match args.format {
-                    FormatArg::Text => check::OutputFormat::Text,
-                    FormatArg::Json => check::OutputFormat::Json,
-                },
-                include_prefix: args.include_prefix,
-                allow_uri_sync: args.allow_uri_sync,
-                target: args.target,
-            })
-        }
-        Some(Command::Graph(args)) => {
-            init_tracing(args.verbose);
-            graph::run_graph(graph::GraphOptions {
-                root: args.root,
-                query: args.query,
-                format: match args.format {
-                    FormatArg::Text => check::OutputFormat::Text,
-                    FormatArg::Json => check::OutputFormat::Json,
-                },
-            })
-        }
+        Some(Command::File { command }) => match command {
+            FileCommand::Rename(args) => {
+                init_tracing(args.verbose);
+                rename::run_rename_file(rename::RenameFileOptions {
+                    root: args.root,
+                    from: args.from,
+                    to: args.to,
+                    dry_run: args.dry_run,
+                    verbose: args.verbose,
+                    quiet: args.quiet,
+                })
+            }
+        },
+        Some(Command::Link { command }) => match command {
+            LinkCommand::Rename(args) => {
+                init_tracing(args.verbose);
+                rename::run_rename_link(rename::RenameLinkOptions {
+                    root: args.root,
+                    from: args.from,
+                    to: args.to,
+                    dry_run: args.dry_run,
+                    verbose: args.verbose,
+                    quiet: args.quiet,
+                })
+            }
+            LinkCommand::Resolve(args) => {
+                init_tracing(args.verbose);
+                resolve::run_resolve(resolve::ResolveOptions {
+                    root: args.root,
+                    from: args.from,
+                    format: match args.format {
+                        FormatArg::Text => check::OutputFormat::Text,
+                        FormatArg::Json => check::OutputFormat::Json,
+                    },
+                    include_prefix: args.include_prefix,
+                    allow_uri_sync: args.allow_uri_sync,
+                    target: args.target,
+                })
+            }
+            LinkCommand::Graph(args) => {
+                init_tracing(args.flags.verbose);
+                graph::run_link_query(graph::LinkQueryOptions {
+                    root: args.flags.root,
+                    query: graph::LinkQuery::Graph { file: args.file },
+                    format: match args.flags.format {
+                        FormatArg::Text => check::OutputFormat::Text,
+                        FormatArg::Json => check::OutputFormat::Json,
+                    },
+                })
+            }
+            LinkCommand::Coverage(args) => {
+                init_tracing(args.verbose);
+                graph::run_link_query(graph::LinkQueryOptions {
+                    root: args.root,
+                    query: graph::LinkQuery::Coverage,
+                    format: match args.format {
+                        FormatArg::Text => check::OutputFormat::Text,
+                        FormatArg::Json => check::OutputFormat::Json,
+                    },
+                })
+            }
+            LinkCommand::Unresolved(args) => {
+                init_tracing(args.verbose);
+                graph::run_link_query(graph::LinkQueryOptions {
+                    root: args.root,
+                    query: graph::LinkQuery::Unresolved,
+                    format: match args.format {
+                        FormatArg::Text => check::OutputFormat::Text,
+                        FormatArg::Json => check::OutputFormat::Json,
+                    },
+                })
+            }
+        },
         Some(Command::Info(args)) => {
             init_tracing(args.verbose);
             info::run_info(info::InfoOptions {

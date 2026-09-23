@@ -1,5 +1,5 @@
-//! CLI implementation of `downlint rename-file` and `downlint rename-link`
-//! — RFC 0009 §"CLI Subcommands".
+//! CLI implementation of `downlint file rename` and `downlint link rename`
+//! — RFC 0018 §"CLI Subcommands" (formerly `rename-file` / `rename-link`).
 //!
 //! These subcommands share the rename library with the LSP code actions;
 //! the only difference is the apply step: the CLI writes text edits to

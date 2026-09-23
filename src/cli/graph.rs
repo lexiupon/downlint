@@ -1,57 +1,50 @@
-//! `downlint graph <query>` — read-only link-graph queries (RFC 0015).
+//! `downlint link <query>` — read-only link queries (RFC 0018; formerly the
+//! top-level `graph` command, RFC 0015).
 //!
 //! Projects the existing `ConnectionGraph` into navigation reports:
-//! `backlinks`, `links`, `orphans`, `deadends`, `unresolved`. No new
-//! resolution logic and no new diagnostics — a projection layer, like
-//! `resolve` (RFC 0012).
+//! `link graph <FILE>` (incoming + outgoing), `link coverage` (orphans +
+//! deadends), `link unresolved`. No new resolution logic and no new
+//! diagnostics — a projection layer, like `link resolve` (RFC 0012).
 //!
 //! The graph is built *complete*: every document's links are resolved, not
 //! just the linted ones (a mount with `lint = false` is targets-only for
 //! `check`, but its links still matter for navigation).
 //!
-//! Output is `--format text` (default, one line per result) or `--format json`
-//! (a single envelope `{query, file?, results[]}`). Exit codes are
-//! independent of format.
+//! Output is `--format text` (default, sectioned) or `--format json` (a
+//! single envelope per query). Exit codes are independent of format.
 
 use crate::cli::check::OutputFormat;
 use crate::parser::Ref;
 use crate::resolution::conn::{DestinationKind, ResolvedDestination, ResolvedDocument};
 use crate::resolution::{ConnectionGraph, ResolveInput, resolve_links};
 use crate::utils::{PositionEncoding, Workspace, WorkspaceInput, discover_workspace};
-use clap::Subcommand;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-#[derive(Subcommand, Clone, Debug)]
-pub enum GraphQuery {
-    /// List the notes that link to FILE (one line per link occurrence).
-    Backlinks {
-        /// The target note (workspace-relative or mount namespace path).
-        file: PathBuf,
-    },
-    /// List FILE's outgoing links with their resolution status.
-    Links {
-        /// The source note (workspace-relative or mount namespace path).
-        file: PathBuf,
-    },
-    /// List notes with no incoming links.
-    Orphans,
-    /// List notes with no outgoing links.
-    Deadends,
+/// The link queries. The clap surface lives in `crate::cli` (`LinkCommand`);
+/// this enum is the logic-side dispatch.
+#[derive(Clone, Debug)]
+pub enum LinkQuery {
+    /// Show the link graph around a note: incoming (backlinks) and outgoing
+    /// links.
+    Graph { file: PathBuf },
+    /// Notes with no incoming links (orphans) and no outgoing links
+    /// (deadends).
+    Coverage,
     /// List links that point at notes that don't exist.
     Unresolved,
 }
 
 #[derive(Clone, Debug)]
-pub struct GraphOptions {
+pub struct LinkQueryOptions {
     pub root: Option<PathBuf>,
-    pub query: GraphQuery,
+    pub query: LinkQuery,
     pub format: OutputFormat,
 }
 
-pub fn run_graph(options: GraphOptions) -> i32 {
+pub fn run_link_query(options: LinkQueryOptions) -> i32 {
     let workspace = match discover_workspace(
         WorkspaceInput::Path(PathBuf::from(".")),
         options.root.as_deref(),
@@ -70,38 +63,75 @@ pub fn run_graph(options: GraphOptions) -> i32 {
 
     // Complete graph: see every document's links, not just linted ones.
     // `is_source` only gates which documents `resolve_links` resolves; the
-    // graph command never runs diagnostics, so no lint behavior is affected.
+    // link queries never run diagnostics, so no lint behavior is affected.
     for doc in &mut input.documents {
         doc.is_source = true;
     }
     let graph = resolve_links(input);
 
     match &options.query {
-        GraphQuery::Backlinks { file } => match backlinks_rows(&graph, &workspace, file) {
-            Ok((canonical, rows)) => {
-                emit("backlinks", Some(canonical), options.format, &rows, false)
+        LinkQuery::Graph { file } => {
+            let (canonical, incoming) = match backlinks_rows(&graph, &workspace, file) {
+                Ok(rows) => rows,
+                Err(message) => {
+                    eprintln!("downlint: error: {message}");
+                    return 1;
+                }
+            };
+            let outgoing = match links_rows(&graph, &workspace, file) {
+                Ok((_, rows)) => rows,
+                Err(message) => {
+                    eprintln!("downlint: error: {message}");
+                    return 1;
+                }
+            };
+            match options.format {
+                OutputFormat::Text => {
+                    print_section("incoming", &incoming);
+                    print_section("outgoing", &outgoing);
+                }
+                OutputFormat::Json => {
+                    let body = json!({
+                        "query": "graph",
+                        "file": canonical,
+                        "incoming": to_values(&incoming),
+                        "outgoing": to_values(&outgoing),
+                    });
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&body).unwrap_or_else(|_| "{}".into())
+                    );
+                }
             }
-            Err(message) => {
-                eprintln!("downlint: error: {message}");
+            0
+        }
+        LinkQuery::Coverage => {
+            let orphans = orphan_rows(&graph);
+            let deadends = deadend_rows(&graph);
+            match options.format {
+                OutputFormat::Text => {
+                    print_section("orphans", &orphans);
+                    print_section("deadends", &deadends);
+                }
+                OutputFormat::Json => {
+                    let body = json!({
+                        "query": "coverage",
+                        "orphans": to_values(&orphans),
+                        "deadends": to_values(&deadends),
+                    });
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&body).unwrap_or_else(|_| "{}".into())
+                    );
+                }
+            }
+            if orphans.is_empty() && deadends.is_empty() {
+                0
+            } else {
                 1
             }
-        },
-        GraphQuery::Links { file } => match links_rows(&graph, &workspace, file) {
-            Ok((canonical, rows)) => emit("links", Some(canonical), options.format, &rows, false),
-            Err(message) => {
-                eprintln!("downlint: error: {message}");
-                1
-            }
-        },
-        GraphQuery::Orphans => {
-            let rows = orphan_rows(&graph);
-            emit("orphans", None, options.format, &rows, true)
         }
-        GraphQuery::Deadends => {
-            let rows = deadend_rows(&graph);
-            emit("deadends", None, options.format, &rows, true)
-        }
-        GraphQuery::Unresolved => {
+        LinkQuery::Unresolved => {
             let rows = unresolved_rows(&graph);
             emit("unresolved", None, options.format, &rows, true)
         }
@@ -130,11 +160,7 @@ fn emit<R: Row>(
             }
         }
         OutputFormat::Json => {
-            let results: Vec<Value> = rows
-                .iter()
-                .map(|row| serde_json::to_value(row).unwrap_or(Value::Null))
-                .collect();
-            let mut body = json!({ "query": query, "results": results });
+            let mut body = json!({ "query": query, "results": to_values(rows) });
             if let Some(file) = file {
                 body["file"] = json!(file);
             }
@@ -148,6 +174,22 @@ fn emit<R: Row>(
         1
     } else {
         0
+    }
+}
+
+/// Serialize rows for a JSON section (an array, `[]` when empty).
+fn to_values<R: Serialize>(rows: &[R]) -> Vec<Value> {
+    rows.iter()
+        .map(|row| serde_json::to_value(row).unwrap_or(Value::Null))
+        .collect()
+}
+
+/// Render a text section: a header with the row count, then one indented
+/// line per row (header only when empty).
+fn print_section<R: Row>(header: &str, rows: &[R]) {
+    println!("{header} ({})", rows.len());
+    for row in rows {
+        println!("  {}", row.text());
     }
 }
 
@@ -662,7 +704,7 @@ mod tests {
 
     #[test]
     fn json_envelope_shape() {
-        let rows = vec![
+        let incoming = vec![
             BacklinkRow {
                 source: "a.md".into(),
                 line: 2,
@@ -674,20 +716,42 @@ mod tests {
                 col: 1,
             },
         ];
-        // Mimic emit()'s JSON body construction.
-        let results: Vec<Value> = rows
-            .iter()
-            .map(|row| serde_json::to_value(row).unwrap())
-            .collect();
-        let mut body = json!({ "query": "backlinks", "results": results });
-        body["file"] = json!("t.md");
+        let outgoing = vec![LinkRow {
+            line: 3,
+            col: 1,
+            target: "T".into(),
+            status: "resolved".into(),
+            destination: Some("t.md".into()),
+        }];
+        // Mimic run_link_query's JSON body construction for `link graph`.
+        let body = json!({
+            "query": "graph",
+            "file": "t.md",
+            "incoming": to_values(&incoming),
+            "outgoing": to_values(&outgoing),
+        });
         let value: serde_json::Value =
             serde_json::from_str(&serde_json::to_string_pretty(&body).unwrap()).unwrap();
-        assert_eq!(value["query"], "backlinks");
+        assert_eq!(value["query"], "graph");
         assert_eq!(value["file"], "t.md");
-        assert_eq!(value["results"].as_array().unwrap().len(), 2);
-        assert_eq!(value["results"][0]["source"], "a.md");
-        assert_eq!(value["results"][0]["line"], 2);
-        assert_eq!(value["results"][1]["col"], 1);
+        assert_eq!(value["incoming"].as_array().unwrap().len(), 2);
+        assert_eq!(value["incoming"][0]["source"], "a.md");
+        assert_eq!(value["incoming"][0]["line"], 2);
+        assert_eq!(value["incoming"][1]["col"], 1);
+        assert_eq!(value["outgoing"].as_array().unwrap().len(), 1);
+        assert_eq!(value["outgoing"][0]["destination"], "t.md");
+    }
+
+    #[test]
+    fn json_envelope_empty_sections_are_empty_arrays() {
+        let body = json!({
+            "query": "coverage",
+            "orphans": to_values::<PathRow>(&[]),
+            "deadends": to_values::<PathRow>(&[]),
+        });
+        let value: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&body).unwrap()).unwrap();
+        assert!(value["orphans"].as_array().unwrap().is_empty());
+        assert!(value["deadends"].as_array().unwrap().is_empty());
     }
 }
