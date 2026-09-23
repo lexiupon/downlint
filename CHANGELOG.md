@@ -5,6 +5,45 @@ based on [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/) for post-1.0 releases.
 Pre-1.0 versions may include breaking changes.
 
+## [0.15.5] — LSP workspace freshness (RFC 0022)
+
+### Fixed
+
+- **Stale `link/broken` diagnostics after creating the missing note.** The LSP
+  workspace was a static snapshot taken at `initialize`: files created
+  afterwards never entered the index, so fixing a broken link by creating the
+  target note did nothing until the LSP was restarted. The index now tracks
+  disk changes through three mechanisms:
+  - `didOpen`/`didChange` **upsert** the document into the index — even an
+    unsaved buffer becomes a resolvable link target.
+  - `workspace/didCreateFiles` / `workspace/didDeleteFiles` are handled and
+    reconciled against disk on the next re-index.
+  - A **filesystem watcher** on the workspace root covers disk changes that
+    produce no editor notification at all (e.g. Neovim's built-in client
+    sends no file-operation notifications).
+- **Mirror-image staleness on deletion.** Deleting a target file on disk
+  re-raises `link/broken` for links that resolved to it (previously the link
+  stayed resolved until an LSP restart).
+- **Ghost documents.** Closing a buffer that was never saved removes it from
+  the index again (previously the document persisted and resolved links to a
+  file that does not exist).
+
+### Changed
+
+- The re-index debounce is now bounded: while the workspace is dirty, the
+  reindexer re-indexes at least every 2 s, so a continuous stream of changes
+  (a sync daemon, a long git operation) cannot starve it indefinitely.
+- Incoming editor URIs and watcher paths are normalized to the workspace
+  root's path form, so symlinked roots (macOS `/tmp` vs `/private/tmp`) work
+  with both canonicalizing and non-canonicalizing clients.
+
+### Unchanged
+
+- Reconciliation never overwrites or removes an open editor buffer — the
+  editor's text is authoritative while a document is open.
+- `workspace/willCreateFiles` / `willRenameFiles` / `willDeleteFiles` remain
+  out of scope (see `spec/linting.md` §6.3).
+
 ## [0.15.4] — Colon-bearing link targets are not URIs (RFC 0021)
 
 ### Fixed
