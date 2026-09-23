@@ -1,6 +1,6 @@
 # RFC 0023 — Hidden files are excluded by default; `core.include_hidden` opt-in
 
-**Status**: Proposed
+**Status**: Accepted (0.15.6)
 **Date**: 2026-09-23
 **Scope**: workspace discovery (`src/utils/workspace.rs`), configuration
 (`src/config/mod.rs`). No changes to the parser, resolution rules, slugs,

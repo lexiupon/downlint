@@ -216,7 +216,9 @@ fn find_project_config(root: &Path) -> Option<PathBuf> {
 fn collect_documents(root: &Path, config: &Config) -> std::io::Result<Vec<WorkspaceDocument>> {
     let ext_set: HashSet<String> = config.core.file_extensions.iter().cloned().collect();
     let mut builder = WalkBuilder::new(root);
-    builder.follow_links(true).hidden(false);
+    // Hidden entries are excluded by default (RES-10); `core.include_hidden`
+    // restores the include-everything walk (RFC 0023).
+    builder.follow_links(true).hidden(!config.core.include_hidden);
 
     // Find symlinked dirs in the root and add them explicitly so the walker
     // traverses them even when .gitignore excludes them.
@@ -300,7 +302,9 @@ fn collect_documents(root: &Path, config: &Config) -> std::io::Result<Vec<Worksp
 pub fn indexable_paths_under(root: &Path, subtree: &Path, config: &Config) -> Vec<PathBuf> {
     let ext_set: HashSet<String> = config.core.file_extensions.iter().cloned().collect();
     let mut builder = WalkBuilder::new(root);
-    builder.follow_links(true).hidden(false);
+    // Same hidden-file policy as `collect_documents` (RFC 0023): the
+    // reconciliation walk must index exactly what the snapshot indexed.
+    builder.follow_links(true).hidden(!config.core.include_hidden);
 
     // Same root-symlink force-add as `collect_documents`, limited to the
     // branch that can reach `subtree`.
@@ -413,17 +417,19 @@ mod tests {
     }
 
     /// `indexable_paths_under` applies the same filtering as
-    /// `collect_documents` (RFC 0022): plain notes and hidden notes are
-    /// included (the snapshot walks with `hidden(false)`), while
-    /// `.gitignore`d files, `core.ignore`d files, and non-markdown files
-    /// are excluded.
+    /// `collect_documents` (RFC 0022 + RFC 0023): `.gitignore`d files,
+    /// `core.ignore`d files, non-markdown files, and — by default — hidden
+    /// files and directories are excluded; `core.include_hidden = true`
+    /// restores inclusion of hidden entries.
     #[test]
     fn indexable_paths_under_applies_snapshot_filtering() {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
         fs::create_dir_all(root.join("notes")).unwrap();
+        fs::create_dir_all(root.join(".trash")).unwrap();
         fs::write(root.join("notes/plain.md"), "# Plain\n").unwrap();
         fs::write(root.join("notes/.hidden.md"), "# Hidden\n").unwrap();
+        fs::write(root.join(".trash/old.md"), "# Trashed\n").unwrap();
         fs::write(root.join("notes/gitignored.md"), "# Gitignored\n").unwrap();
         fs::write(root.join("notes/ignored-by-config.md"), "# Ignored\n").unwrap();
         fs::write(root.join("notes/attachment.png"), "x").unwrap();
@@ -441,28 +447,81 @@ mod tests {
         let found = indexable_paths_under(root, &plain, &config);
         assert_eq!(found, vec![plain.clone()]);
 
-        // File-level: hidden notes are included (the snapshot walks with
-        // `hidden(false)`); each other excluded kind yields nothing.
+        // File-level: hidden notes are excluded by default (RES-10), as are
+        // notes inside hidden directories; each other excluded kind yields
+        // nothing.
         let hidden = root.join("notes/.hidden.md");
-        assert_eq!(indexable_paths_under(root, &hidden, &config), vec![hidden.clone()]);
+        let trashed = root.join(".trash/old.md");
         for excluded in [
-            "notes/gitignored.md",
-            "notes/ignored-by-config.md",
-            "notes/attachment.png",
+            &hidden,
+            &trashed,
+            &root.join("notes/gitignored.md"),
+            &root.join("notes/ignored-by-config.md"),
+            &root.join("notes/attachment.png"),
         ] {
-            let path = root.join(excluded);
             assert_eq!(
-                indexable_paths_under(root, &path, &config),
+                indexable_paths_under(root, excluded, &config),
                 Vec::<PathBuf>::new(),
-                "{excluded} should be excluded"
+                "{} should be excluded",
+                excluded.display()
             );
         }
 
-        // Directory-level: the subtree reconcile sees the plain and hidden
-        // notes only.
+        // Directory-level: the subtree reconcile sees the plain note only.
         let notes = root.join("notes");
+        let found = indexable_paths_under(root, &notes, &config);
+        assert_eq!(found, vec![plain.clone()]);
+
+        // A hidden directory as the subtree itself yields nothing.
+        let trash = root.join(".trash");
+        assert_eq!(indexable_paths_under(root, &trash, &config), Vec::<PathBuf>::new());
+
+        // `include_hidden = true` restores the include-everything walk
+        // (RFC 0023): hidden files and hidden directories come back, while
+        // gitignore/config/extension filtering still applies.
+        config.core.include_hidden = true;
+        assert_eq!(indexable_paths_under(root, &hidden, &config), vec![hidden.clone()]);
+        assert_eq!(indexable_paths_under(root, &trashed, &config), vec![trashed.clone()]);
         let mut found = indexable_paths_under(root, &notes, &config);
         found.sort();
-        assert_eq!(found, vec![hidden, plain]);
+        assert_eq!(found, vec![hidden.clone(), plain]);
+        // gitignore still excludes (hidden filtering is orthogonal to it).
+        assert_eq!(
+            indexable_paths_under(root, &root.join("notes/gitignored.md"), &config),
+            Vec::<PathBuf>::new()
+        );
+    }
+
+    /// Snapshot level (RFC 0023): `discover_workspace` excludes hidden files
+    /// and directories by default, and `core.include_hidden = true` in the
+    /// vault's `.downlint.toml` restores the include-everything walk.
+    #[test]
+    fn discover_workspace_hidden_policy() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join(".trash")).unwrap();
+        fs::write(root.join("plain.md"), "# Plain\n").unwrap();
+        fs::write(root.join(".hidden.md"), "# Hidden\n").unwrap();
+        fs::write(root.join(".trash/old.md"), "# Trashed\n").unwrap();
+        fs::write(root.join(".downlint.toml"), "").unwrap();
+
+        let stems = |ws: &Workspace| -> Vec<String> {
+            ws.folder
+                .documents
+                .iter()
+                .map(|doc| doc.rel_path.file_name().unwrap().to_string_lossy().into_owned())
+                .collect()
+        };
+
+        // Default: hidden file and hidden directory are not documents.
+        let ws = discover_workspace(WorkspaceInput::Path(root.to_path_buf()), Some(root)).unwrap();
+        assert_eq!(stems(&ws), vec!["plain.md".to_string()]);
+
+        // Opt-in: `core.include_hidden = true` restores them.
+        fs::write(root.join(".downlint.toml"), "[core]\ninclude_hidden = true\n").unwrap();
+        let ws = discover_workspace(WorkspaceInput::Path(root.to_path_buf()), Some(root)).unwrap();
+        let mut stems = stems(&ws);
+        stems.sort();
+        assert_eq!(stems, vec![".hidden.md".to_string(), "old.md".to_string(), "plain.md".to_string()]);
     }
 }
