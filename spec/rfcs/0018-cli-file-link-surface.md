@@ -1,6 +1,6 @@
 # RFC 0018 — CLI surface: `file` and `link` command groups
 
-**Status**: Proposed
+**Status**: Accepted
 **Date**: 2026-09-23
 **Scope**: CLI subcommand names and grouping only. No changes to resolution
 semantics, rename semantics, diagnostics, exit-code *schemes*, or the LSP surface.

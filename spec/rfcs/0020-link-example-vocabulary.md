@@ -1,6 +1,6 @@
 # RFC 0020 — Canonical link-example vocabulary for tests and docs
 
-**Status**: Proposed
+**Status**: Accepted
 **Date**: 2026-09-23
 **Scope**: Test fixtures and documentation examples only. No changes to
 `src/`, resolution behavior, diagnostics, or the LSP surface.

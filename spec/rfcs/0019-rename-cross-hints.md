@@ -1,6 +1,6 @@
 # RFC 0019 — Rename command cross-hints (DX)
 
-**Status**: Proposed
+**Status**: Accepted
 **Date**: 2026-09-23
 **Scope**: CLI diagnostics only — advisory hints on the two rename commands.
 No changes to resolution, rename semantics, exit codes, or the LSP surface.
