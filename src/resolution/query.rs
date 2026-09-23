@@ -9,7 +9,7 @@
 use crate::resolution::auto_verify::{AutoVerifyOutcome, classify};
 use crate::resolution::conn::ResolvedDocument;
 use crate::resolution::path::{
-    has_scheme, is_external_web_scheme, is_folder_link_target, is_root_relative,
+    is_external_web_scheme, is_folder_link_target, is_root_relative,
     path_md_optional_eq, path_without_extension, percent_decode, resolve_explicit_path, scheme_of,
     split_anchor,
 };
@@ -258,7 +258,7 @@ pub fn resolve_target(
     allow_sync: bool,
 ) -> TargetResolution {
     // 1. Scheme targets (RES-07).
-    if has_scheme(target) {
+    if input.uri_resolver.is_uri_target(target) {
         return resolve_uri_target(input, target, allow_sync);
     }
 

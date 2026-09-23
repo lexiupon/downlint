@@ -8,7 +8,7 @@
 //! caching.
 
 use crate::config::SchemaConfig;
-use crate::resolution::path::has_scheme;
+use crate::resolution::path::{has_scheme, is_external_web_scheme, scheme_of};
 use std::path::{Path, PathBuf};
 
 /// Outcome of resolving one link target against the configured `[[schemas]]`.
@@ -119,6 +119,28 @@ impl UriResolver {
     /// The schema at `index`'s custom verification command, if any.
     pub fn verify_cmd_for(&self, index: usize) -> Option<&[String]> {
         self.mappings.get(index).and_then(|m| m.verify_cmd.as_deref())
+    }
+
+    /// Whether any configured schema prefix matches `target` (the same
+    /// longest-prefix match `resolve` uses, without the stat/verify step).
+    pub fn has_mapping(&self, target: &str) -> bool {
+        self.first_match(target).is_some()
+    }
+
+    /// Whether `target` should be routed to scheme resolution (RES-07).
+    ///
+    /// A syntactic scheme is necessary but not sufficient: a wiki target
+    /// like `Team: Knowledge` has a scheme-shaped prefix but is a note
+    /// title, not a URI (RFC 0021). We route to scheme resolution only
+    /// when the target is a known web scheme (LNK-03), uses the
+    /// `scheme://` form, or matches a configured `[[schemas]]` prefix
+    /// (which also covers schemas declared without `//`). Everything else
+    /// falls through to normal document resolution.
+    pub fn is_uri_target(&self, target: &str) -> bool {
+        let Some(scheme) = scheme_of(target) else {
+            return false;
+        };
+        is_external_web_scheme(scheme) || target.contains("://") || self.has_mapping(target)
     }
 
     /// Resolve a single link target. Pure: no subprocess execution, no fs::metadata

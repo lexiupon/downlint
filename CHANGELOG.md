@@ -5,6 +5,99 @@ based on [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/) for post-1.0 releases.
 Pre-1.0 versions may include breaking changes.
 
+## [0.15.6] — Hidden files excluded by default (RFC 0023)
+
+### Fixed
+
+- **Hidden files and directories are now actually excluded by default**, as
+  RES-10 has always claimed. The walk ran `hidden(false)` since the initial
+  commit, so dotfiles and dot-directories were discovered, linted, and
+  resolvable as link targets — in an Obsidian-shaped vault that meant
+  `.trash/` (deleted notes) and `.obsidian/` (templates, plugin markdown)
+  stayed indexed: links to trashed notes silently resolved, trashed notes
+  were linted, and both polluted completions and the graph.
+
+### Changed
+
+- **New key `core.include_hidden`** (bool, default `false`) restores the
+  previous include-everything walk for users who keep notes in dotfiles or
+  dot-directories. It is the only way back: the walker's hidden filter takes
+  precedence over ignore rules, so a `.gitignore` or `core.ignore` negation
+  (`!…`) does not re-include a hidden file.
+- Force-added root symlinks are unaffected: an explicitly added hidden
+  symlink at the vault root is still traversed.
+- This is a behavior change: links to hidden files that previously resolved
+  now report `link/broken` unless `core.include_hidden = true` is set.
+
+### Unchanged
+
+- `.gitignore` discovery and `core.ignore` filtering for non-hidden files.
+- Attachment existence checks (RES-06) — a link to an existing hidden
+  attachment still resolves as an attachment.
+- LSP freshness mechanisms (RFC 0022) — reconciliation uses the same walk,
+  so snapshot and reconciliation stay in sync.
+
+## [0.15.5] — LSP workspace freshness (RFC 0022)
+
+### Fixed
+
+- **Stale `link/broken` diagnostics after creating the missing note.** The LSP
+  workspace was a static snapshot taken at `initialize`: files created
+  afterwards never entered the index, so fixing a broken link by creating the
+  target note did nothing until the LSP was restarted. The index now tracks
+  disk changes through three mechanisms:
+  - `didOpen`/`didChange` **upsert** the document into the index — even an
+    unsaved buffer becomes a resolvable link target.
+  - `workspace/didCreateFiles` / `workspace/didDeleteFiles` are handled and
+    reconciled against disk on the next re-index.
+  - A **filesystem watcher** on the workspace root covers disk changes that
+    produce no editor notification at all (e.g. Neovim's built-in client
+    sends no file-operation notifications).
+- **Mirror-image staleness on deletion.** Deleting a target file on disk
+  re-raises `link/broken` for links that resolved to it (previously the link
+  stayed resolved until an LSP restart).
+- **Ghost documents.** Closing a buffer that was never saved removes it from
+  the index again (previously the document persisted and resolved links to a
+  file that does not exist).
+
+### Changed
+
+- The re-index debounce is now bounded: while the workspace is dirty, the
+  reindexer re-indexes at least every 2 s, so a continuous stream of changes
+  (a sync daemon, a long git operation) cannot starve it indefinitely.
+- Incoming editor URIs and watcher paths are normalized to the workspace
+  root's path form, so symlinked roots (macOS `/tmp` vs `/private/tmp`) work
+  with both canonicalizing and non-canonicalizing clients.
+
+### Unchanged
+
+- Reconciliation never overwrites or removes an open editor buffer — the
+  editor's text is authoritative while a document is open.
+- `workspace/willCreateFiles` / `willRenameFiles` / `willDeleteFiles` remain
+  out of scope (see `spec/linting.md` §6.3).
+
+## [0.15.4] — Colon-bearing link targets are not URIs (RFC 0021)
+
+### Fixed
+
+- **Wiki links to titles/stems containing a colon** (e.g. `[[Team: Knowledge]]`)
+  were misclassified as URI-scheme targets and reported `link/broken` even
+  when a document with that title or filename exists. A target is now routed
+  to scheme resolution only when it is a known web scheme (LNK-03), uses the
+  `scheme://` form, or matches a configured `[[schemas]]` prefix
+  (RFC 0021). Colon targets fall through to normal title-slug, stem, alias,
+  and path resolution; markdown destinations like `[x](Team: Knowledge.md)`
+  resolve as file paths again.
+- Unmatched colon targets no longer emit the `uri/no-mapping` hint when
+  `[[schemas]]` are configured — they are plain broken links.
+
+### Unchanged
+
+- Unmapped `scheme://` targets (e.g. `s3://…`) still report `link/broken`
+  with the `uri/no-mapping` hint; web schemes (`mailto:`, `https:`, …) are
+  still skipped silently; configured schemas (with or without `//`) still
+  map as before.
+
 ## [0.15.3] — Canonical link-example vocabulary (RFC 0020)
 
 Test and documentation examples only — no behavior, diagnostic, or

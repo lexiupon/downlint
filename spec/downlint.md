@@ -244,10 +244,15 @@ LSP over stdio (JSON-RPC 2.0, `Content-Length` framing, UTF-16 positions). The *
 surface:
 
 - **Lifecycle**: `initialize`, `initialized`, `shutdown`, `exit`.
-- **Text sync**: `didOpen`, `didChange`, `didClose` (full-text semantics).
+- **Text sync**: `didOpen`, `didChange`, `didClose` (full-text semantics). Opened or
+  edited documents are **upserted** into the index — a file that did not exist at
+  `initialize` (even an unsaved buffer) becomes a resolvable link target without a
+  restart (RFC 0022). Closing a buffer that was never saved removes it from the index
+  again (no ghost documents).
 - **Diagnostics**: pushed via `publishDiagnostics` after a **debounced background
-  re-index** (~300 ms after the last edit — the re-index runs off the request loop so
-  typing and completion stay responsive on large workspaces) and after
+  re-index** (~300 ms after the last edit, capped at 2 s under a continuous stream of
+  changes — the re-index runs off the request loop so typing and completion stay
+  responsive on large workspaces) and after
   `didRenameFiles`; the initial index at `initialize` is synchronous. Each diagnostic
   carries `source: "downlint"` so editors can attribute it alongside other servers
   (e.g. Marksman). Diagnostics are published *differentially*: a document whose
@@ -262,14 +267,22 @@ surface:
 - **Rename**: `prepareRename` + string-only `textDocument/rename` (replaces the link-target
   or heading text at the cursor; never moves files); `workspace/didRenameFiles` keeps the
   index consistent after an editor-driven disk rename.
+- **File freshness** (RFC 0022): the index is no longer a static `initialize` snapshot.
+  `workspace/didCreateFiles` / `didDeleteFiles` are recorded and reconciled against disk
+  on the next re-index, and a **filesystem watcher** on the workspace root covers disk
+  changes that produce no editor notification at all (e.g. Neovim's built-in client sends
+  no file-operation notifications): a created file becomes a resolvable target, and a
+  deleted file re-raises `link/broken` for links that resolved to it. Reconciliation never
+  overwrites or removes an open editor buffer — the editor's text is authoritative while a
+  document is open.
 - **Code actions**: rename actions are offered — `refactor.rename.link-target` and
   `refactor.rename.heading` (and `refactor.rename.file` is advertised).
 
 *(Non-normative status note: the rename code actions are offered but their end-to-end edit
 path is still landing — the **CLI is the working rename surface today**. Not yet shipped:
 code lenses, semantic tokens, pull diagnostics, TOC / create-missing-file code actions,
-`documentHighlight`, `completionItem/resolve`, and the `workspace/didChange*` configuration
-handlers. See `spec/linting.md` §6.3 and the code.)*
+`documentHighlight`, `completionItem/resolve`, and the `workspace/didChangeConfiguration`
+handler. See `spec/linting.md` §6.3 and the code.)*
 
 ### 3.3 Configuration
 

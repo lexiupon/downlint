@@ -43,6 +43,7 @@ pub struct CoreConfig {
     pub text_sync: TextSyncKind,
     pub title_from_heading: bool,
     pub ignore: Vec<String>,
+    pub include_hidden: bool,
 }
 
 impl Default for CoreConfig {
@@ -53,6 +54,7 @@ impl Default for CoreConfig {
             text_sync: TextSyncKind::Full,
             title_from_heading: true,
             ignore: Vec::new(),
+            include_hidden: false,
         }
     }
 }
@@ -187,6 +189,7 @@ pub struct PartialCoreConfig {
     pub text_sync: Option<TextSyncKind>,
     pub title_from_heading: Option<bool>,
     pub ignore: Option<Vec<String>>,
+    pub include_hidden: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -291,6 +294,9 @@ pub fn finalize_config(partial: PartialConfig) -> Result<Config, ConfigError> {
                 .title_from_heading
                 .unwrap_or(defaults.core.title_from_heading),
             ignore: core.ignore.unwrap_or_default(),
+            include_hidden: core
+                .include_hidden
+                .unwrap_or(defaults.core.include_hidden),
         },
         code_action: CodeActionConfig {
             toc: TocConfig {
@@ -365,6 +371,7 @@ fn merge_core(high: PartialCoreConfig, low: PartialCoreConfig) -> PartialCoreCon
         text_sync: high.text_sync.or(low.text_sync),
         title_from_heading: high.title_from_heading.or(low.title_from_heading),
         ignore: high.ignore.or(low.ignore),
+        include_hidden: high.include_hidden.or(low.include_hidden),
     }
 }
 
@@ -508,6 +515,52 @@ mod tests {
             config.core.ignore,
             vec!["drafts/**".to_string(), "!drafts/published/**".to_string()]
         );
+    }
+
+    #[test]
+    fn include_hidden_defaults_to_false() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(&path, "[core]\n")
+            .unwrap();
+
+        let partial = parse_partial_config(&path).unwrap();
+        let config = finalize_config(partial).unwrap();
+        assert!(!config.core.include_hidden);
+    }
+
+    #[test]
+    fn parse_accepts_include_hidden() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(&path, "[core]\ninclude_hidden = true\n").unwrap();
+
+        let partial = parse_partial_config(&path).unwrap();
+        let config = finalize_config(partial).unwrap();
+        assert!(config.core.include_hidden);
+    }
+
+    #[test]
+    fn include_hidden_project_overrides_user() {
+        let high = PartialCoreConfig {
+            include_hidden: Some(false),
+            ..Default::default()
+        };
+        let low = PartialCoreConfig {
+            include_hidden: Some(true),
+            ..Default::default()
+        };
+        let merged = merge_core(high, low);
+        assert_eq!(merged.include_hidden, Some(false));
+
+        // An absent high-precedence value falls through to the low one.
+        let high = PartialCoreConfig::default();
+        let low = PartialCoreConfig {
+            include_hidden: Some(true),
+            ..Default::default()
+        };
+        let merged = merge_core(high, low);
+        assert_eq!(merged.include_hidden, Some(true));
     }
 
     #[test]

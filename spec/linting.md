@@ -361,9 +361,14 @@ Resolution is **rewrite + stat + verify** — no warming, no caching. Each schem
 `auto_verify` (default `true`), and an optional `verify_cmd`. Schemes are **not indexed**
 — a link must carry the full `uri`.
 
-**Detection.** A target has a URI scheme when the part before the first `:` is non-empty
-and consists of scheme characters `[A-Za-z0-9+-.]`. Web schemes (LNK-03) are handled
-first; all other scheme targets enter scheme resolution.
+**Detection.** A target is routed to scheme resolution only when it has a
+syntactic scheme (the part before the first `:` is non-empty and consists of
+scheme characters `[A-Za-z0-9+-.]`) **and** at least one of: the scheme is a
+web scheme (LNK-03), the target uses the `scheme://` form, or the target
+matches a configured `[[schemas]]` prefix. Any other colon-bearing target
+(e.g. a note title like `Team: Knowledge`) is **not** a URI — it falls
+through to normal document resolution (RFC 0021). Web schemes (LNK-03) are
+handled first; all other scheme targets enter scheme resolution.
 
 **URI match.** Each `[[schemas]]` `uri` is normalized with a trailing slash. A target
 matches when it equals the `uri` (slash-less) or starts with the normalized `uri`. The
@@ -410,7 +415,10 @@ Tests: `present_file_resolves_as_attachment`, `missing_file_yields_broken_link`,
 `relative_root_resolves_against_config_dir`, `more_specific_prefix_wins`,
 `verify_cmd_pass_marks_present`, `verify_cmd_failure_marks_broken_even_when_file_exists`,
 `verify_cmd_gated_by_allow_sync`, `icloud_evicted_placeholder_is_broken`,
-`auto_verify_off_skips_heuristics`.
+`auto_verify_off_skips_heuristics`, `wiki_link_with_colon_in_title_resolves`,
+`wiki_link_with_colon_in_stem_resolves`, `wiki_link_with_colon_alias_form_resolves`,
+`wiki_link_with_colon_no_match_is_plain_broken`,
+`markdown_link_with_colon_in_filename_resolves`.
 
 ### 3.8 RES-08 — Mounts (Co-Equal Resolution Roots)
 
@@ -483,7 +491,10 @@ traversal exercised by workspace fixtures.
 - `.gitignore` (plus `.ignore` and `.git/info/exclude`) is honored during traversal with
   standard gitignore semantics; a `.gitignore` in a subdirectory applies to that subtree.
 - **Hidden files and directories are excluded by default** — dotfiles are not discovered
-  as documents.
+  as documents. `core.include_hidden = true` restores the include-everything walk. The
+  hidden filter is a separate mechanism from gitignore rules and takes precedence over
+  them: a `.gitignore` or `core.ignore` negation (`!…`) does **not** re-include a hidden
+  file when `include_hidden` is `false` — the key is the only way back.
 - `core.ignore` adds glob patterns, relative to the workspace root, **additive** to
   `.gitignore`: `**` matches zero or more path components, `*` matches within one
   component, `?` one character, `[abc]` a character class.
@@ -673,6 +684,7 @@ Tests: `parse_rejects_removed_attachment_extensions_key`, `schema_missing_uri_yi
 | `core.title_from_heading` | `true` | RES-03 title = first H1. |
 | `[[mounts]]` | `[]` | RES-08 (and RES-04 mount-path check). Each entry: `path` (required), `as` (optional, workspace-absolute), `lint` (optional, default `false`). `path` is relative to the config file's directory. |
 | `core.ignore` | `[]` | RES-10. |
+| `core.include_hidden` | `false` | RES-10: walk hidden files/directories as documents. |
 | `wiki.obsidian_prefix` | `false` | RES-05. |
 | `code_action.toc.enable` / `code_action.toc.include` | `true` / `[1,2,3,4,5,6]` | Non-linting (TOC code action). |
 | `code_action.create_missing_file.enable` | `true` | Non-linting (code action). |
@@ -725,7 +737,8 @@ produced.
 
 - `textDocument/foldingRange`, `workspace/symbol` — deferred to v2.
 - `workspace/willCreateFiles` / `willRenameFiles` / `willDeleteFiles` — deferred;
-  `did*` notifications suffice for v1 indexing.
+  the `did*` notifications plus the filesystem watcher keep the LSP index fresh
+  (RFC 0022).
 - Wiki-link ↔ markdown-link conversion — **not implemented**; the known
   future direction for publishing wiki-based notes (see `TODO.md`).
 ---
@@ -759,6 +772,8 @@ produced.
 | 2026-09-22 | 0012 | Added the `downlint resolve` target resolution query (spec/downlint.md §3.1): a read-only projection of the existing matching rules (RES-03/04/05/06/07) — no new diagnostics, no new matching semantics. The per-document matching rules are single-sourced (`match_document_kinds`), shared by link resolution and the query; `find_doc_matches` is rebuilt on top with unchanged behavior. |
 | 2026-09-23 | 0013 | Obsidian-compatible path resolution. RES-02 re-scoped to a strict prefix-driven base rule (no fallback): `./…`/`../…` → containing document's directory; `/…` and **bare wiki** `path/file` → workspace root; markdown bare paths/basenames → containing document's directory (unchanged). `.`/`..` normalized lexically before comparison. RES-03 explicit matching re-scoped: the resolved candidate is compared with the **`.md` suffix optional for wiki targets** (fixes the previously-dead extensionless rule); root-relative targets also match the namespace path (mount `prefix` access, now for bare wiki paths too, not only `/…`). RES-06: a markdown file matching an indexed document resolves as a document (attachment fallback is for non-markdown / unmatched file-like paths). LNK-02 adds the **bare wiki path** form. Consequences: extensionless and dot-relative wiki path links resolve; `[[../x.md]]` resolves as a document (not attachment) and its anchor is validated. |
 | 2026-09-23 | 0014 | Config key rename for clarity (no behavior change). `[[mounts]]`: `root`→`path`, `prefix`→`as`. `[[schemas]]`: `prefix`→`uri`, `root`→`to`. Each key is now self-evident and the two sections no longer share a vocabulary (a mount is a disk `path` exposed `as` a virtual path; a schema is a `uri` that resolves `to` a disk folder). Breaking: existing configs using the old keys fail to parse (`deny_unknown_fields`); migration is a mechanical key rename. The internal `ResolvedMount` fields are renamed to match (`path`/`as`). |
+| 2026-09-23 | 0022 | LSP workspace freshness (spec/downlint.md §3.2): the LSP index is no longer a static `initialize` snapshot — `didOpen`/`didChange` upsert new documents (even unsaved buffers), `didClose` drops never-saved buffers, `workspace/didCreateFiles`/`didDeleteFiles` are reconciled against disk on the next re-index, and a filesystem watcher covers out-of-editor disk changes (created files become resolvable; deleted files re-raise `link/broken`). Open editor buffers are never overwritten or removed by reconciliation. The re-index debounce is capped (2 s max wait) so a continuous stream of changes cannot starve it. No linting-rule changes. |
+| 2026-09-23 | 0023 | RES-10 made true in code: hidden files and directories are now actually excluded by default (the walk ran `hidden(false)` since the initial commit, contradicting the spec — `.trash/`, `.obsidian/`, and dotfile notes were indexed and resolvable). New key `core.include_hidden` (default `false`) restores the include-everything walk; gitignore/`core.ignore` negation cannot re-include hidden files (the walker's hidden filter takes precedence over ignore rules). Force-added root symlinks are unaffected. |
 
 **Known coverage gaps** (clauses without tests yet): scheme-target + anchor →
 `link/broken-anchor`.
