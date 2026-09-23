@@ -5,6 +5,29 @@ based on [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/) for post-1.0 releases.
 Pre-1.0 versions may include breaking changes.
 
+## [0.15.2] — Rename command cross-hints (RFC 0019)
+
+### Added
+
+- **`link rename` notes when `--from` looks like a file path.** An
+  extension-carrying `--from` (per `[core].file_extensions`) now prints an
+  advisory stderr note — `--from "report.md" looks like a file path; `link
+  rename` takes a bare identifier — use `file rename` to move the file`` —
+  while still proceeding (stem-stripping is lenient by design). This catches
+  the wrong-noun mistake that previously exited 0 and left the vault with
+  broken links.
+- **`file rename` suggests `link rename` on a missing source.** When `--from`
+  is not a file but a document with that stem exists, the exit-3 error gains
+  a second line: `hint: a document with stem 'report' exists (report.md);
+  did you mean `link rename --from report`?``. The stem match is
+  case-sensitive, mirroring `link rename`'s planner, so the hint only fires
+  when the suggested command would succeed.
+- **Contrasting `--help` about lines.** `file rename`'s help now says "Use
+  `link rename` to rewrite only the identifier (no disk move)" and `link
+  rename`'s says "Use `file rename` to move the file too".
+
+All hints are advisory: no behavior or exit-code changes (RFC 0019).
+
 ## [0.15.1] — Fix relative `--root` silently skipping rename text edits
 
 ### Fixed
