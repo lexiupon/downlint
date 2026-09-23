@@ -13,7 +13,7 @@ use crate::resolution::conn::{
     UnresolvedReference,
 };
 use crate::resolution::path::{
-    has_scheme, is_external_web_scheme, is_folder_link_target, is_root_relative,
+    is_external_web_scheme, is_folder_link_target, is_root_relative,
     resolve_explicit_path, scheme_of,
 };
 use crate::resolution::prefix::PrefixIndex;
@@ -529,7 +529,7 @@ struct ResolveRefContext<'a> {
 ///
 /// - `NotApplicable` — no URI scheme in target; caller should fall through.
 ///   In practice we never get here because the entry points check
-///   `has_scheme()` first.
+///   `is_uri_target()` first.
 /// - `NoMapping` — emit a broken-link diagnostic; mark it so the diagnostics
 ///   layer renders a one-time hint pointing to `[[schemas]]`. Suppressed
 ///   when `[[schemas]]` is unconfigured or `--no-uri-hints` is set.
@@ -553,7 +553,7 @@ fn resolve_uri_target(
     let outcome = resolver.resolve(target);
     match outcome {
         UriOutcome::NotApplicable => {
-            // Caller already gated on `has_scheme(target)`; defensive only.
+            // Caller already gated on `is_uri_target(target)`; defensive only.
             ctx.graph.unresolved_references.push(UnresolvedReference {
                 source_path: doc.path.clone(),
                 occurrence_id: symbol.id,
@@ -769,7 +769,7 @@ fn resolve_wiki_ref(
     let doc = ctx.doc;
     let symbol = ctx.symbol;
     let reference = ctx.reference;
-    if has_scheme(target) {
+    if ctx.input.uri_resolver.is_uri_target(target) {
         resolve_uri_target(ctx, target, heading);
         return;
     }
@@ -948,7 +948,7 @@ fn resolve_inline_ref(
     let doc = ctx.doc;
     let symbol = ctx.symbol;
     let reference = ctx.reference;
-    if has_scheme(target) {
+    if ctx.input.uri_resolver.is_uri_target(target) {
         resolve_uri_target(ctx, target, anchor);
         return;
     }

@@ -361,9 +361,14 @@ Resolution is **rewrite + stat + verify** — no warming, no caching. Each schem
 `auto_verify` (default `true`), and an optional `verify_cmd`. Schemes are **not indexed**
 — a link must carry the full `uri`.
 
-**Detection.** A target has a URI scheme when the part before the first `:` is non-empty
-and consists of scheme characters `[A-Za-z0-9+-.]`. Web schemes (LNK-03) are handled
-first; all other scheme targets enter scheme resolution.
+**Detection.** A target is routed to scheme resolution only when it has a
+syntactic scheme (the part before the first `:` is non-empty and consists of
+scheme characters `[A-Za-z0-9+-.]`) **and** at least one of: the scheme is a
+web scheme (LNK-03), the target uses the `scheme://` form, or the target
+matches a configured `[[schemas]]` prefix. Any other colon-bearing target
+(e.g. a note title like `Team: Knowledge`) is **not** a URI — it falls
+through to normal document resolution (RFC 0021). Web schemes (LNK-03) are
+handled first; all other scheme targets enter scheme resolution.
 
 **URI match.** Each `[[schemas]]` `uri` is normalized with a trailing slash. A target
 matches when it equals the `uri` (slash-less) or starts with the normalized `uri`. The
@@ -410,7 +415,10 @@ Tests: `present_file_resolves_as_attachment`, `missing_file_yields_broken_link`,
 `relative_root_resolves_against_config_dir`, `more_specific_prefix_wins`,
 `verify_cmd_pass_marks_present`, `verify_cmd_failure_marks_broken_even_when_file_exists`,
 `verify_cmd_gated_by_allow_sync`, `icloud_evicted_placeholder_is_broken`,
-`auto_verify_off_skips_heuristics`.
+`auto_verify_off_skips_heuristics`, `wiki_link_with_colon_in_title_resolves`,
+`wiki_link_with_colon_in_stem_resolves`, `wiki_link_with_colon_alias_form_resolves`,
+`wiki_link_with_colon_no_match_is_plain_broken`,
+`markdown_link_with_colon_in_filename_resolves`.
 
 ### 3.8 RES-08 — Mounts (Co-Equal Resolution Roots)
 

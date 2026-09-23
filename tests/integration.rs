@@ -2395,3 +2395,216 @@ fn mount_conflict_suspends_lint_of_conflicting_file() {
     // Its broken link is not diagnosed.
     assert!(graph.unresolved_references.is_empty());
 }
+
+// --- Colon in wiki-link targets (RFC 0021) ---
+//
+// A `:` in a target is not a URI scheme separator unless the target is a
+// known web scheme, uses the `scheme://` form, or matches a configured
+// `[[schemas]]` prefix. The colon shape is the asserted variation here
+// (RFC 0020 keep-list rule), so the fixture names are not canonicalized.
+
+/// A wiki link whose target contains a colon resolves via title-slug
+/// matching: a document titled "Team: Knowledge" is reached by
+/// `[[Team: Knowledge]]` (slug `team-knowledge` on both sides).
+#[test]
+fn wiki_link_with_colon_in_title_resolves() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+
+    let target_md = "# Team: Knowledge\n\nContent.\n";
+    let source_md = "[[Team: Knowledge]]\n";
+
+    let input = make_input(
+        &root,
+        vec![
+            write_document(&root, "notes/team-knowledge.md", target_md),
+            write_document(&root, "index.md", source_md),
+        ],
+        vec![],
+        Config::default(),
+        false,
+        None,
+    );
+    let graph = resolve_links(input);
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
+
+    assert!(
+        diagnostics
+            .iter()
+            .all(|d| d.code != DiagnosticCode::LinkBroken),
+        "Expected [[Team: Knowledge]] to resolve by title slug, got broken links: {:?}",
+        diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(graph.resolved_references.len(), 1);
+}
+
+/// A wiki link to a file whose stem contains a colon resolves via stem
+/// matching. The document's H1 is deliberately a different title so only
+/// the stem rule can match.
+#[test]
+fn wiki_link_with_colon_in_stem_resolves() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+
+    let target_md = "# The Team Page\n\nContent.\n";
+    let source_md = "[[Team: Knowledge]]\n";
+
+    let input = make_input(
+        &root,
+        vec![
+            write_document(&root, "Team: Knowledge.md", target_md),
+            write_document(&root, "index.md", source_md),
+        ],
+        vec![],
+        Config::default(),
+        false,
+        None,
+    );
+    let graph = resolve_links(input);
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
+
+    assert!(
+        diagnostics
+            .iter()
+            .all(|d| d.code != DiagnosticCode::LinkBroken),
+        "Expected [[Team: Knowledge]] to resolve by stem, got broken links: {:?}",
+        diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(graph.resolved_references.len(), 1);
+}
+
+/// The alias form `[[Team: Knowledge|alias]]` resolves the same as the
+/// bare target.
+#[test]
+fn wiki_link_with_colon_alias_form_resolves() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+
+    let target_md = "# Team: Knowledge\n\nContent.\n";
+    let source_md = "[[Team: Knowledge|the team page]]\n";
+
+    let input = make_input(
+        &root,
+        vec![
+            write_document(&root, "notes/team-knowledge.md", target_md),
+            write_document(&root, "index.md", source_md),
+        ],
+        vec![],
+        Config::default(),
+        false,
+        None,
+    );
+    let graph = resolve_links(input);
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
+
+    assert!(
+        diagnostics
+            .iter()
+            .all(|d| d.code != DiagnosticCode::LinkBroken),
+        "Expected [[Team: Knowledge|the team page]] to resolve, got broken links: {:?}",
+        diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(graph.resolved_references.len(), 1);
+}
+
+/// A colon target with no matching document is a plain broken link — it
+/// must NOT be routed through RES-07, so no `uri/no-mapping` hint appears
+/// even when `[[schemas]]` are configured.
+#[test]
+fn wiki_link_with_colon_no_match_is_plain_broken() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+
+    // A schema is configured but must not be consulted for a colon target.
+    let mut config = Config::default();
+    config.schemas = downlint::config::finalize_schemas(vec![
+        downlint::config::schema::PartialSchema {
+            uri: Some("onedrive://work/".to_string()),
+            to: Some(root.to_str().unwrap().to_string()),
+            ..Default::default()
+        },
+    ])
+    .unwrap();
+
+    let source_md = "[[Team: Knowledge]]\n";
+    let input = make_input(
+        &root,
+        vec![write_document(&root, "index.md", source_md)],
+        vec![],
+        config.clone(),
+        false,
+        None,
+    );
+    // Rebuild the input with the configured resolver (make_input defaults
+    // to an empty one).
+    let input = ResolveInput {
+        uri_resolver: downlint::resolution::uri::UriResolver::new(&config.schemas, &root)
+            .unwrap(),
+        ..input
+    };
+
+    let graph = resolve_links(input);
+    // Info severity so the `uri/no-mapping` hint (if wrongly emitted) is
+    // visible to the assertion below.
+    let diagnostics = run_diagnostics(
+        &graph,
+        &DiagnosticConfig {
+            min_severity: DiagnosticSeverity::Info,
+            source_only: false,
+        },
+    );
+    let codes: Vec<DiagnosticCode> = diagnostics.iter().map(|d| d.code).collect();
+    assert!(
+        codes.contains(&DiagnosticCode::LinkBroken),
+        "expected link/broken for the unmatched colon target, got {codes:?}"
+    );
+    assert!(
+        !codes.contains(&DiagnosticCode::UriNoMapping),
+        "a colon target must not be treated as an unmapped URI, got {codes:?}"
+    );
+}
+
+/// A markdown link whose destination contains a colon resolves as a file
+/// path (the `:` is not a scheme separator for file-like destinations).
+#[test]
+fn markdown_link_with_colon_in_filename_resolves() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+
+    let source_md = "[the team page](Team: Knowledge.md)\n";
+
+    let input = make_input(
+        &root,
+        vec![
+            write_document(&root, "Team: Knowledge.md", "# The Team Page\n"),
+            write_document(&root, "index.md", source_md),
+        ],
+        vec![],
+        Config::default(),
+        false,
+        None,
+    );
+    let graph = resolve_links(input);
+    let diagnostics = run_diagnostics(&graph, &DiagnosticConfig::default());
+
+    assert!(
+        diagnostics
+            .iter()
+            .all(|d| d.code != DiagnosticCode::LinkBroken),
+        "Expected [x](Team: Knowledge.md) to resolve, got broken links: {:?}",
+        diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(graph.resolved_references.len(), 1);
+}
