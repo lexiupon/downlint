@@ -5,6 +5,33 @@ based on [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/) for post-1.0 releases.
 Pre-1.0 versions may include breaking changes.
 
+## [0.15.3] — Canonical link-example vocabulary (RFC 0020)
+
+Test and documentation examples only — no behavior, diagnostic, or
+exit-code changes.
+
+### Changed
+
+- **One name per fixture role** across the test suites and docs (RFC 0020):
+  unresolved targets are now always `[[missing]]` (was `nonexistent`,
+  `does-not-exist`, `missing-note`, `Gone`, `broken`, `xyz`); attachments
+  are `image.png` (resolved) / `missing.png` (unresolved); the attachment
+  rename example uses `image.png` → `topic.png`; the README's blocked-rename
+  example uses `[[missing]]` and its rename examples use the canonical
+  `notes/report.md` → `notes/topic.md` / `image.png` → `topic.png` paths.
+- **Extracted the shared `write_vault` helper** (previously copy-pasted,
+  byte-identical, into five test files) into `tests/common/mod.rs`.
+- Fixed a stale doc comment in `rename_tests.rs` (`old#head`/`new#head` →
+  `report#section`/`topic#section`, matching what the test actually does).
+- Synced `Cargo.lock` to 0.15.2 (the 0.15.2 release commit captured the
+  pre-bump lock file).
+
+Asserted variation is untouched (RFC 0020 keep-list): link syntax variants,
+scheme URIs, Unicode/mojibake tests, real-world families
+(`20260801-*`, `20260723-*`, `20260523-*`), mount/namespace families,
+graph role names (`target`, `hub`, `lonely`, `self`, …), and the LSP
+stem/slug mechanism.
+
 ## [0.15.2] — Rename command cross-hints (RFC 0019)
 
 ### Added
