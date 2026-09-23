@@ -5,6 +5,28 @@ based on [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/) for post-1.0 releases.
 Pre-1.0 versions may include breaking changes.
 
+## [0.15.4] — Colon-bearing link targets are not URIs (RFC 0021)
+
+### Fixed
+
+- **Wiki links to titles/stems containing a colon** (e.g. `[[Team: Knowledge]]`)
+  were misclassified as URI-scheme targets and reported `link/broken` even
+  when a document with that title or filename exists. A target is now routed
+  to scheme resolution only when it is a known web scheme (LNK-03), uses the
+  `scheme://` form, or matches a configured `[[schemas]]` prefix
+  (RFC 0021). Colon targets fall through to normal title-slug, stem, alias,
+  and path resolution; markdown destinations like `[x](Team: Knowledge.md)`
+  resolve as file paths again.
+- Unmatched colon targets no longer emit the `uri/no-mapping` hint when
+  `[[schemas]]` are configured — they are plain broken links.
+
+### Unchanged
+
+- Unmapped `scheme://` targets (e.g. `s3://…`) still report `link/broken`
+  with the `uri/no-mapping` hint; web schemes (`mailto:`, `https:`, …) are
+  still skipped silently; configured schemas (with or without `//`) still
+  map as before.
+
 ## [0.15.3] — Canonical link-example vocabulary (RFC 0020)
 
 Test and documentation examples only — no behavior, diagnostic, or
