@@ -4,11 +4,11 @@ use crate::utils::ByteRange;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
-pub struct CompletionParams {
+pub struct CompletionParams<'a> {
     pub path: PathBuf,
     pub source_text: String,
     pub cursor_offset: usize,
-    pub graph: ConnectionGraph,
+    pub graph: &'a ConnectionGraph,
     pub style: WikiCompletionStyle,
     pub max_candidates: usize,
 }
@@ -21,12 +21,12 @@ pub struct CompletionItem {
     pub insert_text: String,
 }
 
-pub fn complete_at(params: CompletionParams) -> Vec<CompletionItem> {
+pub fn complete_at(params: &CompletionParams) -> Vec<CompletionItem> {
     let prefix = detect_prefix(&params.source_text, params.cursor_offset);
     match prefix.kind {
-        PromptKind::WikiDoc => complete_docs(&params, &prefix.value),
-        PromptKind::WikiHeading => complete_headings(&params, &prefix.value),
-        PromptKind::Tag => complete_tags(&params, &prefix.value),
+        PromptKind::WikiDoc => complete_docs(params, &prefix.value),
+        PromptKind::WikiHeading => complete_headings(params, &prefix.value),
+        PromptKind::Tag => complete_tags(params, &prefix.value),
         PromptKind::None => Vec::new(),
     }
 }

@@ -1,6 +1,7 @@
 use crate::config::{Config, load_effective_config};
 use crate::utils::path::canonicalize_if_exists;
 use crate::utils::text::Text;
+use ignore::overrides::OverrideBuilder;
 use ignore::WalkBuilder;
 use std::collections::HashSet;
 use std::fs;
@@ -12,7 +13,7 @@ pub enum WorkspaceMode {
     MultiFile,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DocumentSource {
     Disk,
     Stdin,
@@ -26,12 +27,52 @@ pub struct WorkspaceDocument {
     pub source: DocumentSource,
 }
 
+/// A mount with its `root` expanded to an absolute filesystem path, plus the
+/// config needed by the resolution layer (RFC 0010).
+#[derive(Clone, Debug)]
+pub struct ResolvedMount {
+    /// The resolved filesystem path of the mount.
+    pub path: PathBuf,
+    /// The exact-path alias (a workspace-absolute virtual directory), if any.
+    pub r#as: Option<String>,
+    /// Whether links within the mounted docs are linted (they become sources).
+    pub lint: bool,
+    /// Label used to attribute diagnostics from this mount (its `as`, or
+    /// `path` when there is no `as`).
+    pub attribution: String,
+}
+
+/// The kind of a namespace-level mount conflict (RFC 0011).
+///
+/// A single kind: a fine-grained namespace-path collision. Either a mount file
+/// occupies the same namespace path as a primary file, or a file and a folder
+/// share a name (stem) at the same location. The specific case is carried in
+/// `MountConflict::detail`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MountConflictKind {
+    /// A mount file/folder collides with a primary file/folder at the same
+    /// namespace path (or same location + name). While unresolved, the
+    /// conflicting mount file(s) are targets only (not linted).
+    PathCollision,
+}
+
+/// A namespace-level conflict between a mount and the primary project
+/// (RFC 0010). Reported as a `mount/conflict` error diagnostic.
+#[derive(Clone, Debug)]
+pub struct MountConflict {
+    /// The mount's attribution (`prefix`, or `root` when there is no prefix).
+    pub mount_attribution: String,
+    pub kind: MountConflictKind,
+    /// A human-readable description of the collision.
+    pub detail: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct DiscoveredFolder {
     pub root: PathBuf,
     pub config_path: Option<PathBuf>,
     pub documents: Vec<WorkspaceDocument>,
-    pub extra_folders: Vec<PathBuf>,
+    pub mounts: Vec<ResolvedMount>,
 }
 
 #[derive(Clone, Debug)]
@@ -51,7 +92,6 @@ pub fn discover_workspace(
     input: WorkspaceInput,
     root_override: Option<&Path>,
 ) -> Result<Workspace, crate::config::ConfigError> {
-    let stdin_mode = matches!(input, WorkspaceInput::Stdin { .. });
     let cwd = std::env::current_dir().map_err(crate::config::ConfigError::Io)?;
     let (target_path, stdin) = match input {
         WorkspaceInput::Path(path) => (
@@ -76,17 +116,24 @@ pub fn discover_workspace(
     let target_is_explicit_file = stdin.is_none() && target_path.is_file();
 
     let folder = if let Some(text) = stdin {
+        // Stdin is workspace-anchored: the full workspace is indexed so the
+        // piped document's links resolve against workspace documents and
+        // attachments. The synthetic `<stdin>.md` document (at the workspace
+        // root) is the only source that gets linted.
+        let mut documents =
+            collect_documents(&root, &config).map_err(crate::config::ConfigError::Io)?;
         let rel_path = PathBuf::from("<stdin>.md");
+        documents.push(WorkspaceDocument {
+            path: root.join(&rel_path),
+            rel_path,
+            text: Text::new(text),
+            source: DocumentSource::Stdin,
+        });
         DiscoveredFolder {
             root: root.clone(),
             config_path: find_project_config(&root),
-            documents: vec![WorkspaceDocument {
-                path: root.join(&rel_path),
-                rel_path,
-                text: Text::new(text),
-                source: DocumentSource::Stdin,
-            }],
-            extra_folders: resolve_extra_folders(&root, &config),
+            documents,
+            mounts: resolve_mounts(&root, &config),
         }
     } else if target_path.is_file() {
         let text = fs::read_to_string(&target_path).map_err(crate::config::ConfigError::Io)?;
@@ -103,7 +150,7 @@ pub fn discover_workspace(
                 text: Text::new(text),
                 source: DocumentSource::Disk,
             }],
-            extra_folders: resolve_extra_folders(&root, &config),
+            mounts: resolve_mounts(&root, &config),
         }
     } else {
         let documents =
@@ -112,11 +159,14 @@ pub fn discover_workspace(
             root: root.clone(),
             config_path: find_project_config(&root),
             documents,
-            extra_folders: resolve_extra_folders(&root, &config),
+            mounts: resolve_mounts(&root, &config),
         }
     };
 
-    let mode = if stdin_mode || target_is_explicit_file {
+    // Stdin is MultiFile (the full workspace is indexed; the stdin document is
+    // the only source). SingleFile applies only to an explicit single file on
+    // disk, where cross-file diagnostics are suppressed.
+    let mode = if target_is_explicit_file {
         WorkspaceMode::SingleFile
     } else {
         WorkspaceMode::MultiFile
@@ -167,6 +217,37 @@ fn collect_documents(root: &Path, config: &Config) -> std::io::Result<Vec<Worksp
     let ext_set: HashSet<String> = config.core.file_extensions.iter().cloned().collect();
     let mut builder = WalkBuilder::new(root);
     builder.follow_links(true).hidden(false);
+
+    // Find symlinked dirs in the root and add them explicitly so the walker
+    // traverses them even when .gitignore excludes them.
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Ok(metadata) = path.symlink_metadata() {
+                if metadata.file_type().is_symlink() {
+                    let _ = builder.add(&path);
+                }
+            }
+        }
+    }
+
+    // Build an Override matcher so negation patterns (e.g. !people) can override
+    // .gitignore exclusions during traversal.
+    let mut override_builder = OverrideBuilder::new(root);
+    let mut exclude_patterns = Vec::new();
+    for pattern in &config.core.ignore {
+        if pattern.starts_with('!') {
+            if let Err(e) = override_builder.add(pattern) {
+                eprintln!("Warning: invalid ignore pattern '{}': {}", pattern, e);
+            }
+        } else {
+            exclude_patterns.push(pattern.clone());
+        }
+    }
+    if let Ok(overrides) = override_builder.build() {
+        builder.overrides(overrides);
+    }
+
     let mut docs = Vec::new();
 
     for result in builder.build() {
@@ -176,6 +257,16 @@ fn collect_documents(root: &Path, config: &Config) -> std::io::Result<Vec<Worksp
         };
         let path = entry.path();
         if !path.is_file() {
+            continue;
+        }
+        let rel_path = path.strip_prefix(root).unwrap_or(path);
+        // Post-filter: exclude files matching non-negation ignore patterns
+        if exclude_patterns.iter().any(|p| {
+            globset::Glob::new(p.as_str())
+                .ok()
+                .map(|g| g.compile_matcher().is_match(rel_path))
+                .unwrap_or(false)
+        }) {
             continue;
         }
         let Some(ext) = path.extension().and_then(|value| value.to_str()) else {
@@ -188,10 +279,9 @@ fn collect_documents(root: &Path, config: &Config) -> std::io::Result<Vec<Worksp
             Ok(text) => text,
             Err(_) => continue,
         };
-        let rel_path = path.strip_prefix(root).unwrap_or(path).to_path_buf();
         docs.push(WorkspaceDocument {
             path: path.to_path_buf(),
-            rel_path,
+            rel_path: rel_path.to_path_buf(),
             text: Text::new(text),
             source: DocumentSource::Disk,
         });
@@ -201,12 +291,33 @@ fn collect_documents(root: &Path, config: &Config) -> std::io::Result<Vec<Worksp
     Ok(docs)
 }
 
-fn resolve_extra_folders(root: &Path, config: &Config) -> Vec<PathBuf> {
+fn expand_root(root: &Path, value: &str) -> PathBuf {
+    // Expand ~ to home directory; otherwise resolve relative to the workspace root.
+    let expanded = if let Some(stripped) = value.strip_prefix("~/") {
+        std::env::var("HOME")
+            .ok()
+            .and_then(|h| PathBuf::try_from(h).ok())
+            .unwrap_or_else(|| PathBuf::from("/"))
+            .join(stripped)
+    } else {
+        root.join(value)
+    };
+    canonicalize_if_exists(expanded)
+}
+
+fn resolve_mounts(root: &Path, config: &Config) -> Vec<ResolvedMount> {
     config
-        .core
-        .extra_folders
+        .mounts
         .iter()
-        .map(|value| canonicalize_if_exists(root.join(value)))
+        .map(|mount| ResolvedMount {
+            attribution: mount
+                .r#as
+                .clone()
+                .unwrap_or_else(|| mount.path.clone()),
+            path: expand_root(root, &mount.path),
+            r#as: mount.r#as.clone(),
+            lint: mount.lint,
+        })
         .collect()
 }
 

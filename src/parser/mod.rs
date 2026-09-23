@@ -16,7 +16,7 @@ pub use ast::AstIdx;
 pub use cst::{ElementIdx, EncodedNode, MdLink, MdLinkDef, Tag, WikiLink};
 pub use symbols::{Def, LinkLabel, Ref, SymKind, TagSym};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct ParseOptions {
     pub title_from_heading: bool,
     pub heading_ids: bool,

@@ -7,6 +7,6 @@ pub use text::{
     ByteRange, LineMap, LspPosition, PositionEncoding, PositionError, Text, TextEditChange,
 };
 pub use workspace::{
-    DiscoveredFolder, DocumentSource, Workspace, WorkspaceDocument, WorkspaceInput, WorkspaceMode,
-    discover_workspace,
+    DiscoveredFolder, DocumentSource, MountConflict, MountConflictKind, ResolvedMount, Workspace,
+    WorkspaceDocument, WorkspaceInput, WorkspaceMode, discover_workspace,
 };

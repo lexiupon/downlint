@@ -25,6 +25,15 @@ impl ByteRange {
     pub fn contains(self, offset: usize) -> bool {
         self.start <= offset && offset < self.end
     }
+
+    /// Returns true when two byte ranges overlap. Two ranges overlap when
+    /// neither is fully before the other — i.e. when
+    /// `a.start < b.end && b.start < a.end`. Used by the rename code-action
+    /// handler to decide if the cursor selection lands inside a link or
+    /// heading occurrence.
+    pub fn overlaps(self, other: &ByteRange) -> bool {
+        self.start < other.end && other.start < self.end
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

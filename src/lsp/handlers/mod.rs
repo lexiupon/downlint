@@ -5,12 +5,22 @@ use crate::utils::{PositionEncoding, Text};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
+pub mod code_action;
+pub mod rename;
+pub mod workspace;
+
+pub use code_action::{KIND_FILE as CODE_ACTION_KIND_FILE, KIND_HEADING as CODE_ACTION_KIND_HEADING, KIND_LINK_TARGET as CODE_ACTION_KIND_LINK_TARGET, code_actions};
+pub use rename::{PrepareRenameHit, hit_range_json, prepare_rename};
+pub use workspace::{FileRename, apply_file_renames};
+
 pub fn completion(
     graph: &ConnectionGraph,
     path: PathBuf,
     text: &Text,
     line: u32,
     character: u32,
+    style: crate::config::WikiCompletionStyle,
+    max_candidates: usize,
 ) -> Value {
     let offset = match text.byte_offset(
         &lsp_types::Position::new(line, character),
@@ -19,13 +29,13 @@ pub fn completion(
         Ok(offset) => offset,
         Err(_) => return json!([]),
     };
-    let items = complete_at(CompletionParams {
+    let items = complete_at(&CompletionParams {
         path,
         source_text: text.as_str().to_string(),
         cursor_offset: offset,
-        graph: graph.clone(),
-        style: crate::config::WikiCompletionStyle::TitleSlug,
-        max_candidates: 50,
+        graph, // &ConnectionGraph — no clone (RFC 0017)
+        style,
+        max_candidates,
     });
     json!(
         items
@@ -130,6 +140,7 @@ pub fn diagnostics(graph: &ConnectionGraph) -> Vec<(PathBuf, Value)> {
         graph,
         &DiagnosticConfig {
             min_severity: DiagnosticSeverity::Info,
+            source_only: false,
         },
     );
     let mut grouped: std::collections::HashMap<PathBuf, Vec<Value>> =
@@ -152,7 +163,8 @@ pub fn diagnostics(graph: &ConnectionGraph) -> Vec<(PathBuf, Value)> {
                     DiagnosticSeverity::Warning => 2,
                     DiagnosticSeverity::Info => 3,
                 },
-                "code": format!("{:?}", diagnostic.code),
+                "code": diagnostic.code.as_str(),
+                "source": "downlint",
                 "message": diagnostic.message,
                 "relatedInformation": diagnostic.related.into_iter().filter_map(|related| {
                     Some(json!({

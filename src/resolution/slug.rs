@@ -56,6 +56,27 @@ impl Slug {
             .to_ascii_lowercase()
             .contains(&needle.to_ascii_lowercase())
     }
+
+    /// A normalized form of the slug with consecutive `-` collapsed to a single
+    /// `-`. Used for tolerant anchor matching: a link with a literal `--` (often
+    /// from copy-pasting an em-dash-separated heading) can still resolve to a
+    /// heading whose slug has `-` from the dropped em dash.
+    pub fn folded(&self) -> Self {
+        let mut out = String::with_capacity(self.0.len());
+        let mut prev_dash = false;
+        for ch in self.0.chars() {
+            if ch == '-' {
+                if !prev_dash {
+                    out.push(ch);
+                    prev_dash = true;
+                }
+            } else {
+                out.push(ch);
+                prev_dash = false;
+            }
+        }
+        Self(out)
+    }
 }
 
 impl From<String> for Slug {
@@ -82,5 +103,28 @@ mod tests {
     fn slug_preserves_cjk_and_strips_punctuation() {
         assert_eq!(Slug::from_heading_text("What's Up?").as_str(), "whats-up");
         assert_eq!(Slug::from_heading_text("中文 标题").as_str(), "中文-标题");
+    }
+
+    #[test]
+    fn folded_collapses_consecutive_dashes() {
+        // Single dash unchanged.
+        assert_eq!(Slug::from("foo-bar-baz").folded().as_str(), "foo-bar-baz");
+        // Doubled dash collapsed to a single dash.
+        assert_eq!(Slug::from("foo--bar").folded().as_str(), "foo-bar");
+        // Tripled dash collapsed to a single dash.
+        assert_eq!(Slug::from("foo---bar").folded().as_str(), "foo-bar");
+        // Trailing doubled dash collapsed.
+        assert_eq!(Slug::from("foo--").folded().as_str(), "foo-");
+        // Leading doubled dash collapsed.
+        assert_eq!(Slug::from("--foo").folded().as_str(), "-foo");
+        // Slug with no dashes unchanged.
+        assert_eq!(Slug::from("foo").folded().as_str(), "foo");
+        // Empty slug unchanged.
+        assert_eq!(Slug::from("").folded().as_str(), "");
+        // Tolerant: an em-dash heading slug (`2024-closest`) and a literal
+        // double-dash anchor (`2024--closest`) become equal after folding.
+        let heading_slug = Slug::from("2024-closest").folded();
+        let anchor_slug = Slug::from("2024--closest").folded();
+        assert_eq!(heading_slug.as_str(), anchor_slug.as_str());
     }
 }

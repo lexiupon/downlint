@@ -102,6 +102,54 @@ fn build_masks(input: &str) -> (Vec<ByteRange>, Option<TextNode>) {
         offset += line.len();
     }
 
+    // Mask inline code spans (backtick sequences)
+    let bytes = input.as_bytes();
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+        // Count consecutive backticks
+        if bytes[idx] == b'`' {
+            let mut tick_count = 0;
+            while idx + tick_count < bytes.len() && bytes[idx + tick_count] == b'`' {
+                tick_count += 1;
+            }
+            // Look for matching closing backticks (same count, not spanning lines)
+            let search_start = idx + tick_count;
+            let mut search_idx = search_start;
+            let mut found = false;
+            while search_idx + tick_count <= bytes.len() {
+                // If we hit a newline before finding a match, stop (inline code can't span lines)
+                if bytes[search_idx] == b'\n' || bytes[search_idx] == b'\r' {
+                    break;
+                }
+                // Check for matching closing backticks
+                if search_idx + tick_count <= bytes.len()
+                    && bytes[search_idx..search_idx + tick_count].iter().all(|&b| b == b'`')
+                {
+                    // Verify it's exactly tick_count backticks (not more)
+                    let end_pos = search_idx + tick_count;
+                    // Also verify the char before is not a backtick (e.g. ```` should not match ```)
+                    let prev_ok = search_idx == search_start || bytes[search_idx - 1] != b'`';
+                    if end_pos >= bytes.len() || bytes[end_pos] != b'`'
+                    {
+                        if prev_ok {
+                            masks.push(ByteRange::new(idx, end_pos));
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                search_idx += 1;
+            }
+            if found {
+                idx = search_idx + tick_count;
+            } else {
+                idx += 1;
+            }
+        } else {
+            idx += 1;
+        }
+    }
+
     (masks, frontmatter)
 }
 
@@ -245,19 +293,18 @@ fn try_scan_markdown_link(
 
     if *next == b'(' {
         let dest_end = find_unescaped(input, label_end + 2, ')')?;
-        let dest_text = input[label_end + 2..dest_end].trim();
+        let dest_raw = &input[label_end + 2..dest_end];
+        let dest_text = dest_raw.trim();
         if dest_text.is_empty() {
             return None;
         }
-        let dest_token = dest_text
-            .split_whitespace()
-            .next()
-            .unwrap_or(dest_text)
-            .trim_matches(['<', '>']);
-        let dest_start = input[label_end + 2..dest_end]
-            .find(dest_token)
-            .map(|offset| label_end + 2 + offset)
-            .unwrap_or(label_end + 2);
+        // Determine the destination token and its byte offset within
+        // `dest_text`. Handles pointy destinations (`<...>`), a trailing
+        // quoted title, and destinations that contain spaces (e.g.
+        // cloud-storage filenames like `Messaging BOM - 21May26.pdf`).
+        let (dest_token, offset_in_text) = split_destination(dest_text);
+        let leading_ws = dest_raw.len() - dest_raw.trim_start().len();
+        let dest_start = label_end + 2 + leading_ws + offset_in_text;
         let dest_range = ByteRange::new(dest_start, dest_start + dest_token.len());
         let anchor_range = dest_token
             .find('#')
@@ -452,7 +499,7 @@ fn split_wiki_heading(input: &str, start: usize, end: usize) -> (&str, &str, Byt
 
 fn decode_component(input: &str) -> String {
     let bytes = input.as_bytes();
-    let mut out = String::new();
+    let mut decoded = Vec::new();
     let mut idx = 0usize;
     while idx < bytes.len() {
         if bytes[idx] == b'%' && idx + 2 < bytes.len() {
@@ -460,20 +507,89 @@ fn decode_component(input: &str) -> String {
             let lo = bytes[idx + 2] as char;
             if hi.is_ascii_hexdigit() && lo.is_ascii_hexdigit() {
                 let value = u8::from_str_radix(&format!("{hi}{lo}"), 16).unwrap_or(b'?');
-                out.push(value as char);
+                decoded.push(value);
                 idx += 3;
                 continue;
             }
         }
         if bytes[idx] == b'\\' && idx + 1 < bytes.len() {
-            out.push(bytes[idx + 1] as char);
-            idx += 2;
+            // Collect all bytes of the escaped character (handles multi-byte UTF-8)
+            let next_byte = bytes[idx + 1];
+            let len = if next_byte & 0x80 == 0 {
+                1
+            } else if next_byte & 0xE0 == 0xC0 {
+                2
+            } else if next_byte & 0xF0 == 0xE0 {
+                3
+            } else if next_byte & 0xF8 == 0xF0 {
+                4
+            } else {
+                1
+            };
+            for i in 0..len {
+                if idx + 1 + i < bytes.len() {
+                    decoded.push(bytes[idx + 1 + i]);
+                }
+            }
+            idx += 1 + len;
             continue;
         }
-        out.push(bytes[idx] as char);
-        idx += 1;
+        // Collect all bytes of a UTF-8 character (handles multi-byte chars like é, ü)
+        let current_byte = bytes[idx];
+        let utf8_len = if current_byte & 0x80 == 0 {
+            1
+        } else if current_byte & 0xE0 == 0xC0 {
+            2
+        } else if current_byte & 0xF0 == 0xE0 {
+            3
+        } else if current_byte & 0xF8 == 0xF0 {
+            4
+        } else {
+            1
+        };
+        for i in 0..utf8_len {
+            if idx + i < bytes.len() {
+                decoded.push(bytes[idx + i]);
+            }
+        }
+        idx += utf8_len;
     }
-    out
+    // Convert collected bytes to UTF-8 string, replacing invalid sequences
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+/// Split a raw markdown link destination into the destination token and its
+/// byte offset within `dest_text`. Handles:
+/// - Pointy destinations: `<url with spaces>` -> (`url with spaces`, 1)
+/// - A trailing quoted title: `url "title"` -> (`url`, 0)
+/// - Plain (possibly with spaces): `url with spaces` -> (`url with spaces`, 0)
+fn split_destination(dest_text: &str) -> (&str, usize) {
+    // Pointy destination: `<...>`
+    if let Some(stripped) = dest_text.strip_prefix('<') {
+        if let Some(end) = stripped.find('>') {
+            let inner = &stripped[..end];
+            let inner_trim_start = inner.len() - inner.trim_start().len();
+            return (inner.trim(), 1 + inner_trim_start);
+        }
+    }
+    // A trailing quoted title: the destination is the part before the space.
+    if let Some(space_pos) = dest_text.find(' ') {
+        let after = dest_text[space_pos + 1..].trim_start();
+        if is_quoted_title(after) {
+            return (dest_text[..space_pos].trim_end(), 0);
+        }
+    }
+    // No title: the whole `dest_text` is the destination (may contain spaces).
+    (dest_text, 0)
+}
+
+/// Returns true if `s` looks like a quoted markdown link title: `"..."`,
+/// `'...'`, or `(...)`.
+fn is_quoted_title(s: &str) -> bool {
+    s.len() >= 2
+        && ((s.starts_with('"') && s.ends_with('"'))
+            || (s.starts_with('\'') && s.ends_with('\''))
+            || (s.starts_with('(') && s.ends_with(')')))
 }
 
 fn find_unescaped(input: &str, start: usize, needle: char) -> Option<usize> {
@@ -533,6 +649,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn split_destination_handles_spaces_titles_and_pointy() {
+        // Plain destination with spaces is kept whole (the bug fix).
+        assert_eq!(
+            split_destination("onedrive://x/Messaging BOM - 21May26.pdf"),
+            ("onedrive://x/Messaging BOM - 21May26.pdf", 0)
+        );
+        // A trailing double-quoted title is stripped.
+        assert_eq!(split_destination("url \"My Title\""), ("url", 0));
+        // A trailing single-quoted title is stripped.
+        assert_eq!(split_destination("url 'My Title'"), ("url", 0));
+        // A trailing parenthesized title is stripped.
+        assert_eq!(split_destination("url (My Title)"), ("url", 0));
+        // Pointy destination with spaces.
+        assert_eq!(split_destination("<url with spaces>"), ("url with spaces", 1));
+        // Plain single token (no spaces) is unchanged.
+        assert_eq!(split_destination("notes/a.md"), ("notes/a.md", 0));
+        // A space followed by a non-quoted word is NOT a title -> kept whole.
+        assert_eq!(split_destination("url with spaces"), ("url with spaces", 0));
+    }
+
+    #[test]
     fn scans_basic_wikilink_and_tag() {
         let mut next = 1;
         let output = scan_document("# Title\n[[doc#head|Name]] #rust", &mut next);
@@ -547,6 +684,75 @@ mod tests {
                 .elements
                 .iter()
                 .any(|element| matches!(element, CstElement::T(_)))
+        );
+    }
+
+    #[test]
+    fn ignores_wikilinks_inside_inline_code() {
+        let mut next = 1;
+        // Wiki link inside backticks should be masked and not scanned
+        let output = scan_document("`[[wiki links]]`", &mut next);
+        assert!(
+            output
+                .elements
+                .iter()
+                .all(|element| !matches!(element, CstElement::WL(_))),
+            "Wiki links inside inline code should not be scanned"
+        );
+    }
+
+    #[test]
+    fn ignores_mdlinks_inside_inline_code() {
+        let mut next = 1;
+        // Markdown link inside backticks should be masked and not scanned
+        let output = scan_document("`[link](target.md)`", &mut next);
+        assert!(
+            output
+                .elements
+                .iter()
+                .all(|element| !matches!(element, CstElement::ML(_))),
+            "Markdown links inside inline code should not be scanned"
+        );
+    }
+
+    #[test]
+    fn scans_wikilinks_outside_inline_code() {
+        let mut next = 1;
+        // Wiki link outside backticks should still be scanned
+        let output = scan_document("[[real link]] and `[[not a link]]`", &mut next);
+        let wiki_links: Vec<_> = output
+            .elements
+            .iter()
+            .filter(|element| matches!(element, CstElement::WL(_)))
+            .collect();
+        assert_eq!(wiki_links.len(), 1, "Only the real wiki link should be scanned");
+    }
+
+    #[test]
+    fn handles_double_backtick_inline_code() {
+        let mut next = 1;
+        // Double backtick inline code
+        let output = scan_document("``[[wiki links]]``", &mut next);
+        assert!(
+            output
+                .elements
+                .iter()
+                .all(|element| !matches!(element, CstElement::WL(_))),
+            "Wiki links inside double-backtick inline code should not be scanned"
+        );
+    }
+
+    #[test]
+    fn handles_mixed_backtick_content() {
+        let mut next = 1;
+        // `` ` ` ` `` contains a single backtick in the content
+        let output = scan_document("`` `[[link]]` ``", &mut next);
+        assert!(
+            output
+                .elements
+                .iter()
+                .all(|element| !matches!(element, CstElement::WL(_))),
+            "Wiki links inside double-backtick inline code should not be scanned"
         );
     }
 }

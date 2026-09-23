@@ -1,4 +1,9 @@
 pub mod check;
+pub mod graph;
+pub mod info;
+pub mod init;
+pub mod rename;
+pub mod resolve;
 
 use crate::diagnostics::DiagnosticSeverity;
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
@@ -28,7 +33,56 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Command {
     Check(CheckArgs),
+    #[command(name = "init", about = "Create a .downlint.toml config file in the workspace root")]
+    Init(InitArgs),
     Server(ServerArgs),
+    /// File operations: rename a markdown file or attachment on disk.
+    #[command(name = "file", about = "File operations (rename a markdown file or attachment)")]
+    File {
+        #[command(subcommand)]
+        command: FileCommand,
+    },
+    /// Link operations: rename identifiers, resolve targets, query the link
+    /// graph.
+    #[command(name = "link", about = "Link operations (rename, resolve, graph, coverage, unresolved)")]
+    Link {
+        #[command(subcommand)]
+        command: LinkCommand,
+    },
+    /// Show what downlint sees: the resolved workspace (mounts, schemas,
+    /// document counts, conflicts).
+    #[command(
+        name = "info",
+        about = "Show the resolved workspace (mounts, schemas, documents, conflicts)"
+    )]
+    Info(InfoArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum FileCommand {
+    /// Move a markdown file or attachment on disk and rewrite every link
+    /// that points at it. Kind-class (markdown vs attachment) is inferred
+    /// from the source file's extension. Use `link rename` to rewrite only
+    /// the identifier (no disk move).
+    Rename(RenameFileArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum LinkCommand {
+    /// Rewrite a logical link identifier across the workspace. No disk
+    /// move. Use `file rename` to move the file too.
+    Rename(RenameLinkArgs),
+    /// Show what a link target resolves to: documents, attachments, folders,
+    /// and URI-scheme mappings.
+    Resolve(ResolveArgs),
+    /// Show the link graph around FILE: incoming (backlinks) and outgoing
+    /// links.
+    Graph(GraphArgs),
+    /// Notes with no incoming links (orphans) and no outgoing links
+    /// (deadends).
+    Coverage(LinkQueryArgs),
+    /// List links that point at notes that don't exist.
+    Unresolved(LinkQueryArgs),
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -49,6 +103,15 @@ struct CheckArgs {
     watch: bool,
     #[arg(long)]
     stdin: bool,
+    /// Permit subprocess execution of a `[[schemas]]` `verify_cmd`. Without
+    /// this flag, `verify_cmd` is skipped. Note: enabling this flag means
+    /// `.downlint.toml` controls which commands run.
+    #[arg(long = "allow-uri-sync", action = ArgAction::SetTrue)]
+    allow_uri_sync: bool,
+    /// Suppress the "no URI mapping found" hint diagnostic. The broken-link
+    /// diagnostic itself is still emitted.
+    #[arg(long = "no-uri-hints", action = ArgAction::SetTrue)]
+    no_uri_hints: bool,
     path: Option<PathBuf>,
 }
 
@@ -58,6 +121,141 @@ struct ServerArgs {
     verbose: u8,
     #[arg(long)]
     wait_for_debugger: bool,
+    /// Permit subprocess execution of a `[[schemas]]` `verify_cmd`. Without
+    /// this flag, `verify_cmd` is skipped. Note: enabling this flag means
+    /// `.downlint.toml` controls which commands run.
+    #[arg(long = "allow-uri-sync", action = ArgAction::SetTrue)]
+    allow_uri_sync: bool,
+    /// Suppress the "no URI mapping found" hint diagnostic. The broken-link
+    /// diagnostic itself is still emitted.
+    #[arg(long = "no-uri-hints", action = ArgAction::SetTrue)]
+    no_uri_hints: bool,
+    /// Start the server in the background and exit immediately. Used by
+    /// agent workflows that perform many renames in sequence. The server
+    /// runs as a planning service — CLI `file rename` / `link rename` with
+    /// `--server` connect to it via TCP.
+    #[arg(long = "detach", action = ArgAction::SetTrue)]
+    detach: bool,
+    /// Stop a running detached server for the current project. Exits 0 if
+    /// the server was stopped, 3 if no server was running.
+    #[arg(long = "stop", action = ArgAction::SetTrue)]
+    stop: bool,
+    /// TCP port for the detached server. Use `--port 0` to let the OS
+    /// pick an available port (the chosen port is reported to stdout and
+    /// written to `.downlint/.server.pid`).
+    #[arg(long = "port", default_value_t = 0)]
+    port: u16,
+}
+
+#[derive(Args, Clone, Debug, Default)]
+struct InitArgs {
+    /// Workspace root in which to create .downlint.toml (default: current directory).
+    #[arg(long)]
+    root: Option<PathBuf>,
+    /// Overwrite an existing .downlint.toml.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Args, Clone, Debug, Default)]
+struct RenameFileArgs {
+    #[arg(long)]
+    root: Option<PathBuf>,
+    /// Workspace-relative path to the source file.
+    #[arg(long)]
+    from: PathBuf,
+    /// Workspace-relative path to the destination.
+    #[arg(long)]
+    to: PathBuf,
+    /// Print the planned edits without applying them.
+    #[arg(long, action = ArgAction::SetTrue)]
+    dry_run: bool,
+    #[arg(long, short = 'v', default_value_t = 2)]
+    verbose: u8,
+    #[arg(long, short = 'q', action = ArgAction::SetTrue)]
+    quiet: bool,
+    /// Connect to a detached server for planning (avoids re-indexing).
+    /// Falls back to in-process indexing if no server is detected.
+    #[arg(long, action = ArgAction::SetTrue)]
+    server: bool,
+}
+
+#[derive(Args, Clone, Debug, Default)]
+struct RenameLinkArgs {
+    #[arg(long)]
+    root: Option<PathBuf>,
+    /// Source identifier (no `/`, `#`, `|`, etc.).
+    #[arg(long)]
+    from: String,
+    /// Destination identifier (no `/`, `#`, `|`, etc.).
+    #[arg(long)]
+    to: String,
+    /// Print the planned edits without applying them.
+    #[arg(long, action = ArgAction::SetTrue)]
+    dry_run: bool,
+    #[arg(long, short = 'v', default_value_t = 2)]
+    verbose: u8,
+    #[arg(long, short = 'q', action = ArgAction::SetTrue)]
+    quiet: bool,
+    /// Connect to a detached server for planning.
+    #[arg(long, action = ArgAction::SetTrue)]
+    server: bool,
+}
+
+#[derive(Args, Clone, Debug, Default)]
+struct ResolveArgs {
+    /// The link target to resolve (wiki-link target grammar: title/stem,
+    /// explicit path, folder target, optional #anchor, or scheme://…).
+    target: String,
+    #[arg(long)]
+    root: Option<PathBuf>,
+    /// Resolve source-relative targets (`./…`/`../…`) as if the link were in
+    /// this document. Bare wiki `path/file` and `/…` targets are root-relative
+    /// and ignore this flag (RFC 0013).
+    #[arg(long)]
+    from: Option<PathBuf>,
+    #[arg(long, default_value = "text")]
+    format: FormatArg,
+    /// Also list prefix candidates when wiki.obsidian_prefix is off (advisory).
+    #[arg(long = "include-prefix", action = ArgAction::SetTrue)]
+    include_prefix: bool,
+    /// Permit subprocess execution of a `[[schemas]]` `verify_cmd`. Without
+    /// this flag, `verify_cmd` is skipped. Note: enabling this flag means
+    /// `.downlint.toml` controls which commands run.
+    #[arg(long = "allow-uri-sync", action = ArgAction::SetTrue)]
+    allow_uri_sync: bool,
+    #[arg(long, short = 'v', default_value_t = 2)]
+    verbose: u8,
+}
+
+#[derive(Args, Clone, Debug)]
+struct LinkQueryArgs {
+    #[arg(long)]
+    root: Option<PathBuf>,
+    #[arg(long, short = 'v', default_value_t = 2)]
+    verbose: u8,
+    /// Output format: `text` (default) or `json` (envelope).
+    #[arg(long, default_value = "text")]
+    format: FormatArg,
+}
+
+#[derive(Args, Clone, Debug)]
+struct GraphArgs {
+    /// The note (workspace-relative or mount namespace path).
+    file: PathBuf,
+    #[command(flatten)]
+    flags: LinkQueryArgs,
+}
+
+#[derive(Args, Clone, Debug)]
+struct InfoArgs {
+    #[arg(long)]
+    root: Option<PathBuf>,
+    #[arg(long, short = 'v', default_value_t = 2)]
+    verbose: u8,
+    /// Output format: `text` (default) or `json`.
+    #[arg(long, default_value = "text")]
+    format: FormatArg,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -80,11 +278,119 @@ pub async fn run() -> i32 {
     match cli.command {
         Some(Command::Server(args)) => {
             init_tracing(args.verbose);
-            crate::lsp::run_server(args.verbose, args.wait_for_debugger).await
+            if args.stop {
+                // Stop a detached server. For now, the persistent server
+                // is a Phase 5 stretch goal; this branch returns 3 with a
+                // clear message until the server module lands.
+                eprintln!(
+                    "downlint: persistent server not yet implemented (RFC 0009 Phase 5 stretch goal)"
+                );
+                return 3;
+            }
+            if args.detach {
+                eprintln!(
+                    "downlint: persistent server not yet implemented (RFC 0009 Phase 5 stretch goal)"
+                );
+                return 3;
+            }
+            let uri_opts = crate::resolution::UriOptions {
+                allow_sync: args.allow_uri_sync,
+                no_hints: args.no_uri_hints,
+            };
+            crate::lsp::run_server(args.verbose, args.wait_for_debugger, uri_opts).await
         }
         Some(Command::Check(args)) => {
             init_tracing(args.verbose);
             check::run_check(map_check_args(args, cli.quiet)).await
+        }
+        Some(Command::Init(args)) => {
+            init::run_init(init::InitOptions {
+                root: args.root,
+                force: args.force,
+            })
+        }
+        Some(Command::File { command }) => match command {
+            FileCommand::Rename(args) => {
+                init_tracing(args.verbose);
+                rename::run_rename_file(rename::RenameFileOptions {
+                    root: args.root,
+                    from: args.from,
+                    to: args.to,
+                    dry_run: args.dry_run,
+                    verbose: args.verbose,
+                    quiet: args.quiet,
+                })
+            }
+        },
+        Some(Command::Link { command }) => match command {
+            LinkCommand::Rename(args) => {
+                init_tracing(args.verbose);
+                rename::run_rename_link(rename::RenameLinkOptions {
+                    root: args.root,
+                    from: args.from,
+                    to: args.to,
+                    dry_run: args.dry_run,
+                    verbose: args.verbose,
+                    quiet: args.quiet,
+                })
+            }
+            LinkCommand::Resolve(args) => {
+                init_tracing(args.verbose);
+                resolve::run_resolve(resolve::ResolveOptions {
+                    root: args.root,
+                    from: args.from,
+                    format: match args.format {
+                        FormatArg::Text => check::OutputFormat::Text,
+                        FormatArg::Json => check::OutputFormat::Json,
+                    },
+                    include_prefix: args.include_prefix,
+                    allow_uri_sync: args.allow_uri_sync,
+                    target: args.target,
+                })
+            }
+            LinkCommand::Graph(args) => {
+                init_tracing(args.flags.verbose);
+                graph::run_link_query(graph::LinkQueryOptions {
+                    root: args.flags.root,
+                    query: graph::LinkQuery::Graph { file: args.file },
+                    format: match args.flags.format {
+                        FormatArg::Text => check::OutputFormat::Text,
+                        FormatArg::Json => check::OutputFormat::Json,
+                    },
+                })
+            }
+            LinkCommand::Coverage(args) => {
+                init_tracing(args.verbose);
+                graph::run_link_query(graph::LinkQueryOptions {
+                    root: args.root,
+                    query: graph::LinkQuery::Coverage,
+                    format: match args.format {
+                        FormatArg::Text => check::OutputFormat::Text,
+                        FormatArg::Json => check::OutputFormat::Json,
+                    },
+                })
+            }
+            LinkCommand::Unresolved(args) => {
+                init_tracing(args.verbose);
+                graph::run_link_query(graph::LinkQueryOptions {
+                    root: args.root,
+                    query: graph::LinkQuery::Unresolved,
+                    format: match args.format {
+                        FormatArg::Text => check::OutputFormat::Text,
+                        FormatArg::Json => check::OutputFormat::Json,
+                    },
+                })
+            }
+        },
+        Some(Command::Info(args)) => {
+            init_tracing(args.verbose);
+            info::run_info(info::InfoOptions {
+                root: args.root,
+                format: match args.format {
+                    FormatArg::Text => check::OutputFormat::Text,
+                    FormatArg::Json => check::OutputFormat::Json,
+                },
+            })
         }
         None => {
             init_tracing(cli.check.verbose);
@@ -112,6 +418,8 @@ fn map_check_args(args: CheckArgs, quiet: bool) -> check::CheckOptions {
         stdin: args.stdin,
         quiet,
         path: args.path,
+        allow_uri_sync: args.allow_uri_sync,
+        no_uri_hints: args.no_uri_hints,
     }
 }
 
@@ -127,4 +435,44 @@ fn init_tracing(verbose: u8) {
         .with_env_filter(level)
         .with_writer(std::io::stderr)
         .try_init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    /// Smoke test: `downlint server --allow-uri-sync` parses cleanly. The
+    /// flag is plumbed into `run_server` via `UriOptions`, which would panic
+    /// in production if the type didn't match — so we just assert parsing.
+    #[test]
+    fn server_args_parse_with_uri_flags() {
+        let cli = Cli::try_parse_from([
+            "downlint",
+            "server",
+            "--allow-uri-sync",
+            "--no-uri-hints",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Server(args)) => {
+                assert!(args.allow_uri_sync);
+                assert!(args.no_uri_hints);
+            }
+            other => panic!("expected Server subcommand, got {other:?}"),
+        }
+    }
+
+    /// Default behavior: no `--allow-uri-sync` flag → sync disabled.
+    #[test]
+    fn server_args_default_to_sync_disabled() {
+        let cli = Cli::try_parse_from(["downlint", "server"]).unwrap();
+        match cli.command {
+            Some(Command::Server(args)) => {
+                assert!(!args.allow_uri_sync);
+                assert!(!args.no_uri_hints);
+            }
+            other => panic!("expected Server subcommand, got {other:?}"),
+        }
+    }
 }

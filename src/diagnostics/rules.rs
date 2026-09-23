@@ -10,13 +10,68 @@ pub fn broken_link(reference: &UnresolvedReference) -> Option<Diagnostic> {
     if matches!(reference.reference, Ref::Shortcut { .. }) {
         return None;
     }
+    // In-page anchor miss → distinct diagnostic so the user knows the link was
+    // an anchor, not a missing file reference.
+    if reference.is_anchor {
+        // For cross-document anchors, `target` is "path#anchor"; for in-page
+        // anchors it's just "anchor". Show whichever is more useful.
+        let display = if reference.target.contains('#') {
+            // Cross-document: keep the `path#anchor` form so the user can
+            // locate the offending file at a glance.
+            reference.target.clone()
+        } else if reference.target.starts_with('#') {
+            reference.target.clone()
+        } else {
+            format!("#{}", reference.target)
+        };
+        return Some(Diagnostic {
+            path: reference.source_path.clone(),
+            range: reference.name_range.unwrap_or(reference.full_range),
+            severity: DiagnosticSeverity::Warning,
+            code: DiagnosticCode::LinkBrokenAnchor,
+            message: format!("Broken anchor: '{display}' could not be resolved"),
+            related: Vec::new(),
+            mount: None,
+        });
+    }
+    let mut message = format!("Broken link: '{}' could not be resolved", reference.target);
+    if matches!(reference.reference, Ref::Wiki { .. }) {
+        if let Some(payload) = reference.hint_payload.as_ref() {
+            if !payload.is_empty() {
+                let total = payload.len();
+                let cap = 5usize;
+                let shown = total.min(cap);
+                let names: Vec<String> = payload
+                    .iter()
+                    .take(shown)
+                    .map(|path| {
+                        path.file_name()
+                            .and_then(|name| name.to_str())
+                            .map(|name| name.to_string())
+                            .unwrap_or_else(|| path.display().to_string())
+                    })
+                    .collect();
+                let more = if total > cap {
+                    format!(" (+{} more)", total - cap)
+                } else {
+                    String::new()
+                };
+                message.push_str(&format!(
+                    "\nHint: enable 'wiki.obsidian_prefix' to match partial filenames (candidates: {}{})",
+                    names.join(", "),
+                    more,
+                ));
+            }
+        }
+    }
     Some(Diagnostic {
         path: reference.source_path.clone(),
         range: reference.name_range.unwrap_or(reference.full_range),
         severity: severity_for_ref(&reference.reference),
-        code: DiagnosticCode::DNL002,
-        message: format!("Broken link: '{}' could not be resolved", reference.target),
+        code: DiagnosticCode::LinkBroken,
+        message,
         related: Vec::new(),
+        mount: None,
     })
 }
 
@@ -25,7 +80,7 @@ pub fn ambiguous_link(reference: &AmbiguousReference) -> Option<Diagnostic> {
         path: reference.source_path.clone(),
         range: reference.name_range.unwrap_or(reference.full_range),
         severity: severity_for_ref(&reference.reference),
-        code: DiagnosticCode::DNL001,
+        code: DiagnosticCode::LinkAmbiguous,
         message: format!(
             "Ambiguous link: '{}' resolves to multiple destinations",
             reference.target
@@ -38,6 +93,32 @@ pub fn ambiguous_link(reference: &AmbiguousReference) -> Option<Diagnostic> {
                 message: destination.path.display().to_string(),
             })
             .collect(),
+        mount: None,
+    })
+}
+
+/// Hint diagnostic: emitted once per run if any unresolved reference was a
+/// URI-scheme link (`scheme://...`) that did not match any `[[schemas]]`
+/// prefix. Surfaces the example config so the user can find the `[[schemas]]`
+/// section without reading the RFC. Returns `None` if no such unresolved
+/// reference exists.
+pub fn uri_no_mapping_hint(unresolved: &[UnresolvedReference]) -> Option<Diagnostic> {
+    let first = unresolved.iter().find(|reference| reference.uri_no_mapping_hint)?;
+    Some(Diagnostic {
+        path: first.source_path.clone(),
+        range: first.name_range.unwrap_or(first.full_range),
+        severity: DiagnosticSeverity::Info,
+        code: DiagnosticCode::UriNoMapping,
+        message: format!(
+            "No scheme mapping found for '{}'. Configure [[schemas]] in .downlint.toml, e.g.:\n\
+             \n  [[schemas]]\n  \
+             uri = \"icloud://assets/\"\n  \
+             to = \"~/icloud/assets\"\n\
+             \nSuppress this hint with --no-uri-hints.",
+            first.target,
+        ),
+        related: Vec::new(),
+        mount: None,
     })
 }
 
@@ -53,9 +134,10 @@ pub fn non_breaking_space(path: &Path, input: &str) -> Vec<Diagnostic> {
                 path: path.to_path_buf(),
                 range: ByteRange::new(start, start + '\u{00a0}'.len_utf8()),
                 severity: DiagnosticSeverity::Warning,
-                code: DiagnosticCode::DNL003,
+                code: DiagnosticCode::HeadingNbsp,
                 message: "Non-breaking whitespace after heading marker".into(),
                 related: Vec::new(),
+                mount: None,
             });
         }
         offset += line.len();

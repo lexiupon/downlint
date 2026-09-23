@@ -31,6 +31,8 @@ pub struct CheckOptions {
     pub stdin: bool,
     pub quiet: bool,
     pub path: Option<PathBuf>,
+    pub allow_uri_sync: bool,
+    pub no_uri_hints: bool,
 }
 
 pub async fn run_check(options: CheckOptions) -> i32 {
@@ -50,6 +52,8 @@ pub async fn run_check(options: CheckOptions) -> i32 {
                 }
             }
 
+            print_workspace_hints(&options, &result.workspace);
+
             if !options.quiet {
                 emit_diagnostics(&result.diagnostics, &options.format, &result.workspace);
             }
@@ -67,6 +71,34 @@ pub async fn run_check(options: CheckOptions) -> i32 {
     }
 }
 
+/// Friendly, non-error hints for directory-based checks: surface that no
+/// `.downlint.toml` was found (and suggest `downlint init`) and/or that the
+/// workspace contains no markdown. Suppressed in `--quiet`/`--stdin` mode and
+/// for a single explicit file (where "no files" is not meaningful).
+fn print_workspace_hints(options: &CheckOptions, workspace: &Workspace) {
+    if options.quiet || options.stdin {
+        return;
+    }
+    let dir_based = options.path.as_deref().map(|p| p.is_dir()).unwrap_or(true);
+    if !dir_based {
+        return;
+    }
+    let root = &workspace.folder.root;
+    if workspace.folder.config_path.is_none() {
+        eprintln!(
+            "downlint: no .downlint.toml found in {}; using default config.",
+            root.display()
+        );
+        eprintln!("downlint: run `downlint init` to create one.");
+    }
+    if workspace.folder.documents.is_empty() {
+        eprintln!(
+            "downlint: no markdown files found in {}.",
+            root.display()
+        );
+    }
+}
+
 struct CheckResult {
     workspace: Workspace,
     diagnostics: Vec<Diagnostic>,
@@ -74,11 +106,18 @@ struct CheckResult {
 
 fn run_check_once(options: &CheckOptions) -> Result<CheckResult, ConfigError> {
     let workspace = build_workspace(options)?;
-    let graph = resolve_links(ResolveInput::from_workspace(&workspace));
+    let mut input = ResolveInput::from_workspace(&workspace);
+    if let Some(error) = input.uri_error.take() {
+        return Err(ConfigError::Validation(error));
+    }
+    input.uri_opts.allow_sync = options.allow_uri_sync;
+    input.uri_opts.no_hints = options.no_uri_hints;
+    let graph = resolve_links(input);
     let diagnostics = check_diagnostics(
         &graph,
         &DiagnosticConfig {
             min_severity: options.min_severity,
+            source_only: options.stdin,
         },
     );
     Ok(CheckResult {
@@ -113,12 +152,12 @@ fn emit_diagnostics(diagnostics: &[Diagnostic], format: &OutputFormat, workspace
                     .strip_prefix(&workspace.folder.root)
                     .unwrap_or(diagnostic.path.as_path());
                 println!(
-                    "{}:{}: {}: {} [{:?}]",
+                    "{}:{}: {}: {} [{}]",
                     rel.display(),
                     line_and_column(workspace, diagnostic),
                     severity_name(diagnostic.severity),
                     diagnostic.message,
-                    diagnostic.code
+                    diagnostic.code.as_str()
                 );
             }
         }
@@ -130,7 +169,7 @@ fn emit_diagnostics(diagnostics: &[Diagnostic], format: &OutputFormat, workspace
                         "path": diagnostic.path,
                         "range": diagnostic.range,
                         "severity": diagnostic.severity,
-                        "code": format!("{:?}", diagnostic.code),
+                        "code": diagnostic.code.as_str(),
                         "message": diagnostic.message,
                         "related": diagnostic.related,
                     })
@@ -170,7 +209,7 @@ fn severity_name(severity: DiagnosticSeverity) -> &'static str {
 fn apply_fixes(workspace: &mut Workspace, diagnostics: &[Diagnostic]) -> Result<(), ConfigError> {
     let mut grouped: HashMap<PathBuf, Vec<&Diagnostic>> = HashMap::new();
     for diagnostic in diagnostics {
-        if diagnostic.code == DiagnosticCode::DNL003 {
+        if diagnostic.code == DiagnosticCode::HeadingNbsp {
             grouped
                 .entry(diagnostic.path.clone())
                 .or_default()

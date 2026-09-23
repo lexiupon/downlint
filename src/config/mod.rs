@@ -1,4 +1,6 @@
+pub mod mount;
 pub mod project;
+pub mod schema;
 pub mod user;
 
 use serde::Deserialize;
@@ -6,7 +8,9 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub use mount::{Mount, MountConfigError, PartialMount, finalize_mounts, merge_mounts};
 pub use project::project_config_path;
+pub use schema::{Schema, SchemaConfig, SchemaConfigError, finalize_schemas, merge_schemas};
 pub use user::user_config_path;
 
 #[derive(Clone, Debug, Default)]
@@ -14,6 +18,22 @@ pub struct Config {
     pub core: CoreConfig,
     pub code_action: CodeActionConfig,
     pub completion: CompletionConfig,
+    pub wiki: WikiConfig,
+    pub schemas: SchemaConfig,
+    pub mounts: Vec<Mount>,
+}
+
+#[derive(Clone, Debug)]
+pub struct WikiConfig {
+    pub obsidian_prefix: bool,
+}
+
+impl Default for WikiConfig {
+    fn default() -> Self {
+        Self {
+            obsidian_prefix: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -22,8 +42,7 @@ pub struct CoreConfig {
     pub heading_ids: HeadingIdsConfig,
     pub text_sync: TextSyncKind,
     pub title_from_heading: bool,
-    pub extra_folders: Vec<String>,
-    pub attachment_file_extensions: Vec<String>,
+    pub ignore: Vec<String>,
 }
 
 impl Default for CoreConfig {
@@ -33,16 +52,7 @@ impl Default for CoreConfig {
             heading_ids: HeadingIdsConfig { enable: true },
             text_sync: TextSyncKind::Full,
             title_from_heading: true,
-            extra_folders: Vec::new(),
-            attachment_file_extensions: vec![
-                "png".into(),
-                "jpg".into(),
-                "jpeg".into(),
-                "gif".into(),
-                "svg".into(),
-                "pdf".into(),
-                "webp".into(),
-            ],
+            ignore: Vec::new(),
         }
     }
 }
@@ -158,6 +168,15 @@ pub struct PartialConfig {
     pub core: Option<PartialCoreConfig>,
     pub code_action: Option<PartialCodeActionConfig>,
     pub completion: Option<PartialCompletionConfig>,
+    pub wiki: Option<PartialWikiConfig>,
+    pub schemas: Option<Vec<schema::PartialSchema>>,
+    pub mounts: Option<Vec<PartialMount>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PartialWikiConfig {
+    pub obsidian_prefix: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -167,8 +186,7 @@ pub struct PartialCoreConfig {
     pub heading_ids: Option<PartialHeadingIdsConfig>,
     pub text_sync: Option<TextSyncKind>,
     pub title_from_heading: Option<bool>,
-    pub extra_folders: Option<Vec<String>>,
-    pub attachment_file_extensions_add: Option<Vec<String>>,
+    pub ignore: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -233,6 +251,11 @@ pub fn finalize_config(partial: PartialConfig) -> Result<Config, ConfigError> {
     let core = partial.core.unwrap_or_default();
     let code_action = partial.code_action.unwrap_or_default();
     let completion = partial.completion.unwrap_or_default();
+    let wiki = partial.wiki.unwrap_or_default();
+    let schemas = finalize_schemas(partial.schemas.unwrap_or_default())
+        .map_err(|error| ConfigError::Validation(error.to_string()))?;
+    let mounts = finalize_mounts(partial.mounts.unwrap_or_default())
+        .map_err(|error| ConfigError::Validation(error.to_string()))?;
 
     let file_extensions = core
         .file_extensions
@@ -254,13 +277,6 @@ pub fn finalize_config(partial: PartialConfig) -> Result<Config, ConfigError> {
         ));
     }
 
-    let mut attachment_file_extensions = defaults.core.attachment_file_extensions.clone();
-    if let Some(extra) = core.attachment_file_extensions_add.clone() {
-        attachment_file_extensions.extend(extra);
-    }
-    attachment_file_extensions.sort();
-    attachment_file_extensions.dedup();
-
     Ok(Config {
         core: CoreConfig {
             file_extensions,
@@ -274,8 +290,7 @@ pub fn finalize_config(partial: PartialConfig) -> Result<Config, ConfigError> {
             title_from_heading: core
                 .title_from_heading
                 .unwrap_or(defaults.core.title_from_heading),
-            extra_folders: core.extra_folders.unwrap_or_default(),
-            attachment_file_extensions,
+            ignore: core.ignore.unwrap_or_default(),
         },
         code_action: CodeActionConfig {
             toc: TocConfig {
@@ -305,6 +320,13 @@ pub fn finalize_config(partial: PartialConfig) -> Result<Config, ConfigError> {
                     .unwrap_or(defaults.completion.wiki.style),
             },
         },
+        wiki: WikiConfig {
+            obsidian_prefix: wiki
+                .obsidian_prefix
+                .unwrap_or(defaults.wiki.obsidian_prefix),
+        },
+        schemas,
+        mounts,
     })
 }
 
@@ -322,6 +344,12 @@ pub fn merge_partial(high: PartialConfig, low: PartialConfig) -> PartialConfig {
             high.completion.unwrap_or_default(),
             low.completion.unwrap_or_default(),
         )),
+        wiki: Some(merge_wiki(
+            high.wiki.unwrap_or_default(),
+            low.wiki.unwrap_or_default(),
+        )),
+        schemas: merge_schemas(high.schemas, low.schemas),
+        mounts: merge_mounts(high.mounts, low.mounts),
     }
 }
 
@@ -336,11 +364,7 @@ fn merge_core(high: PartialCoreConfig, low: PartialCoreConfig) -> PartialCoreCon
         }),
         text_sync: high.text_sync.or(low.text_sync),
         title_from_heading: high.title_from_heading.or(low.title_from_heading),
-        extra_folders: high.extra_folders.or(low.extra_folders),
-        attachment_file_extensions_add: merge_vec(
-            high.attachment_file_extensions_add,
-            low.attachment_file_extensions_add,
-        ),
+        ignore: high.ignore.or(low.ignore),
     }
 }
 
@@ -385,16 +409,9 @@ fn merge_completion(
     }
 }
 
-fn merge_vec(high: Option<Vec<String>>, low: Option<Vec<String>>) -> Option<Vec<String>> {
-    match (high, low) {
-        (Some(high), Some(low)) => {
-            let mut values = low;
-            values.extend(high);
-            Some(values)
-        }
-        (Some(high), None) => Some(high),
-        (None, Some(low)) => Some(low),
-        (None, None) => None,
+fn merge_wiki(high: PartialWikiConfig, low: PartialWikiConfig) -> PartialWikiConfig {
+    PartialWikiConfig {
+        obsidian_prefix: high.obsidian_prefix.or(low.obsidian_prefix),
     }
 }
 
@@ -409,36 +426,215 @@ fn load_optional(path: PathBuf) -> Result<Option<PartialConfig>, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
-    fn merge_accumulates_attachment_extensions() {
-        let high = PartialConfig {
-            core: Some(PartialCoreConfig {
-                attachment_file_extensions_add: Some(vec!["drawio".into()]),
-                ..PartialCoreConfig::default()
-            }),
-            ..PartialConfig::default()
-        };
-        let low = PartialConfig {
-            core: Some(PartialCoreConfig {
-                attachment_file_extensions_add: Some(vec!["mermaid".into()]),
-                ..PartialCoreConfig::default()
-            }),
-            ..PartialConfig::default()
-        };
+    fn parse_rejects_removed_attachment_extensions_key() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(
+            &path,
+            "[core]\nattachment_file_extensions_add = [\"drawio\"]\n",
+        )
+        .unwrap();
 
-        let config = finalize_config(merge_partial(high, low)).unwrap();
-        assert!(
-            config
-                .core
-                .attachment_file_extensions
-                .contains(&"drawio".to_string())
+        let error = parse_partial_config(&path).unwrap_err();
+        match error {
+            ConfigError::ParseToml { message, .. } => {
+                assert!(message.contains("unknown field"));
+                assert!(message.contains("attachment_file_extensions_add"));
+            }
+            other => panic!("expected parse error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_accepts_ignore_patterns() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(
+            &path,
+            "[core]\nignore = [\"drafts/**\", \"*.tmp.md\"]\n",
+        )
+        .unwrap();
+
+        let partial = parse_partial_config(&path).unwrap();
+        let config = finalize_config(partial).unwrap();
+        assert_eq!(config.core.ignore, vec!["drafts/**".to_string(), "*.tmp.md".to_string()]);
+    }
+
+    #[test]
+    fn ignore_defaults_to_empty() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(&path, "[core]\n")
+            .unwrap();
+
+        let partial = parse_partial_config(&path).unwrap();
+        let config = finalize_config(partial).unwrap();
+        assert!(config.core.ignore.is_empty());
+    }
+
+    #[test]
+    fn ignore_project_overrides_user() {
+        let high = PartialCoreConfig {
+            ignore: Some(vec!["project-ignore/**".to_string()]),
+            ..Default::default()
+        };
+        let low = PartialCoreConfig {
+            ignore: Some(vec!["user-ignore/**".to_string()]),
+            ..Default::default()
+        };
+        let merged = merge_core(high, low);
+        assert_eq!(
+            merged.ignore.unwrap(),
+            vec!["project-ignore/**".to_string()]
         );
-        assert!(
-            config
-                .core
-                .attachment_file_extensions
-                .contains(&"mermaid".to_string())
+    }
+
+    #[test]
+    fn ignore_negation_pattern_parses() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(
+            &path,
+            "[core]\nignore = [\"drafts/**\", \"!drafts/published/**\"]\n",
+        )
+        .unwrap();
+
+        let partial = parse_partial_config(&path).unwrap();
+        let config = finalize_config(partial).unwrap();
+        assert_eq!(
+            config.core.ignore,
+            vec!["drafts/**".to_string(), "!drafts/published/**".to_string()]
         );
+    }
+
+    #[test]
+    fn parse_accepts_wiki_obsidian_prefix() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(&path, "[wiki]\nobsidian_prefix = true\n").unwrap();
+
+        let partial = parse_partial_config(&path).unwrap();
+        let config = finalize_config(partial).unwrap();
+        assert!(config.wiki.obsidian_prefix);
+    }
+
+    #[test]
+    fn wiki_obsidian_prefix_defaults_to_false() {
+        let partial = PartialConfig::default();
+        let config = finalize_config(partial).unwrap();
+        assert!(!config.wiki.obsidian_prefix);
+    }
+
+    #[test]
+    fn wiki_obsidian_prefix_project_overrides_user() {
+        let high = PartialWikiConfig {
+            obsidian_prefix: Some(true),
+        };
+        let low = PartialWikiConfig {
+            obsidian_prefix: Some(false),
+        };
+        let merged = merge_wiki(high, low);
+        assert_eq!(merged.obsidian_prefix, Some(true));
+    }
+
+    #[test]
+    fn parse_rejects_unknown_wiki_key() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(&path, "[wiki]\nbogus = true\n").unwrap();
+
+        let error = parse_partial_config(&path).unwrap_err();
+        match error {
+            ConfigError::ParseToml { message, .. } => {
+                assert!(message.contains("unknown field"));
+                assert!(message.contains("bogus"));
+            }
+            other => panic!("expected parse error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_accepts_schemas() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(
+            &path,
+            r#"
+[[schemas]]
+uri = "icloud://assets/"
+to = "~/icloud/assets"
+auto_verify = false
+"#,
+        )
+        .unwrap();
+
+        let partial = parse_partial_config(&path).unwrap();
+        let config = finalize_config(partial).unwrap();
+        assert_eq!(config.schemas.schemas.len(), 1);
+        let schema = &config.schemas.schemas[0];
+        assert_eq!(schema.uri, "icloud://assets/");
+        assert_eq!(schema.to, "~/icloud/assets");
+        assert!(!schema.auto_verify);
+    }
+
+    #[test]
+    fn schemas_default_when_absent() {
+        let partial = PartialConfig::default();
+        let config = finalize_config(partial).unwrap();
+        assert!(config.schemas.schemas.is_empty());
+    }
+
+    #[test]
+    fn schema_missing_uri_yields_indexed_error() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(
+            &path,
+            r#"
+[[schemas]]
+to = "./foo"
+[[schemas]]
+uri = "scheme://"
+to = "./bar"
+"#,
+        )
+        .unwrap();
+
+        let error = finalize_config(parse_partial_config(&path).unwrap()).unwrap_err();
+        match error {
+            ConfigError::Validation(message) => {
+                assert!(message.contains("schemas[0]"));
+                assert!(message.contains("uri"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_rejects_unknown_schema_key() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".downlint.toml");
+        fs::write(
+            &path,
+            r#"
+[[schemas]]
+uri = "scheme://"
+to = "./foo"
+bogus = true
+"#,
+        )
+        .unwrap();
+
+        let error = parse_partial_config(&path).unwrap_err();
+        match error {
+            ConfigError::ParseToml { message, .. } => {
+                assert!(message.contains("unknown field"));
+                assert!(message.contains("bogus"));
+            }
+            other => panic!("expected parse error, got {other:?}"),
+        }
     }
 }
