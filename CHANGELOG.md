@@ -5,6 +5,40 @@ based on [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/) for post-1.0 releases.
 Pre-1.0 versions may include breaking changes.
 
+## [0.15.0] — CLI surface: `file` and `link` command groups (RFC 0018)
+
+### Changed
+
+- **Breaking: the CLI is now grouped around two nouns — `file` and `link`.**
+  Pre-1.0 hard cutover; the old names are removed without deprecated aliases
+  (RFC 0018 §6). No semantics changed — only names, grouping, and two
+  consolidated output shapes.
+  - `rename-file` → `file rename`
+  - `rename-link` → `link rename`
+  - `resolve` → `link resolve`
+  - `graph backlinks <FILE>` + `graph links <FILE>` → **`link graph <FILE>`** —
+    one command, both directions. Text output is sectioned (`incoming (n)` /
+    `outgoing (n)`, empty sections render with a count of `0`); JSON is
+    `{"query": "graph", "file": …, "incoming": […], "outgoing": […]}`.
+  - `graph orphans` + `graph deadends` → **`link coverage`** — one
+    "how well does the link web cover your notes" report. Text: `orphans (n)`
+    / `deadends (n)` sections; JSON: `{"query": "coverage", "orphans": […],
+    "deadends": […]}`. Exit `1` when either section is non-empty, preserving
+    the CI-gate contract (`downlint link coverage || echo clean`).
+  - `graph unresolved` → `link unresolved` (output unchanged).
+- The `graph` namespace is gone. Top level is now `check` (default), `init`,
+  `server`, `info`, `file`, `link`. The CLI now mirrors the LSP code-action
+  taxonomy (`refactor.rename.file` / `refactor.rename.link-target`).
+- `--from` is now unambiguous per noun: `file rename --from <path>`,
+  `link rename --from <identifier>`, `link resolve --from <doc>`.
+
+### Notes
+
+- `link graph <FILE>` exit codes: `0` file in index (either section may be
+  empty) · `1` file not in index · `2` bad args / config error — same scheme
+  as the old per-file `graph` queries.
+- The LSP surface is unchanged.
+
 ## [0.14.0] — LSP clears stale diagnostics when a link is fixed
 
 ### Fixed
