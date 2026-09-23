@@ -53,23 +53,29 @@ pub struct RenameLinkOptions {
     pub quiet: bool,
 }
 
-/// Run `downlint rename-file`. Returns the exit code (see module docs).
+/// Run `downlint file rename`. Returns the exit code (see module docs).
 pub fn run_rename_file(options: RenameFileOptions) -> i32 {
     match run_rename_file_inner(&options) {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("downlint: {error}");
+            if let Some(hint) = error.hint() {
+                eprintln!("hint: {hint}");
+            }
             error.exit_code()
         }
     }
 }
 
-/// Run `downlint rename-link`. Returns the exit code (see module docs).
+/// Run `downlint link rename`. Returns the exit code (see module docs).
 pub fn run_rename_link(options: RenameLinkOptions) -> i32 {
     match run_rename_link_inner(&options) {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("downlint: {error}");
+            if let Some(hint) = error.hint() {
+                eprintln!("hint: {hint}");
+            }
             error.exit_code()
         }
     }
@@ -81,7 +87,12 @@ enum CliError {
     #[allow(dead_code)] // Wired up once the persistent server lands.
     Indexing,
     /// Source file not found on disk.
-    SourceNotFound(PathBuf),
+    SourceNotFound {
+        path: PathBuf,
+        /// Advisory cross-hint (RFC 0019), printed as a second stderr line.
+        /// Never affects the exit code.
+        hint: Option<String>,
+    },
     /// Source and destination are identical.
     NoOp(PathBuf),
     /// Rename blocked by an existing diagnostic.
@@ -98,12 +109,20 @@ impl CliError {
     fn exit_code(&self) -> i32 {
         match self {
             CliError::Indexing => 3,
-            CliError::SourceNotFound(_) => 3,
+            CliError::SourceNotFound { .. } => 3,
             CliError::NoOp(_) => 0,
             CliError::Blocked(_) => 1,
             CliError::Conflict(_) => 2,
             CliError::BadArguments(_) => 3,
             CliError::Io(_) => 3,
+        }
+    }
+
+    /// Advisory hint line (RFC 0019), if any — printed after the error line.
+    fn hint(&self) -> Option<&str> {
+        match self {
+            CliError::SourceNotFound { hint: Some(hint), .. } => Some(hint),
+            _ => None,
         }
     }
 }
@@ -112,7 +131,7 @@ impl std::fmt::Display for CliError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CliError::Indexing => write!(f, "indexing in progress — try again in a moment"),
-            CliError::SourceNotFound(path) => {
+            CliError::SourceNotFound { path, .. } => {
                 write!(f, "source file not found: {}", path.display())
             }
             CliError::NoOp(path) => write!(
@@ -139,7 +158,10 @@ fn run_rename_file_inner(options: &RenameFileOptions) -> Result<(), CliError> {
     let to_abs = workspace.folder.root.join(&options.to);
 
     if !from_abs.exists() {
-        return Err(CliError::SourceNotFound(from_abs));
+        return Err(CliError::SourceNotFound {
+            path: from_abs,
+            hint: stem_cross_hint(&options.from, &workspace),
+        });
     }
     if from_abs == to_abs {
         return Err(CliError::NoOp(from_abs));
@@ -194,6 +216,25 @@ fn run_rename_link_inner(options: &RenameLinkOptions) -> Result<(), CliError> {
 
     let workspace = build_workspace(options.root.as_deref())
         .map_err(|e| CliError::BadArguments(format!("workspace discovery: {e}")))?;
+
+    // RFC 0019: advisory note when --from looks like a file path. Non-fatal:
+    // stem-stripping is documented planner behavior, so the rename proceeds.
+    if let Some(ext) = Path::new(&options.from).extension().and_then(|e| e.to_str()) {
+        let ext_lower = ext.to_ascii_lowercase();
+        if workspace
+            .config
+            .core
+            .file_extensions
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case(&ext_lower))
+        {
+            eprintln!(
+                "downlint: note: --from {:?} looks like a file path; `link rename` takes a bare identifier — use `file rename` to move the file",
+                options.from
+            );
+        }
+    }
+
     let mut input = ResolveInput::from_workspace(&workspace);
     if let Some(err) = input.uri_error.take() {
         return Err(CliError::BadArguments(format!("config: {err}")));
@@ -218,7 +259,10 @@ fn run_rename_link_inner(options: &RenameLinkOptions) -> Result<(), CliError> {
 
 fn rename_error_to_cli(err: RenameError) -> CliError {
     match err {
-        RenameError::SourceNotFound(path) => CliError::SourceNotFound(path),
+        RenameError::SourceNotFound(path) => CliError::SourceNotFound {
+            path,
+            hint: None,
+        },
         RenameError::Conflict(conflict) => CliError::Conflict(conflict.message),
         RenameError::Blocked(violation) => CliError::Blocked(violation.render()),
         RenameError::NotApplicable(message) => CliError::BadArguments(message),
@@ -237,6 +281,23 @@ fn infer_kind_from_extension(path: &Path, markdown_extensions: &[String]) -> Ren
     } else {
         RenameKind::Attachment
     }
+}
+
+/// RFC 0019: when the source file is missing but a document with the same
+/// file stem exists, suggest `link rename`. The stem match is
+/// case-sensitive, mirroring the link-rename planner's exact-stem match,
+/// so the hint only fires when `link rename` would actually succeed.
+fn stem_cross_hint(from: &Path, workspace: &crate::utils::Workspace) -> Option<String> {
+    let stem = from.file_stem()?.to_str()?;
+    let doc = workspace
+        .folder
+        .documents
+        .iter()
+        .find(|doc| doc.rel_path.file_stem().and_then(|s| s.to_str()) == Some(stem))?;
+    Some(format!(
+        "a document with stem '{stem}' exists ({}); did you mean `link rename --from {stem}`?",
+        doc.rel_path.to_string_lossy().replace('\\', "/")
+    ))
 }
 
 fn build_workspace(
@@ -352,7 +413,7 @@ mod tests {
     #[test]
     fn exit_code_mapping() {
         assert_eq!(CliError::Indexing.exit_code(), 3);
-        assert_eq!(CliError::SourceNotFound(PathBuf::from("x")).exit_code(), 3);
+        assert_eq!(CliError::SourceNotFound { path: PathBuf::from("x"), hint: None }.exit_code(), 3);
         assert_eq!(CliError::NoOp(PathBuf::from("x")).exit_code(), 0);
         assert_eq!(CliError::Blocked("x".into()).exit_code(), 1);
         assert_eq!(CliError::Conflict("x".into()).exit_code(), 2);

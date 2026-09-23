@@ -347,3 +347,130 @@ fn cli_rename_link_relative_root_rewrites_identifiers() {
         "index.md should reference new-id, got: {index_content}"
     );
 }
+
+/// RFC 0019: `link rename --from report.md` (path-like) still succeeds —
+/// stem-stripping is lenient by design — but prints an advisory note
+/// suggesting `file rename`.
+#[test]
+fn cli_rename_link_path_like_from_prints_note() {
+    let temp = write_vault(&[
+        ("report.md", "# Report\n"),
+        ("index.md", "see [[report]]\n"),
+    ]);
+    let root = temp.path();
+    let assert = downlint()
+        .args([
+            "link",
+            "rename",
+            "--root",
+            root.to_str().unwrap(),
+            "--from",
+            "report.md",
+            "--to",
+            "topic",
+        ])
+        .assert()
+        .success();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("looks like a file path"), "{stderr}");
+    assert!(stderr.contains("file rename"), "{stderr}");
+    // The rename still applied (lenient behavior preserved).
+    let index_content = fs::read_to_string(root.join("index.md")).unwrap();
+    assert!(index_content.contains("[[topic]]"), "{index_content}");
+}
+
+/// RFC 0019: `link rename --from report` (bare identifier, no extension)
+/// prints no note.
+#[test]
+fn cli_rename_link_bare_from_prints_no_note() {
+    let temp = write_vault(&[
+        ("report.md", "# Report\n"),
+        ("index.md", "see [[report]]\n"),
+    ]);
+    let root = temp.path();
+    let assert = downlint()
+        .args([
+            "link",
+            "rename",
+            "--root",
+            root.to_str().unwrap(),
+            "--from",
+            "report",
+            "--to",
+            "topic",
+        ])
+        .assert()
+        .success();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(!stderr.contains("looks like a file path"), "{stderr}");
+}
+
+/// RFC 0019: `file rename --from report` (no file; `report.md` exists) →
+/// exit 3 with a cross-hint suggesting `link rename`.
+#[test]
+fn cli_rename_file_missing_source_hints_link_rename() {
+    let temp = write_vault(&[
+        ("report.md", "# Report\n"),
+        ("index.md", "see [[report]]\n"),
+    ]);
+    let root = temp.path();
+    let assert = downlint()
+        .args([
+            "file",
+            "rename",
+            "--root",
+            root.to_str().unwrap(),
+            "--from",
+            "report",
+            "--to",
+            "topic",
+        ])
+        .assert()
+        .code(3);
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("source file not found"), "{stderr}");
+    assert!(stderr.contains("hint:"), "{stderr}");
+    assert!(stderr.contains("link rename --from report"), "{stderr}");
+}
+
+/// RFC 0019: `file rename --from nonexistent` (no document stem match) →
+/// exit 3, no hint.
+#[test]
+fn cli_rename_file_missing_source_no_match_no_hint() {
+    let temp = write_vault(&[("report.md", "# Report\n")]);
+    let root = temp.path();
+    let assert = downlint()
+        .args([
+            "file",
+            "rename",
+            "--root",
+            root.to_str().unwrap(),
+            "--from",
+            "nonexistent",
+            "--to",
+            "topic",
+        ])
+        .assert()
+        .code(3);
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("source file not found"), "{stderr}");
+    assert!(!stderr.contains("hint:"), "{stderr}");
+}
+
+/// RFC 0019: each rename command's `--help` names its sibling.
+#[test]
+fn rename_help_lines_mention_sibling() {
+    let file_help = downlint()
+        .args(["file", "rename", "--help"])
+        .assert()
+        .success();
+    let file_stdout = String::from_utf8(file_help.get_output().stdout.clone()).unwrap();
+    assert!(file_stdout.contains("link rename"), "{file_stdout}");
+
+    let link_help = downlint()
+        .args(["link", "rename", "--help"])
+        .assert()
+        .success();
+    let link_stdout = String::from_utf8(link_help.get_output().stdout.clone()).unwrap();
+    assert!(link_stdout.contains("file rename"), "{link_stdout}");
+}

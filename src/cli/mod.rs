@@ -62,13 +62,15 @@ enum Command {
 enum FileCommand {
     /// Move a markdown file or attachment on disk and rewrite every link
     /// that points at it. Kind-class (markdown vs attachment) is inferred
-    /// from the source file's extension.
+    /// from the source file's extension. Use `link rename` to rewrite only
+    /// the identifier (no disk move).
     Rename(RenameFileArgs),
 }
 
 #[derive(Subcommand, Debug)]
 enum LinkCommand {
-    /// Rewrite a logical link identifier across the workspace. No disk move.
+    /// Rewrite a logical link identifier across the workspace. No disk
+    /// move. Use `file rename` to move the file too.
     Rename(RenameLinkArgs),
     /// Show what a link target resolves to: documents, attachments, folders,
     /// and URI-scheme mappings.
