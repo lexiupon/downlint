@@ -38,16 +38,15 @@ Things that are wrong, missing, or inconsistent relative to what should already 
 - [ ] **Heading rename has no usable path today** — it is LSP-only by decision (no CLI
   subcommand), but its code action is not executable (see Planned → LSP). Net effect:
   heading rename is currently unreachable end-to-end.
-- [ ] **Relative `--root` silently skips rename text edits** (found 2026-09-23 during the
-  RFC 0018 self-review; pre-existing). With an explicit *relative* `--root` (e.g. `--root .`),
-  `run_rename_file_inner` joins `--from`/`--to` against the uncanonicalized root, so the
-  plan's `old`/`new` paths are relative while the resolution graph's paths are canonical
-  absolute. The planner's reference matching misses → **no text edits are produced, but the
-  file move still happens** — the vault is left with moved files and stale links (exit 0).
-  Auto-discovered roots (no `--root`) and absolute `--root` are unaffected. Likely fix:
-  canonicalize the workspace root before joining in `src/cli/rename.rs`. Repro:
-  `mkdir v && cd v && echo '# R' > r.md && echo '[[r]]' > i.md && downlint file rename
-  --root . --from r.md --to t.md` → `i.md` still says `[[r]]`.
+- [x] **Relative `--root` silently skips rename text edits** (found 2026-09-23 during the
+  RFC 0018 self-review; fixed 2026-09-23 in 0.15.1). With an explicit *relative* `--root`
+  (e.g. `--root .`), the workspace root was used uncanonicalized, so graph document paths
+  were relative while the planner absolutized the source file — reference matching missed,
+  **no text edits were produced, but the file move still happened** (exit 0, stale links).
+  Fixed by canonicalizing the root in `build_workspace` (`src/cli/rename.rs`), so all
+  downstream paths share one absolute form. Covered by
+  `cli_rename_file_relative_root_rewrites_links` and
+  `cli_rename_link_relative_root_rewrites_identifiers` (`tests/cli_rename_tests.rs`).
 
 ### CLI & docs
 

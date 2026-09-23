@@ -5,6 +5,23 @@ based on [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/) for post-1.0 releases.
 Pre-1.0 versions may include breaking changes.
 
+## [0.15.1] — Fix relative `--root` silently skipping rename text edits
+
+### Fixed
+
+- **`file rename` with a relative `--root` (e.g. `--root .`) no longer skips the
+  link rewrites.** The workspace root was used uncanonicalized, so the
+  resolution graph's document paths stayed relative while the rename planner
+  absolutized the source file — the reference match missed, **no text edits
+  were produced, but the file move still happened** (exit 0, leaving moved
+  files with stale links). The CLI now canonicalizes the root before building
+  the workspace, so graph paths, plan paths, and the apply-step document
+  lookup all share one absolute form. Auto-discovered roots (no `--root`)
+  and absolute `--root` were already unaffected. Regression tests:
+  `cli_rename_file_relative_root_rewrites_links` (fails without the fix) and
+  `cli_rename_link_relative_root_rewrites_identifiers` (pins the same
+  guarantee for `link rename`).
+
 ## [0.15.0] — CLI surface: `file` and `link` command groups (RFC 0018)
 
 ### Changed
