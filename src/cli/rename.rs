@@ -242,8 +242,16 @@ fn infer_kind_from_extension(path: &Path, markdown_extensions: &[String]) -> Ren
 fn build_workspace(
     root: Option<&Path>,
 ) -> Result<crate::utils::Workspace, ConfigError> {
-    let input = WorkspaceInput::Path(root.unwrap_or(Path::new(".")).to_path_buf());
-    discover_workspace(input, root)
+    let given = root.unwrap_or(Path::new("."));
+    // Canonicalize the root so every downstream path — graph document
+    // paths, the plan's old/new, and apply's document lookup — shares one
+    // absolute form. A relative `--root .` used to leave the graph's paths
+    // relative while the planner absolutized the source file, so reference
+    // matching missed and text edits were silently skipped (the file move
+    // still happened, leaving stale links).
+    let canonical = crate::utils::canonicalize_if_exists(given);
+    let input = WorkspaceInput::Path(canonical.clone());
+    discover_workspace(input, Some(canonical.as_path()))
 }
 
 /// Print a dry-run summary: one line per planned edit.

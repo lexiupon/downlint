@@ -280,3 +280,70 @@ fn cli_server_detach_not_implemented() {
         .assert()
         .code(3);
 }
+
+/// Relative `--root` (e.g. `--root .`) must behave exactly like an absolute
+/// root: the link rewrite is applied, not silently skipped while the file
+/// still moves. Regression test — with a relative root the planner's
+/// absolutized source path used to mismatch the graph's relative
+/// destination paths, so no text edits were produced (exit 0, stale links).
+#[test]
+fn cli_rename_file_relative_root_rewrites_links() {
+    let temp = write_vault(&[
+        ("report.md", "# Report\n"),
+        ("index.md", "see [[report]]\n"),
+    ]);
+    let root = temp.path();
+    downlint()
+        .current_dir(root)
+        .args([
+            "file",
+            "rename",
+            "--root",
+            ".",
+            "--from",
+            "report.md",
+            "--to",
+            "topic.md",
+        ])
+        .assert()
+        .success();
+
+    assert!(!root.join("report.md").exists(), "report.md should have moved");
+    assert!(root.join("topic.md").exists(), "topic.md should exist");
+    let index_content = fs::read_to_string(root.join("index.md")).unwrap();
+    assert!(
+        index_content.contains("[[topic]]") && !index_content.contains("[[report]]"),
+        "index.md should reference topic, got: {index_content}"
+    );
+}
+
+/// Relative `--root` on `link rename`: the identifier rewrite is applied.
+/// Pins the same root-consistency guarantee for the identifier path.
+#[test]
+fn cli_rename_link_relative_root_rewrites_identifiers() {
+    let temp = write_vault(&[
+        ("old-id.md", "# Old Id\n"),
+        ("index.md", "see [[old-id]]\n"),
+    ]);
+    let root = temp.path();
+    downlint()
+        .current_dir(root)
+        .args([
+            "link",
+            "rename",
+            "--root",
+            ".",
+            "--from",
+            "old-id",
+            "--to",
+            "new-id",
+        ])
+        .assert()
+        .success();
+
+    let index_content = fs::read_to_string(root.join("index.md")).unwrap();
+    assert!(
+        index_content.contains("[[new-id]]") && !index_content.contains("[[old-id]]"),
+        "index.md should reference new-id, got: {index_content}"
+    );
+}
