@@ -5,6 +5,45 @@ based on [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/) for post-1.0 releases.
 Pre-1.0 versions may include breaking changes.
 
+## [0.15.7] — Exact inline files and safe attachment semantics (RFC 0024)
+
+### Fixed
+
+- **Bare extensionless inline Markdown targets** now resolve to existing exact
+  files, including `[Apache License 2.0](LICENSE)`. No implicit `.md` is added;
+  wiki note matching retains its existing rules.
+- **Opening attachments in the LSP no longer promotes them into Markdown
+  documents.** Only configured document extensions enter the editor index,
+  regardless of language ID. Plain files are not parsed or diagnosed; unsaved
+  Markdown and custom configured document extensions continue to work.
+- **Attachment rename selects actual reference occurrences**, leaving unrelated,
+  unresolved, ambiguous, and other-document links untouched. Wiki attachment
+  paths retain their explicit spelling and file extensions; unsafe replacements
+  intercepted by note matching are refused before any changes.
+- **Reference-definition-only documents participate in attachment rename.**
+  URL edits preserve labels, usages, fragments, and encoding. Definition URL
+  ranges are now correct when URL text also appears in the label.
+- Attachment rename respects configured URI routing and document extensions,
+  source/root path bases, and mounted sources with canonical directory aliases.
+
+### Changed
+
+- **Breaking: directory links require a trailing `/`.** All local attachment
+  fallbacks now require files. For a directory `report`, both `(report)` and
+  `(./report)` report `link/broken` with a hint to use `(report/)` or `(./report/)`.
+  The wiki-style resolution query applies the same file/directory distinction.
+  Directory anchors remain unsupported, and confirmed missing-slash mismatches
+  are diagnosed even in single-explicit-file mode.
+- `link resolve --format json` includes nullable `directory_hint` guidance.
+
+### Verification
+
+- Added 37 regression tests spanning exact files, directory hints, LSP buffer
+  lifecycle and attachment freshness, destination-safe rename, definition URLs,
+  punctuation extensions, configured schemas/extensions, mounts, and CLI safety.
+- Full `cargo test`: 368 passing tests. `cargo clippy --all-targets` succeeds
+  with only pre-existing warnings.
+
 ## [0.15.6] — Hidden files excluded by default (RFC 0023)
 
 ### Fixed
