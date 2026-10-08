@@ -1,6 +1,6 @@
 # RFC 0024 — Extensionless files as inline Markdown link targets
 
-**Status**: Proposed
+**Status**: Accepted (0.15.7)
 **Date**: 2026-10-08
 **Scope**: RES-06 attachment fallback for inline Markdown links and images
 in `src/resolution/mod.rs`, LSP editor-buffer document classification, and
@@ -9,7 +9,7 @@ Local directory targets must have a trailing `/`; accepting directories
 as attachments is deliberately removed. The two related pre-existing
 bugs below must also be fixed as part of implementation. No new
 configuration, diagnostic codes, file kinds, or wiki note-matching rules.
-No implementation in this RFC-only change.
+The RFC was committed before implementation.
 
 ---
 
@@ -317,15 +317,22 @@ labels likewise keep their current behavior.
   a path-shaped attachment reference, e.g. `[[./topic]]`, not `[[topic]]`.
   Preserve or generate the necessary path prefix and any file extension;
   do not apply Markdown-note extension stripping to attachments. Verify
-  this both with and without a same-named `topic.md` document. Respect
-  source-relative versus root-relative wiki path bases for moved files.
+  this both with and without a same-named `topic.md` document. Existing
+  wiki rules can match `./topic` to `topic.md` before attachment fallback;
+  explicit spelling alone does not disambiguate that collision. If no
+  emitted path safely resolves to the moved attachment, refuse the plan
+  with a conflict before text or disk changes. Do not change wiki matching
+  or silently redirect the link. Respect source-relative versus
+  root-relative wiki path bases for moved files.
 - Preserve fragments and URL encoding under existing rename rules, and
   ensure each occurrence is edited at most once.
 - Check reference-definition URLs independently across all source
   documents, including documents with no inline/wiki attachment
   references. Resolve each definition URL with exact Markdown path
   semantics and rewrite its URL only if it points at the moved file.
-  Preserve the reference label and its usages. This rename validation
+  Preserve the reference label and its usages, including when the label
+  equals or contains the filename; parser URL ranges must be anchored
+  after `]:`, not the first matching text in the definition. This rename validation
   does not add lint diagnostics for definition URLs or filesystem
   destinations to their label-reference graph edges.
 - A definition-only document containing `[report][ref]` and
@@ -427,7 +434,12 @@ rather than preserves the old path-spelling exception.
   `ast_idx` / source ranges. Symbol occurrence IDs and scanner CST node
   IDs are assigned differently: do not assume numeric equality or that
   an AST index directly indexes the CST (frontmatter is omitted from AST).
-  Preserve attachment path semantics in replacement text. Independently
+  Preserve attachment path semantics in replacement text using the actual
+  wiki explicit-path predicate, not merely filesystem extension presence.
+  Verify with normal wiki matching, and normalize directory aliases for
+  mounted source/destination paths without dereferencing a moved symlink.
+  `src/parser/scanner.rs`: correct definition URL ranges when URL text also
+  appears in its label. Independently
   scan definition URLs across source documents with exact path validation,
   rather than limiting them to graph-selected documents. If shared helpers
   change, verify existing Markdown-file rename behavior remains intact.
@@ -436,7 +448,7 @@ rather than preserves the old path-spelling exception.
 
 ## 7. Planned spec changes
 
-Apply these **with implementation**, not while this RFC is Proposed:
+Applied with implementation:
 
 - RES-06: distinguish inline fallback (any non-empty local target) from
   wiki fallback (the existing attachment-candidate predicate). Retain
@@ -519,8 +531,10 @@ explicit regression test for the reported real-world README pattern.
    Test same-named files in different directories, unresolved/ambiguous
    links in the selected source, fragments/encoding, and individually
    checked definition URLs. Require `[[./report]]` → `[[./topic]]` (or an
-   equivalent explicit path), never bare `[[topic]]`; test with `topic.md`
-   present and absent, extension changes within attachment class, and
+   equivalent explicit path), never bare `[[topic]]`; test success without
+   `topic.md` and safe conflict refusal when existing wiki rules would
+   resolve the replacement to `topic.md` instead. Test extension changes
+   within attachment class and
    cross-directory moves under wiki path-base rules. A document containing
    only `[report][ref]` and `[ref]: report` must receive the definition URL
    edit without an inline/wiki attachment reference; its labels stay

@@ -240,6 +240,10 @@ fn print_text(resolution: &TargetResolution, input: &ResolveInput) {
         }
     }
 
+    if let Some(hint) = &resolution.directory_hint {
+        println!("  {hint}");
+    }
+
     if resolution.anchor_unsupported
         && let Some(anchor) = &resolution.anchor
     {
@@ -277,6 +281,7 @@ fn print_json(resolution: &TargetResolution) {
         "destinations": resolution.destinations.iter().map(destination_json).collect::<Vec<_>>(),
         "prefix_candidates": resolution.prefix_candidates.iter().map(destination_json).collect::<Vec<_>>(),
         "scheme": scheme,
+        "directory_hint": resolution.directory_hint,
     });
     println!(
         "{}",

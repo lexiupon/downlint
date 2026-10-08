@@ -345,6 +345,8 @@ pub fn resolve_links(input: ResolveInput) -> ConnectionGraph {
     let mut graph = ConnectionGraph {
         documents: all_documents.clone(),
         conflicts: input.conflicts.clone(),
+        uri_resolver: Some(input.uri_resolver.clone()),
+        markdown_extensions: input.config.core.file_extensions.clone(),
         ..ConnectionGraph::default()
     };
 
@@ -506,6 +508,7 @@ fn resolve_document(
                         is_anchor: false,
                         hint_payload: None,
                         uri_no_mapping_hint: false,
+                        directory_hint: None,
                     });
                 }
             }
@@ -564,6 +567,7 @@ fn resolve_uri_target(
                 is_anchor: false,
                 hint_payload: None,
                 uri_no_mapping_hint: false,
+                directory_hint: None,
             });
         }
         UriOutcome::NoMapping { target: raw } => {
@@ -590,6 +594,7 @@ fn resolve_uri_target(
                 is_anchor: anchor.is_some(),
                 hint_payload: None,
                 uri_no_mapping_hint: hint,
+                directory_hint: None,
             });
         }
         UriOutcome::Resolved {
@@ -612,6 +617,7 @@ fn resolve_uri_target(
                     is_anchor: true,
                     hint_payload: None,
                     uri_no_mapping_hint: false,
+                    directory_hint: None,
                 });
                 return;
             }
@@ -669,6 +675,7 @@ fn resolve_uri_target(
                     is_anchor: false,
                     hint_payload: None,
                     uri_no_mapping_hint: false,
+                    directory_hint: None,
                 });
             }
         }
@@ -812,6 +819,7 @@ fn resolve_wiki_ref(
                 is_anchor: true,
                 hint_payload: hint_payload_for(ctx, anchor),
                 uri_no_mapping_hint: false,
+                directory_hint: None,
             });
         }
         return;
@@ -831,6 +839,7 @@ fn resolve_wiki_ref(
                 is_anchor: false,
                 hint_payload: None,
                 uri_no_mapping_hint: false,
+                directory_hint: None,
             });
             return;
         }
@@ -866,6 +875,7 @@ fn resolve_wiki_ref(
                 is_anchor: false,
                 hint_payload: None,
                 uri_no_mapping_hint: false,
+                directory_hint: None,
             });
         }
         return;
@@ -994,6 +1004,7 @@ fn resolve_inline_ref(
                 is_anchor: true,
                 hint_payload: None,
                 uri_no_mapping_hint: false,
+                directory_hint: None,
             });
         }
         return;
@@ -1013,6 +1024,7 @@ fn resolve_inline_ref(
                 is_anchor: false,
                 hint_payload: None,
                 uri_no_mapping_hint: false,
+                directory_hint: None,
             });
             return;
         }
@@ -1048,6 +1060,7 @@ fn resolve_inline_ref(
                 is_anchor: false,
                 hint_payload: None,
                 uri_no_mapping_hint: false,
+                directory_hint: None,
             });
         }
         return;
@@ -1068,10 +1081,30 @@ fn finalize_doc_or_attachment(
     let doc = ctx.doc;
     let symbol = ctx.symbol;
     let reference = ctx.reference;
-    if destinations.is_empty() && is_attachment_candidate_path(target) {
+    // RFC 0024: inline links are exact paths even without an extension;
+    // wiki links retain their file-like eligibility and note matching.
+    if destinations.is_empty()
+        && !target.is_empty()
+        && (!is_wiki || is_attachment_candidate_path(target))
+    {
         let source_dir = doc.path.parent().unwrap_or(ctx.input.root.as_path());
         let path = resolve_explicit_path(&ctx.input.root, source_dir, target, is_wiki);
-        if path.exists() {
+        if path.is_dir() {
+            ctx.graph.unresolved_references.push(UnresolvedReference {
+                source_path: doc.path.clone(),
+                occurrence_id: symbol.id,
+                full_range: symbol.full_range,
+                name_range: symbol.name_range,
+                reference: reference.clone(),
+                target: target.to_string(),
+                is_anchor: false,
+                hint_payload: None,
+                uri_no_mapping_hint: false,
+                directory_hint: Some(path::directory_link_hint(target, anchor)),
+            });
+            return;
+        }
+        if path.is_file() {
             destinations.push(ResolvedDestination {
                 path,
                 kind: DestinationKind::Attachment,
@@ -1141,6 +1174,7 @@ fn finalize_doc_or_attachment(
             is_anchor: true,
             hint_payload: hint_payload_for(ctx, target),
             uri_no_mapping_hint: false,
+            directory_hint: None,
         });
         return;
     }
@@ -1159,6 +1193,7 @@ fn finalize_doc_or_attachment(
             is_anchor: false,
             hint_payload: hint_payload_for(ctx, target),
             uri_no_mapping_hint: false,
+            directory_hint: None,
         });
     } else {
         ctx.graph.resolved_references.push(ResolvedReference {
@@ -1218,7 +1253,7 @@ fn is_attachment_candidate_path(target: &str) -> bool {
             .is_some_and(|(base, ext)| !base.is_empty() && !ext.is_empty())
 }
 
-fn is_explicit_path(target: &str) -> bool {
+pub(crate) fn is_explicit_path(target: &str) -> bool {
     target.starts_with('/')
         || target.starts_with("./")
         || target.starts_with("../")

@@ -654,6 +654,7 @@ mod tests {
             is_anchor: false,
             hint_payload: None,
             uri_no_mapping_hint: false,
+            directory_hint: None,
         });
         let rows = unresolved_rows(&graph);
         assert_eq!(rows.len(), 1);

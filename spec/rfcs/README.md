@@ -38,7 +38,7 @@ implementation and are never deleted; code comments cite them by number.
 | 0021 | Colon-bearing link targets are not URIs | Accepted (0.15.4) |
 | 0022 | LSP workspace freshness | Accepted (0.15.5) |
 | 0023 | Hidden files excluded by default; `core.include_hidden` opt-in | Accepted (0.15.6) |
-| [0024](0024-extensionless-inline-attachments.md) | Extensionless files as inline Markdown link targets | Proposed |
+| [0024](0024-extensionless-inline-attachments.md) | Extensionless files as inline Markdown link targets | Accepted (0.15.7) |
 
 > **Note on 0001–0017**: these RFCs were written before the repo adopted
 > the commit-the-RFC convention and were never committed; only their numbers
