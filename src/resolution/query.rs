@@ -146,6 +146,8 @@ pub struct TargetResolution {
     /// True when the target carried an anchor that is not supported (URI
     /// targets; `check` reports `link/broken-anchor` for such links).
     pub anchor_unsupported: bool,
+    /// Existing local directory missing a trailing slash (RFC 0024).
+    pub directory_hint: Option<String>,
 }
 
 /// Per-document matching rules (RES-03, LNK-02) — the single source of truth
@@ -277,6 +279,7 @@ pub fn resolve_target(
                 prefix_candidates: Vec::new(),
                 scheme: None,
                 anchor_unsupported: false,
+                directory_hint: None,
             };
         }
         if let Some((fs_path, mount)) =
@@ -294,6 +297,7 @@ pub fn resolve_target(
                 prefix_candidates: Vec::new(),
                 scheme: None,
                 anchor_unsupported: false,
+                directory_hint: None,
             };
         }
         return TargetResolution {
@@ -304,6 +308,7 @@ pub fn resolve_target(
             prefix_candidates: Vec::new(),
             scheme: None,
             anchor_unsupported: false,
+            directory_hint: None,
         };
     }
 
@@ -329,7 +334,19 @@ pub fn resolve_target(
     // resolution.
     if destinations.is_empty() && is_attachment_candidate_path(path_part) {
         let fs_path = resolve_explicit_path(&input.root, source_dir, path_part, true);
-        if fs_path.exists() {
+        if fs_path.is_dir() {
+            return TargetResolution {
+                target: target.to_string(),
+                directory_hint: Some(super::path::directory_link_hint(path_part, anchor.as_deref())),
+                anchor,
+                status: ResolveStatus::Broken,
+                destinations: Vec::new(),
+                prefix_candidates: Vec::new(),
+                scheme: None,
+                anchor_unsupported: false,
+            };
+        }
+        if fs_path.is_file() {
             destinations.push(TargetDestination {
                 path: fs_path
                     .strip_prefix(&input.root)
@@ -383,6 +400,7 @@ pub fn resolve_target(
         prefix_candidates,
         scheme: None,
         anchor_unsupported: false,
+        directory_hint: None,
     }
 }
 
@@ -421,6 +439,7 @@ fn resolve_uri_target(input: &ResolveInput, target: &str, allow_sync: bool) -> T
                 verify: "not-applicable",
             }),
             anchor_unsupported,
+            directory_hint: None,
         };
     }
 
@@ -439,6 +458,7 @@ fn resolve_uri_target(input: &ResolveInput, target: &str, allow_sync: bool) -> T
             verify: "not-applicable",
         }),
         anchor_unsupported,
+        directory_hint: None,
     };
 
     match input.uri_resolver.resolve(path_part) {
@@ -502,6 +522,7 @@ fn resolve_uri_target(input: &ResolveInput, target: &str, allow_sync: bool) -> T
                     verify,
                 }),
                 anchor_unsupported,
+                directory_hint: None,
             }
         }
     }

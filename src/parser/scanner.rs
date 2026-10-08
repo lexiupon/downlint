@@ -165,13 +165,17 @@ fn scan_link_definitions(input: &str, next_id: &mut OccurrenceId) -> Vec<CstElem
             && let Some(close) = stripped.find("]:")
         {
             let label = &stripped[..close];
-            let rest = stripped[(close + 2)..].trim_start();
+            let after_label = &stripped[(close + 2)..];
+            let rest = after_label.trim_start();
             let url_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
             let url = &rest[..url_end];
             if !label.is_empty() && !url.is_empty() {
                 let label_start = offset + indent + 1;
                 let label_end = label_start + label.len();
-                let url_start = offset + line.find(url).unwrap_or(0);
+                // RFC 0024: the URL may also occur in the label. Anchor its
+                // byte range after ]:, never at the first matching text.
+                let url_start = offset + indent + 1 + close + 2
+                    + (after_label.len() - rest.len());
                 let url_end_abs = url_start + url.len();
                 let node = Node {
                     id: take_id(next_id),

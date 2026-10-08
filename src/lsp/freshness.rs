@@ -159,14 +159,13 @@ pub fn reconcile_pending_changes(
 ///
 /// Called from `didOpen`/`didChange`: if the document is already indexed its
 /// text is replaced; if it is under the workspace root and not yet indexed
-/// it is inserted (keeping the `rel_path` sort order). The incoming path is
-/// converted to the root's path form first, so clients that canonicalize
-/// URIs (or not) both match. Documents outside the root are ignored.
-pub fn upsert_workspace_doc(
-    workspace: &Arc<Mutex<Option<Workspace>>>,
-    path: &Path,
-    text: &str,
-) {
+/// it is inserted (keeping the `rel_path` sort order). Both operations require
+/// an extension in the effective `core.file_extensions`, just like discovery
+/// (RFC 0024). Editor language IDs and disk existence do not determine document
+/// eligibility; otherwise eligible hidden/ignored editor buffers remain allowed.
+/// The incoming path is converted to the root's path form first, so clients
+/// that canonicalize URIs (or not) both match. Paths outside the root are ignored.
+pub fn upsert_workspace_doc(workspace: &Arc<Mutex<Option<Workspace>>>, path: &Path, text: &str) {
     let mut guard = workspace.lock().unwrap();
     let Some(ws) = guard.as_mut() else {
         return;
@@ -174,6 +173,20 @@ pub fn upsert_workspace_doc(
     let Some(path) = to_root_form(&ws.folder.root, path) else {
         return;
     };
+    // Guard updates as well as insertions: open-buffer bookkeeping must not
+    // promote attachments into the Markdown resolution document set.
+    let Some(ext) = path.extension().and_then(|value| value.to_str()) else {
+        return;
+    };
+    if !ws
+        .config
+        .core
+        .file_extensions
+        .iter()
+        .any(|value| value == ext)
+    {
+        return;
+    }
     if let Some(doc) = ws.folder.documents.iter_mut().find(|doc| doc.path == path) {
         doc.text = Text::new(text);
         return;

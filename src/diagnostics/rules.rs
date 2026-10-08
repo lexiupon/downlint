@@ -34,7 +34,9 @@ pub fn broken_link(reference: &UnresolvedReference) -> Option<Diagnostic> {
             mount: None,
         });
     }
-    let mut message = format!("Broken link: '{}' could not be resolved", reference.target);
+    let mut message = reference.directory_hint.clone().unwrap_or_else(|| {
+        format!("Broken link: '{}' could not be resolved", reference.target)
+    });
     if matches!(reference.reference, Ref::Wiki { .. }) {
         if let Some(payload) = reference.hint_payload.as_ref() {
             if !payload.is_empty() {

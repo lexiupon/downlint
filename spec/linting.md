@@ -274,7 +274,10 @@ Tests: `wiki_link_with_non_ascii_title_resolves_correctly`,
 **Detection.** A target is a folder link when the part before the first `#` ends with `/`.
 Applies to both wiki (`[[dir/]]`) and markdown (`[x](dir/)`) links. A target naming a
 directory **without** a trailing slash is NOT a folder link and goes through normal
-resolution.
+document resolution first. If no document matches and local attachment fallback finds
+an existing directory, it is `link/broken` with a hint to add `/` (RFC 0024), never an
+attachment. Bare wiki identifiers retain note matching and do not acquire directory
+lookup.
 
 **Resolution.**
 
@@ -329,20 +332,31 @@ Tests: `obsidian_prefix_unique_resolves`, `obsidian_prefix_multi_match_emits_lin
 `obsidian_prefix_does_not_resolve_folder_link`, `unique_prefix_resolves`,
 `ambiguous_prefix_resolves_to_multiple`, `leading_prefix_only_does_not_match_suffix`.
 
-### 3.6 RES-06 — Explicit File-Like Targets
+### 3.6 RES-06 — Local File Targets
 
-There is **no attachment extension whitelist**. Resolution order for a local-looking
-target:
+There is **no attachment extension or filename whitelist**. Resolution order for a
+local target (RFC 0024):
 
-1. Document resolution (RES-03).
-2. If no document matched and the target is an *attachment candidate* — it starts with
-   `/`, `./`, or `../`, contains `/` or `\`, or is a basename with a non-empty base and
-   extension — the resolved filesystem path is checked.
-3. If the file exists, the link resolves as an **attachment**.
-4. If the file does not exist, the link is broken (`link/broken` at the reference's severity).
+1. Document resolution (RES-03), unchanged. Inline Markdown requires the written
+   filename: `[report](report)` does not infer `report.md`.
+2. If no document matched, inline links/images allow any non-empty target as an exact
+   filesystem path, including bare `LICENSE` or `report`. Wiki links/embeds and the
+   wiki-style query retain their *attachment candidate* predicate: starts with `/`,
+   `./`, or `../`, contains `/` or `\`, or has a non-empty base and extension.
+3. Resolve the exact filesystem path per RES-02, without extension inference or searching
+   other directories. If `is_file()` succeeds, resolve as an **attachment**. File contents
+   are not parsed; symlinks follow filesystem metadata.
+4. If the path is a directory, report `link/broken` and a trailing-slash hint. All local
+   attachment checks are file-only: `(./report)` and `(report)` are both invalid for a
+   directory, while `(report/)` resolves as a directory via RES-04. This deliberately
+   removes the legacy `exists()` acceptance of directories as attachments.
+5. Otherwise the link is broken (`link/broken` at the reference's severity).
 
-Targets without a path separator and without an extension (e.g. `intro`) never trigger the
-attachment fallback. External web schemes (LNK-03) are still skipped.
+Bare wiki targets without a separator/extension (e.g. `report`) still never trigger
+attachment fallback. External web schemes (LNK-03) are skipped, and schema targets retain
+RES-07 routing. Local attachment fragments retain their existing unvalidated behavior.
+Reference label usages resolve to definitions, not their URL's filesystem destination;
+this change does not add definition-URL linting.
 
 *(RFC 0013: a markdown file that matches an indexed document resolves as a **document**
 (step 1), so the attachment fallback effectively applies to non-markdown files and to
@@ -351,7 +365,10 @@ file-like paths that match no indexed document.)*
 Tests: `explicit_file_like_targets_resolve_as_attachments_without_config`,
 `missing_explicit_file_like_targets_emit_broken_link_diagnostics`,
 `explicit_markdown_document_paths_resolve_as_documents_and_headings`,
-`parse_rejects_removed_attachment_extensions_key`.
+`parse_rejects_removed_attachment_extensions_key`, `license_and_extensionless_inline_targets_are_attachments`,
+`inline_does_not_infer_markdown_extension_and_preserves_headings`,
+`directory_targets_require_slashes_and_hint_only_for_exact_directories`,
+`wiki_query_requires_directory_slashes_without_bare_file_fallback`.
 
 ### 3.7 RES-07 — Schemes (External URI Mapping)
 
@@ -549,7 +566,13 @@ Tests: `obsidian_prefix_multi_match_emits_link_ambiguous`.
 - **Condition**: a link target resolves to nothing, per §3, and the reference is not an
   anchor miss (those are `link/broken-anchor`) and not a shortcut.
 - **Severity**: Error (wiki/embed), Warning (markdown).
-- **Message** (verbatim): `Broken link: '{target}' could not be resolved`
+- **Message** (ordinary missing target): `Broken link: '{target}' could not be resolved`
+- **Directory mismatch** (RFC 0024): when local file fallback finds an existing directory,
+  `Target '{target}' is a directory; directory links require a trailing '/'`, followed
+  by `Hint: use '{target}/' to link to this directory.` The authored path spelling is
+  preserved. For anchored targets, the hint also requires removal of the fragment:
+  directory links do not support anchors. No hint for missing paths, files, URI targets,
+  or ineligible bare wiki note identifiers. Severity remains inline Warning / wiki Error.
 - **Wiki hint** (second line, wiki links only): when the broken target is a leading
   prefix of at least one document stem, the message appends
   `Hint: enable 'wiki.obsidian_prefix' to match partial filenames (candidates: …)` — up to
@@ -560,10 +583,12 @@ Tests: `obsidian_prefix_multi_match_emits_link_ambiguous`.
   - external web schemes (LNK-03);
   - shortcut reference links — always;
   - single-file mode (explicit file on disk): unresolved non-empty, non-folder,
-    non-anchor targets are not reported (cross-file diagnostics are disabled — 4.9).
+    non-anchor targets are not reported (cross-file diagnostics are disabled — 4.9),
+    except a confirmed directory-without-slash mismatch, which is diagnosed even then.
     Stdin is NOT single-file mode: the stdin document is resolved against the full
     workspace and unresolved targets are reported.
-- **Produces** for: missing documents, missing explicit file-like attachments (RES-06),
+- **Produces** for: missing documents, missing inline local files or wiki file-like
+  attachments, and directory targets without a trailing slash (RES-06),
   missing directories / file-instead-of-directory (RES-04), folder link + heading
   (RES-04), unmapped non-web URI schemes (RES-07), mapped-but-missing assets (RES-07).
 
@@ -630,8 +655,9 @@ Tests: `no_mapping_emits_hint_when_schemas_configured`,
   output. CLI exit code reflects the filtered set.
 - **Single-file mode** (explicit file on disk): cross-file diagnostics are disabled.
   Unresolved non-empty, non-folder, non-anchor targets are silently dropped (no
-  `link/broken`); in-page anchors and folder links are still diagnosed; `heading/nbsp`
-  still runs.
+  `link/broken`), except confirmed existing directories used without a trailing `/`
+  (RFC 0024); those mismatches, in-page anchors, and folder links are still diagnosed;
+  `heading/nbsp` still runs.
 - **Stdin** is workspace-anchored, not single-file: the full workspace is indexed
   (documents as targets only), the stdin document is the sole source, and all of its
   diagnostics are computed as in multi-file mode. Per-document rules (`heading/nbsp`)
@@ -773,6 +799,7 @@ produced.
 | 2026-09-23 | 0013 | Obsidian-compatible path resolution. RES-02 re-scoped to a strict prefix-driven base rule (no fallback): `./…`/`../…` → containing document's directory; `/…` and **bare wiki** `path/file` → workspace root; markdown bare paths/basenames → containing document's directory (unchanged). `.`/`..` normalized lexically before comparison. RES-03 explicit matching re-scoped: the resolved candidate is compared with the **`.md` suffix optional for wiki targets** (fixes the previously-dead extensionless rule); root-relative targets also match the namespace path (mount `prefix` access, now for bare wiki paths too, not only `/…`). RES-06: a markdown file matching an indexed document resolves as a document (attachment fallback is for non-markdown / unmatched file-like paths). LNK-02 adds the **bare wiki path** form. Consequences: extensionless and dot-relative wiki path links resolve; `[[../x.md]]` resolves as a document (not attachment) and its anchor is validated. |
 | 2026-09-23 | 0014 | Config key rename for clarity (no behavior change). `[[mounts]]`: `root`→`path`, `prefix`→`as`. `[[schemas]]`: `prefix`→`uri`, `root`→`to`. Each key is now self-evident and the two sections no longer share a vocabulary (a mount is a disk `path` exposed `as` a virtual path; a schema is a `uri` that resolves `to` a disk folder). Breaking: existing configs using the old keys fail to parse (`deny_unknown_fields`); migration is a mechanical key rename. The internal `ResolvedMount` fields are renamed to match (`path`/`as`). |
 | 2026-09-23 | 0022 | LSP workspace freshness (spec/downlint.md §3.2): the LSP index is no longer a static `initialize` snapshot — `didOpen`/`didChange` upsert new documents (even unsaved buffers), `didClose` drops never-saved buffers, `workspace/didCreateFiles`/`didDeleteFiles` are reconciled against disk on the next re-index, and a filesystem watcher covers out-of-editor disk changes (created files become resolvable; deleted files re-raise `link/broken`). Open editor buffers are never overwritten or removed by reconciliation. The re-index debounce is capped (2 s max wait) so a continuous stream of changes cannot starve it. No linting-rule changes. |
+| 2026-10-08 | 0024 | RES-06: bare extensionless inline file targets resolve exactly as attachments, without implicit `.md`; all local attachment checks require files and existing directories without trailing `/` report `link/broken` with migration guidance, including single-file mode. Wiki note matching is unchanged; the wiki-style query shares file-only checks. LSP editor buffers enter the Markdown document set only for configured extensions. Attachment rename edits only actual destinations, preserves wiki attachment path semantics, and independently rewrites definition URLs in definition-only sources. |
 | 2026-09-23 | 0023 | RES-10 made true in code: hidden files and directories are now actually excluded by default (the walk ran `hidden(false)` since the initial commit, contradicting the spec — `.trash/`, `.obsidian/`, and dotfile notes were indexed and resolvable). New key `core.include_hidden` (default `false`) restores the include-everything walk; gitignore/`core.ignore` negation cannot re-include hidden files (the walker's hidden filter takes precedence over ignore rules). Force-added root symlinks are unaffected. |
 
 **Known coverage gaps** (clauses without tests yet): scheme-target + anchor →

@@ -56,6 +56,8 @@ pub struct UnresolvedReference {
     /// behavior for users who haven't opted in) and when `UriOptions::no_hints`
     /// is true.
     pub uri_no_mapping_hint: bool,
+    /// Existing directory used without a trailing slash (RFC 0024).
+    pub directory_hint: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -102,6 +104,10 @@ pub struct ConnectionGraph {
     pub ambiguous_references: Vec<AmbiguousReference>,
     /// Namespace-level mount conflicts detected at startup (RFC 0010).
     pub conflicts: Vec<MountConflict>,
+    /// Routing context for destination-safe rename and definition URL checks.
+    pub uri_resolver: Option<crate::resolution::uri::UriResolver>,
+    /// Effective document extensions for file/attachment classification.
+    pub markdown_extensions: Vec<String>,
 }
 
 impl ConnectionGraph {

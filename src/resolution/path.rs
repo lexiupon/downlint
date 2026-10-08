@@ -24,6 +24,20 @@ pub fn is_folder_link_target(target: &str) -> bool {
     path_part.ends_with('/')
 }
 
+/// Guidance shared by local link diagnostics and the wiki-style query.
+/// Preserve authored spelling and never claim adding a slash fixes an anchor.
+pub fn directory_link_hint(target: &str, anchor: Option<&str>) -> String {
+    if anchor.is_some() {
+        format!(
+            "Target '{target}' is a directory; directory links require a trailing '/'\nHint: use '{target}/' to link to this directory and remove the fragment; directory links do not support anchors."
+        )
+    } else {
+        format!(
+            "Target '{target}' is a directory; directory links require a trailing '/'\nHint: use '{target}/' to link to this directory."
+        )
+    }
+}
+
 pub fn path_without_extension(path: &Path) -> String {
     let mut value = path.to_string_lossy().replace('\\', "/");
     if let Some(stripped) = value.strip_suffix(&format!(

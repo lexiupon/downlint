@@ -9,7 +9,7 @@ implementation and are never deleted; code comments cite them by number.
 
 - **Numbers are monotonic and never reused**, even for abandoned or
   rejected RFCs (same practice as TC39 / Rust).
-- **Next number = max + 1**, read from this index. → **0024**
+- **Next number = max + 1**, read from this index. → **0025**
 - **Statuses**: `Proposed` → `Accepted` (implemented). `Superseded by NNNN`
   when a later RFC replaces the design.
 - An RFC's content is a snapshot of its moment; the spec and the code are
@@ -38,6 +38,7 @@ implementation and are never deleted; code comments cite them by number.
 | 0021 | Colon-bearing link targets are not URIs | Accepted (0.15.4) |
 | 0022 | LSP workspace freshness | Accepted (0.15.5) |
 | 0023 | Hidden files excluded by default; `core.include_hidden` opt-in | Accepted (0.15.6) |
+| [0024](0024-extensionless-inline-attachments.md) | Extensionless files as inline Markdown link targets | Accepted (0.15.7) |
 
 > **Note on 0001–0017**: these RFCs were written before the repo adopted
 > the commit-the-RFC convention and were never committed; only their numbers

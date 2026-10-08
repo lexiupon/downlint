@@ -76,8 +76,12 @@ subcommands were consolidated under the `file` and `link` command groups.)
 **`resolve`** — target resolution query (RFC 0012). Given a link target, list
 **every** destination it resolves to, with the reason each matched. It uses the
 existing matching rules exactly (RES-03/04/05/06/07, including the RFC 0013
-Obsidian-compatible path interpretation) — it predicts `check`'s
-behavior and introduces no new diagnostics.
+Obsidian-compatible path interpretation) — it predicts wiki-link `check`
+behavior and introduces no new diagnostics. It is not a Markdown-link mode:
+bare extensionless inline attachments can resolve in `check` without resolving as
+bare wiki-style query targets. Eligible directory paths without trailing `/` are
+`broken`, with trailing-slash guidance in text output and optional `directory_hint`
+in JSON (RFC 0024).
 
 | Flag | Default | Effect |
 |---|---|---|
@@ -248,7 +252,11 @@ surface:
   edited documents are **upserted** into the index — a file that did not exist at
   `initialize` (even an unsaved buffer) becomes a resolvable link target without a
   restart (RFC 0022). Closing a buffer that was never saved removes it from the index
-  again (no ghost documents).
+  again (no ghost documents). Only paths with configured `core.file_extensions`
+  enter the document index, regardless of editor language ID (RFC 0024). Opening,
+  changing, or closing a plain attachment never promotes it into a parsed Markdown
+  document or supplies note/heading matches. Unsaved non-document buffers do not
+  satisfy filesystem attachment existence checks.
 - **Diagnostics**: pushed via `publishDiagnostics` after a **debounced background
   re-index** (~300 ms after the last edit, capped at 2 s under a continuous stream of
   changes — the re-index runs off the request loop so typing and completion stay
@@ -310,6 +318,15 @@ links, and reference definitions — preserving `|alias`, `#heading`, and URL fr
 New paths are computed relative to each referencing document (cross-subtree moves yield
 `../`). References from mounts are included.
 
+For attachment moves (RFC 0024), only occurrences resolving to the moved attachment
+are rewritten: unrelated same-name, unresolved, ambiguous, or other-document links
+in the same source are left alone. Replacements must still resolve to the moved file;
+`[[./report]]` becomes an explicit attachment path such as `[[./topic]]`, never a bare
+note identifier `[[topic]]`. If existing wiki document matching would intercept the
+replacement (for example `topic.md`), refuse the unsafe attachment rename as a conflict
+instead of redirecting the link. Reference-definition URLs are checked independently in
+source documents, including definition-only documents; labels and usages stay unchanged.
+
 **Heading rename** rewrites only the `#section` portion of every referencing link.
 
 **Safety rules the user must know:**
@@ -324,6 +341,11 @@ New paths are computed relative to each referencing document (cross-subtree move
 - `--dry-run` previews the full plan; application is text-first-then-disk.
 
 ## 5. Workflows
+
+- **Local links** (RFC 0024): inline Markdown names the exact file path, including
+  extensionless `LICENSE`; `.md` is not inferred. Bare wiki targets retain note matching.
+  Directory links require trailing `/`: `(report)` and `(./report)` are both broken
+  if the path is a directory, with guidance to use `(report/)` or `(./report/)`.
 
 - **CI**: `downlint` as a gate; `--format json` for machines; `--min-severity error` to
   gate on errors only; `--color never` for logs.
